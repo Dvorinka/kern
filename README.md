@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/brand/logo.svg" width="128" alt="KERN logo">
+</p>
+
 # KERN
 
 Distributed, self-hosted CI/CD platform that executes existing GitHub Actions
