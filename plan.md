@@ -113,3 +113,15 @@ silently ignored.
 - Filesystem blob driver first, S3/MinIO driver behind the same interface next.
 - Single-tenant default org bootstrapped from `KERN_BOOTSTRAP_EMAIL`/`KERN_BOOTSTRAP_PASSWORD`.
 - The scheduler loop lives in `cmd/api` for M0–M3 and moves to `cmd/scheduler` when multi-instance behaviour is tested.
+
+## 10. Workstreams W1–W5 (operator UX + fleet, 2026-11-03 direction)
+
+| # | Workstream | Core of it |
+| --- | --- | --- |
+| W1 | `kern` CLI (`cmd/kern`) | Full control-plane client: auth via API token, login, projects, runs (list/trigger/cancel/rerun/logs), runners, artifacts, cache, config. Same `internal/api` contract the web app uses — no new endpoints except enrollment + settings. |
+| W2 | Runner enrollment | `kern-runner join` (or `kern enroll`) flow: CLI mints a one-time enrollment token via `POST /runners/enroll-tokens` (auth'd, expiry), runs on the target host, registers, writes a systemd unit, prints status. Enrollment tokens table (migration 0003). Replaces today's shared static `KERN_RUNNER_JOIN_TOKEN`. |
+| W3 | Fleet metrics + placement | Heartbeat carries live cpu/mem/disk usage + active jobs (columns on runners or `runner_metrics` samples). Dashboard runners page shows utilization bars. Claim gains a least-loaded tiebreaker within the matching label set — honest "auto load balancing", no magic. |
+| W4 | Pipeline fan-out | The DAG already parallelizes independent jobs across runners; remaining work is workflow-level: `strategy.matrix` is the native split mechanism (already compiled), so W4 = placement + a `kern split` helper that suggests matrix shards (e.g. test files by hashFiles) as a plan-time advisory, not a runtime. |
+| W5 | Self-healing runner + diagnostics | Optional `allow_fix` ladder: off / auto / approve. Fixable step failures (missing binary, missing tool) produce a remediation proposal — a deterministic command plan the runner may execute (sandboxed, allow-listed) or hold for approval via `POST /runners/jobs/:id/remediate`. Every failure carries a structured `diagnosis` (what broke, why, suggested fix, agent-readable prompt text) shown in run detail and emitted by the CLI. Settings live in an org/project `settings` JSONB + UI toggle. |
+
+Non-negotiables stand: diagnostics never fake success; remediation is opt-in, logged to audit_events, and never receives secrets. W2/W3 precede W4/W5 — enrollment and metrics are the substrate.
