@@ -182,6 +182,34 @@ func (o *Orchestrator) AdvanceRun(ctx context.Context, runID uuid.UUID) error {
 	return o.Store.FinishRunIfDone(ctx, runID)
 }
 
+// NeedsMap builds the needs.* expression context (result + outputs) from run
+// jobs grouped by job_key. Matrix members of the same key are merged; the last
+// non-empty conclusion wins, matching JobContext's aggregation.
+func NeedsMap(byJobKey map[string][]store.Job) map[string]any {
+	needs := map[string]any{}
+	for key, jobs := range byJobKey {
+		if len(jobs) == 0 {
+			continue
+		}
+		result := "success"
+		outputs := map[string]any{}
+		for _, j := range jobs {
+			if j.Conclusion != "" {
+				result = j.Conclusion
+			}
+			var out map[string]any
+			if len(j.Outputs) > 0 && string(j.Outputs) != "{}" {
+				_ = json.Unmarshal(j.Outputs, &out)
+				for k, v := range out {
+					outputs[k] = v
+				}
+			}
+		}
+		needs[key] = map[string]any{"result": result, "outputs": outputs}
+	}
+	return needs
+}
+
 // dependencyStatus returns the aggregate status for a job's needs and whether all of
 // them have reached a terminal state.
 func dependencyStatus(needs []string, byJobKey map[string][]store.Job) (string, bool) {
@@ -217,27 +245,7 @@ func JobContext(job store.Job, run store.Run, project store.Project, byJobKey ma
 	if len(job.Matrix) > 0 {
 		_ = json.Unmarshal(job.Matrix, &matrix)
 	}
-	needs := map[string]any{}
-	for key, jobs := range byJobKey {
-		if len(jobs) == 0 {
-			continue
-		}
-		result := "success"
-		outputs := map[string]any{}
-		for _, j := range jobs {
-			if j.Conclusion != "" {
-				result = j.Conclusion
-			}
-			var out map[string]any
-			if len(j.Outputs) > 0 && string(j.Outputs) != "{}" {
-				_ = json.Unmarshal(j.Outputs, &out)
-				for k, v := range out {
-					outputs[k] = v
-				}
-			}
-		}
-		needs[key] = map[string]any{"result": result, "outputs": outputs}
-	}
+	needs := NeedsMap(byJobKey)
 	env := map[string]any{}
 	if raw, err := job.EnvMap(); err == nil {
 		for k, v := range raw {

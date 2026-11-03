@@ -37,6 +37,7 @@ type Claim struct {
 		TimeoutSeconds  int               `json:"timeout_seconds"`
 		ContinueOnError bool              `json:"continue_on_error"`
 		OutputsSpec     map[string]string `json:"outputs_spec"`
+		Needs           map[string]any    `json:"needs"`
 	} `json:"job"`
 	Run struct {
 		ID            string `json:"id"`

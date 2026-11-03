@@ -322,8 +322,12 @@ func (e *executor) runnerContext() map[string]any {
 		"repository": e.claim.Run.RepoFullName, "job": e.claim.Job.Key,
 		"workflow": e.claim.Run.Workflow,
 	}
+	needs := e.claim.Job.Needs
+	if needs == nil {
+		needs = map[string]any{}
+	}
 	return map[string]any{
-		"github": github, "matrix": matrix, "env": env, "steps": steps,
+		"github": github, "matrix": matrix, "env": env, "steps": steps, "needs": needs,
 		"runner": map[string]any{}, "job": map[string]any{},
 		"__job_status": e.jobStatusSoFar(),
 	}

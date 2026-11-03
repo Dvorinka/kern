@@ -31,7 +31,7 @@ never silently ignored.
 | `if:` on jobs | done | evaluated server-side with `needs.*` results; implicit `success()` when no status function is used |
 | `if:` on steps | done | evaluated on the runner with `steps.*`, status functions; implicit `success()` when none is used |
 | `env` (workflow/job/step) | done | merged; expressions interpolated |
-| `outputs` (job and step) | done | `GITHUB_OUTPUT` file command; `needs.*.outputs` |
+| `outputs` (job and step) | done | `GITHUB_OUTPUT` file command; `needs.*.outputs` resolved in downstream step bodies and conditions |
 | `timeout-minutes` | done | job + step |
 | `continue-on-error` | done | conclusion vs outcome preserved |
 | `concurrency.group` | done | serialises runs per project+group |

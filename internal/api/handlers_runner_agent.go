@@ -12,6 +12,7 @@ import (
 
 	"github.com/dvorinka/kern/internal/auth"
 	"github.com/dvorinka/kern/internal/blobs"
+	"github.com/dvorinka/kern/internal/orchestrator"
 	"github.com/dvorinka/kern/internal/secrets"
 	"github.com/dvorinka/kern/internal/store"
 	"github.com/dvorinka/kern/internal/workflows"
@@ -131,6 +132,21 @@ func (s *Server) respondWithClaim(c *gin.Context, claimed *store.ClaimedJob) {
 			}
 		}
 	}
+	// needs.* context: the runner resolves needs.<id>.outputs in step bodies and
+	// conditions; by then every needed job has reached a terminal state.
+	needsCtx := map[string]any{}
+	if jobs, err := s.Store.JobsForRun(c.Request.Context(), claimed.Job.RunID); err == nil {
+		byJobKey := map[string][]store.Job{}
+		for _, j := range jobs {
+			byJobKey[j.JobKey] = append(byJobKey[j.JobKey], j)
+		}
+		all := orchestrator.NeedsMap(byJobKey)
+		for _, need := range claimed.Job.Needs {
+			if v, ok := all[need]; ok {
+				needsCtx[need] = v
+			}
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"job": gin.H{
 			"id": claimed.Job.ID, "run_id": claimed.Job.RunID, "key": claimed.Job.Key,
@@ -138,6 +154,7 @@ func (s *Server) respondWithClaim(c *gin.Context, claimed *store.ClaimedJob) {
 			"env": claimed.Job.Env, "matrix": claimed.Job.Matrix, "runs_on": claimed.Job.RunsOn,
 			"timeout_seconds": claimed.Job.TimeoutSeconds, "continue_on_error": claimed.Job.ContinueOnError,
 			"outputs_spec": claimed.Job.OutputsSpec,
+			"needs":        needsCtx,
 		},
 		"run": gin.H{
 			"id": claimed.Run.ID, "number": claimed.Run.RunNumber, "event": claimed.Run.Event,
