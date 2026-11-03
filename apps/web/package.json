@@ -1,0 +1,36 @@
+{
+	"name": "@kern/web",
+	"private": true,
+	"version": "0.1.0",
+	"type": "module",
+	"scripts": {
+		"dev": "vite",
+		"build": "tsc -b && vite build",
+		"lint": "oxlint",
+		"format": "oxfmt",
+		"format:check": "oxfmt --check",
+		"preview": "vite preview"
+	},
+	"dependencies": {
+		"@tanstack/react-query": "^5.90.0",
+		"@tailwindcss/vite": "^4.3.3",
+		"class-variance-authority": "^0.7.1",
+		"clsx": "^2.1.1",
+		"lucide-react": "^1.65.0",
+		"react": "^19.3.1",
+		"react-dom": "^19.3.1",
+		"react-router-dom": "^7.18.5",
+		"tailwind-merge": "^3.7.0",
+		"tailwindcss": "^4.3.3"
+	},
+	"devDependencies": {
+		"@types/node": "^26.6.6",
+		"@types/react": "^19.3.0",
+		"@types/react-dom": "^19.3.0",
+		"@vitejs/plugin-react": "^6.1.2",
+		"oxfmt": "0.75.0",
+		"oxlint": "^1.90.0",
+		"typescript": "~7.0.2",
+		"vite": "^8.3.5"
+	}
+}

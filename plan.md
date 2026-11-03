@@ -88,10 +88,10 @@ silently ignored.
 
 | # | Scope | Acceptance |
 | --- | --- | --- |
-| M0 | Monorepo, compose, migrations, config, logging, health, auth, API skeleton, React shell | stack boots, login works, migrations up/down, `just test` green |
-| M1 | Workflow model, parser, validator, expression evaluator, compiler, DAG | table-driven tests, hostile/malformed corpus, expression conformance |
-| M2 | Scheduler + leases + reaper, runner agent, Docker executor, log ingestion, cancel, retry | a real workflow runs end to end on a real runner |
-| M3 | React dashboard: overview, runs, run detail with DAG and live logs, runners | no mock data; SSE logs stream live |
+| M0 | Monorepo, compose, migrations, config, logging, health, auth, API skeleton, React shell | DONE — stack boots, login works, migrations applied, `just test` green (verified 2026-11-03) |
+| M1 | Workflow model, parser, validator, expression evaluator, compiler, DAG | DONE — table-driven tests incl. hostile/matrix corpus, diagnostics for unsupported constructs |
+| M2 | Scheduler + leases + reaper, runner agent, Docker executor, log ingestion, cancel, retry | DONE — demo workflow ran green end to end on runner `tdub`, run #3, 2026-11-03 |
+| M3 | React dashboard: overview, runs, run detail with DAG and live logs, runners | DONE (core) — overview/projects/runs/runners/secrets live, DAG + SSE logs; remaining nav sections (artifacts, releases, deployments, cache, orgs) pending their backends |
 | M4 | GitHub App: install, webhooks, discovery, checks, summaries, rerun/cancel | requires operator credentials; documented Checks API limits |
 | M5 | Actions (composite/JS/Docker), reusable workflows, services, artifacts, caches, environments | compatibility suite green |
 | M6 | Distributed cache, BuildKit, warm pools, cache-aware placement | measured queue-wait and cache-hit improvements |
