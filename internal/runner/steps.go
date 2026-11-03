@@ -38,6 +38,9 @@ func (e *executor) runStep(ctx context.Context, step StepSpec) (string, error) {
 	}
 
 	outcome, code, stepErr := e.runStepBody(ctx, step)
+	if stepErr != nil {
+		e.logStep(step, "KERN: "+stepErr.Error())
+	}
 	if stepErr == nil && step.Uses != "" {
 		outcome, code = e.runUsesStep(ctx, step)
 	}
@@ -155,6 +158,13 @@ func (e *executor) runStepBody(ctx context.Context, step StepSpec) (string, int,
 // runUsesStep handles the natively-supported actions; anything else fails with
 // an explicit diagnostic (compatibility.md guarantees loud, not silent).
 func (e *executor) runUsesStep(_ context.Context, step StepSpec) (string, int) {
+	for k, v := range step.With {
+		if str, ok := v.(string); ok {
+			if nv, err := expressions.Interpolate(str, e.runnerContext()); err == nil {
+				step.With[k] = nv
+			}
+		}
+	}
 	ref := strings.TrimSpace(step.Uses)
 	name := strings.ToLower(strings.SplitN(ref, "@", 2)[0])
 	switch name {
@@ -165,6 +175,12 @@ func (e *executor) runUsesStep(_ context.Context, step StepSpec) (string, int) {
 		return e.artifactUpload(step)
 	case "actions/download-artifact":
 		return e.artifactDownload(step)
+	case "actions/cache":
+		return e.cacheRestoreStep(step, true)
+	case "actions/cache/restore":
+		return e.cacheRestoreStep(step, false)
+	case "actions/cache/save":
+		return e.cacheSaveStep(step)
 	}
 	e.log.Warn("action kind unavailable", zap.Int("step", step.Number), zap.String("uses", ref))
 	diag := fmt.Sprintf("KERN: action %q is not supported yet (action runtimes ship in a later phase). "+
@@ -237,7 +253,11 @@ func (e *executor) renderScript(step StepSpec) (string, error) {
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(wrapper), 0o755); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(filepath.Join(dir, body), []byte(step.Run), 0o644); err != nil {
+	bodyText, err := expressions.Interpolate(step.Run, e.runnerContext())
+	if err != nil {
+		return "", fmt.Errorf("interpolate run script: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, body), []byte(bodyText), 0o644); err != nil {
 		return "", err
 	}
 	return filepath.Join(containerScriptDir, name), nil
@@ -279,9 +299,9 @@ func (e *executor) evaluateOutputs(string) map[string]string {
 func (e *executor) runnerContext() map[string]any {
 	steps := map[string]any{}
 	for id, r := range e.stepResults {
-		outs := r.Outputs
-		if outs == nil {
-			outs = map[string]string{}
+		outs := map[string]any{}
+		for k, v := range r.Outputs {
+			outs[k] = v
 		}
 		steps[id] = map[string]any{
 			"outcome": r.Outcome, "conclusion": r.Conclusion, "outputs": outs,

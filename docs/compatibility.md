@@ -45,9 +45,10 @@ never silently ignored.
 
 | Feature | Status | Notes |
 | --- | --- | --- |
-| `run:` scripts | done | bash wrapper, `set -eo pipefail`, working-directory |
+| `run:` scripts | done | bash wrapper, `set -eo pipefail`, working-directory, `${{ }}` interpolated |
 | `uses: actions/checkout` | done | native checkout before step execution |
 | `uses: actions/upload-artifact`, `actions/download-artifact` | done | native; `name`, `path` (glob incl. `**`), `if-no-files-found` (`warn`/`error`/`ignore`) |
+| `uses: actions/cache` (+ `/restore`, `/save`) | partial | native; `key`, `path`, `restore-keys` (prefix, newest wins), `cache-hit` output, `fail-on-cache-miss`, `lookup-only`. Combined action saves at job end on miss/partial restore. Limits: workspace-relative paths only; branch-level scoping approximated by run trust (`pull_request` runs read trusted entries, save to their own scope); no eviction |
 | Other `uses:` actions | no | compile error `action-unsupported`; composite/JS/Docker actions are M5 |
 | `shell:` | partial | `bash` honoured; `sh` honoured; bash-less images fall back to `sh` |
 | `working-directory:` | done | |
@@ -77,7 +78,7 @@ never silently ignored.
 - Composite, JavaScript, and Docker action runtimes (M5)
 - Reusable workflows `jobs.<id>.uses` (M5)
 - Service containers; job `container` options beyond `image` (M5)
-- Cache action (`actions/cache`; `cache_entries` table exists, no runner support yet)
+- Cache paths outside the workspace; cache eviction/retention; `upload-chunk-size` and other action tuning inputs
 - OIDC, deployment environments, approvals (M5+)
 - `hashFiles`, some string functions, arithmetic operators
 - Scheduled (`cron`) execution

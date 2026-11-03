@@ -272,6 +272,12 @@ func (a *Agent) runSteps(ctx context.Context, log *zap.Logger, claim *Claim) (st
 		}
 	}
 
+	// Deferred actions/cache saves run at job end (GitHub's post-job phase) so
+	// every step has contributed to the workspace. Cancellation skips them.
+	if jobStatus != "cancelled" {
+		exec.saveCaches()
+	}
+
 	var outputs map[string]string
 	if len(claim.Job.OutputsSpec) > 0 {
 		outputs = exec.evaluateOutputs(jobStatus)

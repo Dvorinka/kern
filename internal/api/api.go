@@ -102,6 +102,8 @@ func (s *Server) buildRouter() *gin.Engine {
 		runner.GET("/runners/jobs/:jobID/artifacts", s.jobArtifacts)
 		runner.PUT("/runners/jobs/:jobID/artifacts/:name", s.uploadArtifact)
 		runner.GET("/runners/jobs/:jobID/artifacts/:name", s.downloadArtifact)
+		runner.GET("/runners/jobs/:jobID/cache/restore", s.cacheRestore)
+		runner.PUT("/runners/jobs/:jobID/cache/:key", s.cacheSave)
 	}
 
 	auth.GET("/artifacts", s.listArtifacts)

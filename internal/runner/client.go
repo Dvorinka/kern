@@ -280,6 +280,54 @@ func (c *client) listArtifacts(ctx context.Context, jobID string) ([]string, err
 	return out.Artifacts, nil
 }
 
+// restoreCache downloads the best-matching archive to path and reports the
+// matched key. found is false on a clean 404 cache miss.
+func (c *client) restoreCache(ctx context.Context, jobID, key string, prefixes []string, path string) (string, bool, error) {
+	q := url.Values{"key": {key}}
+	if len(prefixes) > 0 {
+		q.Set("restore_keys", strings.Join(prefixes, ","))
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		c.base+"/api/v1/runners/jobs/"+url.PathEscape(jobID)+"/cache/restore?"+q.Encode(), nil)
+	if err != nil {
+		return "", false, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return "", false, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		return "", false, &APIError{Status: resp.StatusCode, Body: strings.TrimSpace(string(data))}
+	}
+	fh, err := os.Create(path)
+	if err != nil {
+		return "", false, err
+	}
+	defer fh.Close()
+	if _, err := io.Copy(fh, resp.Body); err != nil {
+		return "", false, err
+	}
+	return resp.Header.Get("X-Kern-Cache-Key"), true, nil
+}
+
+// saveCache uploads an archive under key. A 409 means the key is taken;
+// callers map that to a warning.
+func (c *client) saveCache(ctx context.Context, jobID, key, path string) error {
+	fh, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer fh.Close()
+	return c.do(ctx, http.MethodPut,
+		"/api/v1/runners/jobs/"+url.PathEscape(jobID)+"/cache/"+url.PathEscape(key), fh2bytes(fh), nil)
+}
+
 func (c *client) jobSecrets(ctx context.Context, jobID string) (map[string]string, bool, error) {
 	var out struct {
 		Secrets map[string]string `json:"secrets"`

@@ -50,8 +50,9 @@ type executor struct {
 	shell string
 	enc   *envBuilder
 
-	cancelled   atomic.Bool
-	stepResults map[string]*stepOutcome
+	cancelled    atomic.Bool
+	stepResults  map[string]*stepOutcome
+	pendingCache []pendingCacheSave
 
 	mu      sync.Mutex
 	stop    chan struct{}

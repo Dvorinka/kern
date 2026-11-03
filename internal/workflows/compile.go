@@ -421,12 +421,20 @@ func validateStep(d *diagnostics, path string, s Step, seenIDs map[string]bool) 
 	if hasUses {
 		if !isSupportedAction(s.Uses) {
 			d.errorf("action-unsupported", path+".uses",
-				fmt.Sprintf("action %q is not implemented by KERN yet; supported: actions/checkout, actions/upload-artifact, actions/download-artifact", s.Uses))
+				fmt.Sprintf("action %q is not implemented by KERN yet; supported: actions/checkout, actions/upload-artifact, actions/download-artifact, actions/cache", s.Uses))
 		}
 		lname := strings.ToLower(strings.SplitN(s.Uses, "@", 2)[0])
 		if lname == "actions/upload-artifact" {
 			if p, ok := s.With["path"].(string); !ok || strings.TrimSpace(p) == "" {
 				d.errorf("artifact-path", path+".with.path", "actions/upload-artifact requires with.path")
+			}
+		}
+		if lname == "actions/cache" || lname == "actions/cache/restore" || lname == "actions/cache/save" {
+			if k, ok := s.With["key"].(string); !ok || strings.TrimSpace(k) == "" {
+				d.errorf("cache-key", path+".with.key", lname+" requires with.key")
+			}
+			if p := s.With["path"]; p == nil {
+				d.errorf("cache-path", path+".with.path", lname+" requires with.path")
 			}
 		}
 	}
@@ -442,7 +450,8 @@ func isSupportedAction(uses string) bool {
 		name = uses[:i]
 	}
 	switch strings.ToLower(name) {
-	case "actions/checkout", "actions/upload-artifact", "actions/download-artifact":
+	case "actions/checkout", "actions/upload-artifact", "actions/download-artifact",
+		"actions/cache", "actions/cache/restore", "actions/cache/save":
 		return true
 	}
 	return false
