@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"path/filepath"
@@ -252,6 +253,24 @@ func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 		}
 		opts, _ := parseFlags(rest[1:], "job", "step", "follow")
 		return c.runLogs(ctx, id, opts["job"], opts["step"], opts["follow"])
+	case "remediate":
+		opts, pos := parseFlags(rest, "step")
+		jobID, err := strarg(pos, 0, "job id")
+		if err != nil {
+			return err
+		}
+		n := atoi(opts["step"])
+		if n <= 0 {
+			return fmt.Errorf("--step N is required")
+		}
+		var out struct {
+			Requeued bool `json:"requeued"`
+		}
+		if err := c.api().post(ctx, "/jobs/"+jobID+"/remediate",
+			map[string]any{"step": n}, &out); err != nil {
+			return err
+		}
+		fmt.Println("remediation approved; job requeued")
 	default:
 		return fmt.Errorf("unknown runs subcommand %q", sub)
 	}
@@ -326,6 +345,27 @@ func (c *cli) showRun(ctx context.Context, id string) error {
 				mark = "!"
 			}
 			fmt.Printf("    %s %-36s %s\n", mark, st.Name, st.Status)
+			if len(st.Diagnosis) > 0 {
+				var d struct {
+					Kind        string `json:"kind"`
+					Summary     string `json:"summary"`
+					Suggestion  string `json:"suggestion"`
+					Fixable     bool   `json:"fixable"`
+					Remediation *struct {
+						Applied  bool     `json:"applied"`
+						Approved bool     `json:"approved"`
+						Result   string   `json:"result"`
+						Fix      []string `json:"fix"`
+					} `json:"remediation"`
+				}
+				if json.Unmarshal(st.Diagnosis, &d) == nil && d.Kind != "" {
+					fmt.Printf("      → %s: %s\n        fix: %s\n", d.Kind, d.Summary, d.Suggestion)
+					if d.Remediation != nil {
+						fmt.Printf("        remediation: %s (applied=%v approved=%v)\n",
+							d.Remediation.Result, d.Remediation.Applied, d.Remediation.Approved)
+					}
+				}
+			}
 		}
 	}
 	return nil

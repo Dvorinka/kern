@@ -55,9 +55,11 @@ type Claim struct {
 		DefaultBranch string `json:"default_branch"`
 		LocalPath     string `json:"local_path"`
 	} `json:"run"`
-	Steps     []StepSpec `json:"steps"`
-	Secrets   []string   `json:"secrets"`
-	LeaseEnds time.Time  `json:"lease_expires_at"`
+	Steps        []StepSpec          `json:"steps"`
+	Secrets      []string            `json:"secrets"`
+	LeaseEnds    time.Time           `json:"lease_expires_at"`
+	Remediations map[string][]string `json:"remediations"`
+	SelfHeal     string              `json:"self_heal"`
 }
 
 type StepSpec struct {
@@ -212,9 +214,13 @@ func (c *client) appendLog(ctx context.Context, jobID string, n int, data []byte
 	return c.do(ctx, http.MethodPost, path, data, nil)
 }
 
-func (c *client) finishStep(ctx context.Context, jobID string, n int, conclusion string, exitCode int) error {
+func (c *client) finishStep(ctx context.Context, jobID string, n int, conclusion string, exitCode int, d *diagnosis) error {
+	body := map[string]any{"conclusion": conclusion, "exit_code": exitCode}
+	if d != nil {
+		body["diagnosis"] = d
+	}
 	path := fmt.Sprintf("/api/v1/runners/jobs/%s/steps/%d/finish", url.PathEscape(jobID), n)
-	return c.do(ctx, http.MethodPost, path, map[string]any{"conclusion": conclusion, "exit_code": exitCode}, nil)
+	return c.do(ctx, http.MethodPost, path, body, nil)
 }
 
 func (c *client) finishJob(ctx context.Context, jobID, conclusion string, outputs map[string]string, errMsg string) error {

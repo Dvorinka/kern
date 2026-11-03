@@ -113,6 +113,12 @@ function StepRow({ step, open, onToggle }: { step: Step; open: boolean; onToggle
 				<span className="min-w-0 flex-1 truncate text-[13px]">{step.name}</span>
 				<StatusPill status={step.status} conclusion={step.conclusion} />
 				<span className="w-16 text-right text-xs text-[var(--text-muted)]">{duration(step.started_at, step.completed_at)}</span>
+				{step.diagnosis && (
+					<span className="ml-6 mt-1 block text-[11px] text-[var(--err)]">
+						{step.diagnosis.kind}: {step.diagnosis.summary} — {step.diagnosis.suggestion}
+						{step.diagnosis.remediation && ` (${step.diagnosis.remediation.result || "proposed"})`}
+					</span>
+				)}
 			</button>
 			{open && (
 				<div className="px-4 pb-3">

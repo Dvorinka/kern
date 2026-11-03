@@ -87,6 +87,12 @@ func (s *Server) buildRouter() *gin.Engine {
 		auth.GET("/cache", s.listCache)
 		auth.DELETE("/cache/:id", s.deleteCache)
 
+		auth.GET("/settings", s.getOrgSettings)
+		auth.PUT("/settings", s.putOrgSettings)
+		auth.GET("/projects/:project/settings", s.getProjectSettings)
+		auth.PUT("/projects/:project/settings", s.putProjectSettings)
+		auth.POST("/jobs/:id/remediate", s.approveRemediation)
+
 		auth.GET("/secrets", s.listSecrets)
 		auth.PUT("/secrets/:name", s.putSecret)
 		auth.DELETE("/secrets/:name", s.deleteSecret)

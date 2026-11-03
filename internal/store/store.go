@@ -195,6 +195,7 @@ type Step struct {
 	Spec        json.RawMessage `json:"spec,omitempty"`
 	LogRef      string          `json:"-"`
 	LogBytes    int64           `json:"log_bytes"`
+	Diagnosis   json.RawMessage `json:"diagnosis,omitempty"`
 }
 
 type Runner struct {

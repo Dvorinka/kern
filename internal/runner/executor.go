@@ -54,10 +54,11 @@ type executor struct {
 	stepResults  map[string]*stepOutcome
 	pendingCache []pendingCacheSave
 
-	mu      sync.Mutex
-	stop    chan struct{}
-	stopped sync.WaitGroup
-	killFn  context.CancelFunc // kills the docker exec of the step in flight
+	mu       sync.Mutex
+	stop     chan struct{}
+	stopped  sync.WaitGroup
+	killFn   context.CancelFunc // kills the docker exec of the step in flight
+	lastTail string             // log tail of the most recent step, for diagnosis
 }
 
 type stepOutcome struct {

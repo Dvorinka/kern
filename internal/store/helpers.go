@@ -39,11 +39,12 @@ func (s *Store) StepByID(ctx context.Context, id uuid.UUID) (Step, uuid.UUID, uu
 	var runID uuid.UUID
 	err := s.pool.QueryRow(ctx, `
 		SELECT s.id, s.job_id, s.number, s.key, s.name, s.status, s.conclusion, s.exit_code,
-		       s.started_at, s.completed_at, s.spec, s.log_ref, s.log_bytes, j.run_id
+		       s.started_at, s.completed_at, s.spec, s.log_ref, s.log_bytes, s.diagnosis, j.run_id
 		FROM steps s JOIN jobs j ON j.id = s.job_id
 		WHERE s.id = $1`, id).
 		Scan(&st.ID, &st.JobID, &st.Number, &st.Key, &st.Name, &st.Status, &st.Conclusion,
-			&st.ExitCode, &st.StartedAt, &st.CompletedAt, &st.Spec, &st.LogRef, &st.LogBytes, &runID)
+			&st.ExitCode, &st.StartedAt, &st.CompletedAt, &st.Spec, &st.LogRef, &st.LogBytes,
+			&st.Diagnosis, &runID)
 	if err != nil {
 		return Step{}, uuid.Nil, uuid.Nil, err
 	}

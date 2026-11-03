@@ -187,6 +187,46 @@ func (c *cli) cmdCache(ctx context.Context, args []string) error {
 	return nil
 }
 
+func (c *cli) cmdSettings(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: kern settings get|set <key> [value] [--project S]")
+	}
+	if err := c.requireAuth(); err != nil {
+		return err
+	}
+	opts, pos := parseFlags(args[1:], "project")
+	path := "/settings"
+	if first(opts["project"], c.project) != "" {
+		path = "/projects/" + first(opts["project"], c.project) + "/settings"
+	}
+	switch args[0] {
+	case "get":
+		var out struct {
+			SelfHeal string `json:"self_heal"`
+		}
+		if err := c.api().get(ctx, path, nil, &out); err != nil {
+			return err
+		}
+		if c.json {
+			printJSON(out)
+		} else {
+			fmt.Println("self_heal:", out.SelfHeal)
+		}
+	case "set":
+		if len(pos) < 2 || pos[0] != "self_heal" {
+			return fmt.Errorf("usage: kern settings set self_heal off|auto|approve [--project S]")
+		}
+		var out map[string]string
+		if err := c.api().put(ctx, path, map[string]any{"self_heal": pos[1]}, &out); err != nil {
+			return err
+		}
+		fmt.Println("self_heal =", pos[1])
+	default:
+		return fmt.Errorf("unknown settings subcommand %q", args[0])
+	}
+	return nil
+}
+
 func (c *cli) cmdSecrets(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: kern secrets list|set|delete [--project S]")

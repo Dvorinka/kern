@@ -32,6 +32,10 @@ Runs:
   runs trigger [<project>] <workflow-id|path|name> [--event E] [--ref R] [--sha S]
   runs cancel|rerun <run-id>
   runs logs <run-id> [--job KEY] [--step N] [--follow]
+  runs remediate <job-id> --step N        approve a remediation proposal
+
+Settings:
+  settings get|set self_heal off|auto|approve [--project S]
 
 Runners:
   runners list
@@ -139,6 +143,8 @@ func dispatch(c *cli, args []string) int {
 		err = c.cmdCache(ctx, rest)
 	case "secrets":
 		err = c.cmdSecrets(ctx, rest)
+	case "settings":
+		err = c.cmdSettings(ctx, rest)
 	case "split":
 		err = c.cmdSplit(rest)
 	default:

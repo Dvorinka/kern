@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -139,6 +140,127 @@ func (s *Server) listSecrets(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"secrets": secretSummaries(rows)})
+}
+
+// validSelfHeal enumerates the remediation ladder rungs; "inherit" is
+// project-only, meaning "use the org value".
+func validSelfHeal(v string, allowInherit bool) bool {
+	switch v {
+	case "off", "auto", "approve":
+		return true
+	case "inherit":
+		return allowInherit
+	}
+	return false
+}
+
+func (s *Server) getOrgSettings(c *gin.Context) {
+	user, _ := currentUser(c)
+	raw, err := s.Store.OrgSettings(c.Request.Context(), user.OrgID)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"settings": raw, "self_heal": settingsValue(raw, "self_heal", "off")})
+}
+
+type settingsRequest struct {
+	SelfHeal string `json:"self_heal"`
+}
+
+func (s *Server) putOrgSettings(c *gin.Context) {
+	user, _ := currentUser(c)
+	var req settingsRequest
+	if err := c.ShouldBindJSON(&req); err != nil || !validSelfHeal(req.SelfHeal, false) {
+		fail(c, http.StatusBadRequest, "invalid_body", "self_heal must be off, auto or approve")
+		return
+	}
+	if err := s.Store.PutOrgSetting(c.Request.Context(), user.OrgID, "self_heal", req.SelfHeal); err != nil {
+		s.internalError(c, err)
+		return
+	}
+	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "settings.self_heal", req.SelfHeal)
+	c.JSON(http.StatusOK, gin.H{"self_heal": req.SelfHeal})
+}
+
+func (s *Server) getProjectSettings(c *gin.Context) {
+	user, _ := currentUser(c)
+	p, err := s.Store.Project(c.Request.Context(), user.OrgID, c.Param("project"))
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	raw, err := s.Store.ProjectSettings(c.Request.Context(), p.ID)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"settings": raw, "self_heal": settingsValue(raw, "self_heal", "inherit")})
+}
+
+func (s *Server) putProjectSettings(c *gin.Context) {
+	user, _ := currentUser(c)
+	p, err := s.Store.Project(c.Request.Context(), user.OrgID, c.Param("project"))
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	var req settingsRequest
+	if err := c.ShouldBindJSON(&req); err != nil || !validSelfHeal(req.SelfHeal, true) {
+		fail(c, http.StatusBadRequest, "invalid_body", "self_heal must be off, auto, approve or inherit")
+		return
+	}
+	value := req.SelfHeal
+	if value == "inherit" {
+		value = "" // deleting the key falls back to the org setting
+	}
+	if err := s.Store.PutProjectSetting(c.Request.Context(), p.ID, "self_heal", value); err != nil {
+		s.internalError(c, err)
+		return
+	}
+	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "settings.self_heal", p.Slug+"="+req.SelfHeal)
+	c.JSON(http.StatusOK, gin.H{"self_heal": req.SelfHeal})
+}
+
+func settingsValue(raw json.RawMessage, key, def string) string {
+	var m map[string]string
+	if json.Unmarshal(raw, &m) != nil {
+		return def
+	}
+	if m[key] == "" {
+		return def
+	}
+	return m[key]
+}
+
+// approveRemediation flips a step's proposal to approved and requeues the job.
+// The retried job receives the fix commands in its claim payload; the runner
+// applies them before the step. Audit-logged; no secrets are involved.
+func (s *Server) approveRemediation(c *gin.Context) {
+	user, _ := currentUser(c)
+	jobID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		fail(c, http.StatusBadRequest, "invalid_id", "job id must be a uuid")
+		return
+	}
+	var req struct {
+		Step int `json:"step"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Step <= 0 {
+		fail(c, http.StatusBadRequest, "invalid_body", "step number is required")
+		return
+	}
+	if err := s.Store.ApproveRemediation(c.Request.Context(), jobID, req.Step); err != nil {
+		if strings.Contains(err.Error(), "no remediation proposal") {
+			fail(c, http.StatusNotFound, "no_proposal", err.Error())
+			return
+		}
+		s.internalError(c, err)
+		return
+	}
+	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "remediation.approve",
+		fmt.Sprintf("job %s step %d", jobID, req.Step))
+	c.JSON(http.StatusOK, gin.H{"ok": true, "requeued": true})
 }
 
 func secretSummaries(rows []store.Secret) []gin.H {

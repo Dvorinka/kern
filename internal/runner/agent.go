@@ -266,7 +266,7 @@ func (a *Agent) runSteps(ctx context.Context, log *zap.Logger, claim *Claim) (st
 	jobStatus := "success"
 	for _, step := range claim.Steps {
 		if ctx.Err() != nil {
-			_ = a.c.finishStep(context.Background(), claim.Job.ID, step.Number, "cancelled", 0)
+			_ = a.c.finishStep(context.Background(), claim.Job.ID, step.Number, "cancelled", 0, nil)
 			return "cancelled", nil, ctx.Err()
 		}
 		conclusion, stepErr := exec.runStep(ctx, step)

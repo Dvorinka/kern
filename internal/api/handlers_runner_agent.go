@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -164,6 +165,8 @@ func (s *Server) respondWithClaim(c *gin.Context, claimed *store.ClaimedJob) {
 			}
 		}
 	}
+	remediations, _ := s.Store.ApprovedFixes(c.Request.Context(), claimed.Job.ID)
+	policy, _ := s.Store.SelfHealPolicy(c.Request.Context(), claimed.Run.ID)
 	c.JSON(http.StatusOK, gin.H{
 		"job": gin.H{
 			"id": claimed.Job.ID, "run_id": claimed.Job.RunID, "key": claimed.Job.Key,
@@ -184,6 +187,8 @@ func (s *Server) respondWithClaim(c *gin.Context, claimed *store.ClaimedJob) {
 		"steps":            steps,
 		"secrets":          secretNames,
 		"lease_expires_at": claimed.LeaseExpiresAt,
+		"remediations":     remediations,
+		"self_heal":        policy,
 	})
 }
 
@@ -266,8 +271,9 @@ func (s *Server) maskerForRun(c *gin.Context, runID uuid.UUID) *secrets.Masker {
 }
 
 type finishStepRequest struct {
-	Conclusion string `json:"conclusion"`
-	ExitCode   *int   `json:"exit_code"`
+	Conclusion string          `json:"conclusion"`
+	ExitCode   *int            `json:"exit_code"`
+	Diagnosis  json.RawMessage `json:"diagnosis"`
 }
 
 func (s *Server) finishStep(c *gin.Context) {
@@ -287,9 +293,21 @@ func (s *Server) finishStep(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_conclusion", "conclusion must be success, failure, skipped or cancelled")
 		return
 	}
-	if err := s.Store.FinishStep(c.Request.Context(), job.ID, n, req.Conclusion, req.ExitCode); err != nil {
+	if err := s.Store.FinishStep(c.Request.Context(), job.ID, n, req.Conclusion, req.ExitCode, req.Diagnosis); err != nil {
 		s.internalError(c, err)
 		return
+	}
+	// Audit auto-remediations the runner reports applying.
+	var d struct {
+		Remediation *struct {
+			Applied bool `json:"applied"`
+		} `json:"remediation"`
+	}
+	if json.Unmarshal(req.Diagnosis, &d) == nil && d.Remediation != nil && d.Remediation.Applied {
+		if run, err := s.Store.Run(c.Request.Context(), job.RunID); err == nil {
+			s.Store.Audit(c.Request.Context(), run.ProjectID, nil, "remediation.apply",
+				fmt.Sprintf("job %s step %d", job.ID, n))
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

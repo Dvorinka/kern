@@ -236,7 +236,7 @@ func (s *Store) JobsForRun(ctx context.Context, runID uuid.UUID) ([]Job, error) 
 func (s *Store) StepsForJob(ctx context.Context, jobID uuid.UUID) ([]Step, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, job_id, number, key, name, status, conclusion, exit_code, started_at,
-		       completed_at, spec, log_ref, log_bytes
+		       completed_at, spec, log_ref, log_bytes, diagnosis
 		FROM steps WHERE job_id = $1 ORDER BY number`, jobID)
 	if err != nil {
 		return nil, err
@@ -246,7 +246,8 @@ func (s *Store) StepsForJob(ctx context.Context, jobID uuid.UUID) ([]Step, error
 	for rows.Next() {
 		var st Step
 		if err := rows.Scan(&st.ID, &st.JobID, &st.Number, &st.Key, &st.Name, &st.Status,
-			&st.Conclusion, &st.ExitCode, &st.StartedAt, &st.CompletedAt, &st.Spec, &st.LogRef, &st.LogBytes); err != nil {
+			&st.Conclusion, &st.ExitCode, &st.StartedAt, &st.CompletedAt, &st.Spec, &st.LogRef,
+			&st.LogBytes, &st.Diagnosis); err != nil {
 			return nil, err
 		}
 		out = append(out, st)

@@ -63,15 +63,16 @@ type run struct {
 }
 
 type step struct {
-	ID         string     `json:"id"`
-	Number     int        `json:"number"`
-	Name       string     `json:"name"`
-	Status     string     `json:"status"`
-	Conclusion string     `json:"conclusion"`
-	ExitCode   *int       `json:"exit_code"`
-	LogBytes   int64      `json:"log_bytes"`
-	StartedAt  *time.Time `json:"started_at"`
-	FinishedAt *time.Time `json:"completed_at"`
+	ID         string          `json:"id"`
+	Number     int             `json:"number"`
+	Name       string          `json:"name"`
+	Status     string          `json:"status"`
+	Conclusion string          `json:"conclusion"`
+	ExitCode   *int            `json:"exit_code"`
+	LogBytes   int64           `json:"log_bytes"`
+	StartedAt  *time.Time      `json:"started_at"`
+	FinishedAt *time.Time      `json:"completed_at"`
+	Diagnosis  json.RawMessage `json:"diagnosis"`
 }
 
 type job struct {

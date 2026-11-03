@@ -174,17 +174,18 @@ func (s *Store) StartStep(ctx context.Context, jobID uuid.UUID, number int) (Ste
 		UPDATE steps SET status = 'running', started_at = now()
 		WHERE job_id = $1 AND number = $2
 		RETURNING id, job_id, number, key, name, status, conclusion, exit_code, started_at,
-		          completed_at, spec, log_ref, log_bytes`, jobID, number).
+		          completed_at, spec, log_ref, log_bytes, diagnosis`, jobID, number).
 		Scan(&st.ID, &st.JobID, &st.Number, &st.Key, &st.Name, &st.Status, &st.Conclusion,
-			&st.ExitCode, &st.StartedAt, &st.CompletedAt, &st.Spec, &st.LogRef, &st.LogBytes)
+			&st.ExitCode, &st.StartedAt, &st.CompletedAt, &st.Spec, &st.LogRef, &st.LogBytes,
+			&st.Diagnosis)
 	return st, err
 }
 
-func (s *Store) FinishStep(ctx context.Context, jobID uuid.UUID, number int, conclusion string, exitCode *int) error {
+func (s *Store) FinishStep(ctx context.Context, jobID uuid.UUID, number int, conclusion string, exitCode *int, diagnosis json.RawMessage) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE steps SET status = CASE WHEN $3 = 'skipped' THEN 'skipped' ELSE 'completed' END,
-			conclusion = $3, exit_code = $4, completed_at = now()
-		WHERE job_id = $1 AND number = $2`, jobID, number, conclusion, exitCode)
+			conclusion = $3, exit_code = $4, completed_at = now(), diagnosis = $5
+		WHERE job_id = $1 AND number = $2`, jobID, number, conclusion, exitCode, diagnosis)
 	return err
 }
 

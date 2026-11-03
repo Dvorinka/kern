@@ -14,6 +14,14 @@ export function RunnersPage() {
 		queryFn: () => api.get<{ runners: Runner[] }>("/runners"),
 		refetchInterval: 5000,
 	});
+	const { data: settings } = useQuery({
+		queryKey: ["settings"],
+		queryFn: () => api.get<{ self_heal: string }>("/settings"),
+	});
+	const setHeal = useMutation({
+		mutationFn: (v: string) => api.put("/settings", { self_heal: v }),
+		onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
+	});
 	const drain = useMutation({
 		mutationFn: (id: string) => api.post(`/runners/${id}/drain`, { draining: true }),
 		onSuccess: () => qc.invalidateQueries({ queryKey: ["runners"] }),
@@ -26,6 +34,22 @@ export function RunnersPage() {
 	return (
 		<>
 			<PageHeader title="Runners" sub="Registered execution agents" />
+			<Row>
+				<span className="text-xs text-[var(--text-muted)]">Self-heal (org):</span>
+				<select
+					className="rounded border border-[var(--border)] bg-transparent px-2 py-1 text-xs"
+					value={settings?.self_heal ?? "off"}
+					disabled={setHeal.isPending}
+					onChange={(e) => setHeal.mutate(e.target.value)}
+				>
+					<option value="off">off</option>
+					<option value="auto">auto</option>
+					<option value="approve">approve</option>
+				</select>
+				<span className="text-[10px] text-[var(--text-faint)]">
+					allow-listed fixes for fixable step failures; audit-logged
+				</span>
+			</Row>
 			{isLoading ? (
 				<Spinner />
 			) : (

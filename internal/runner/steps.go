@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,12 +26,18 @@ func (e *executor) runStep(ctx context.Context, step StepSpec) (string, error) {
 	if ok, err := e.stepCondition(step); err != nil {
 		e.recordStep(step, "skipped", "skipped", nil)
 		e.log.Warn("step condition error", zap.Int("step", step.Number), zap.Error(err))
-		_ = e.c.finishStep(context.Background(), e.jobID, step.Number, "skipped", 0)
+		_ = e.c.finishStep(context.Background(), e.jobID, step.Number, "skipped", 0, nil)
 		return "skipped", nil
 	} else if !ok {
 		e.recordStep(step, "skipped", "skipped", nil)
-		_ = e.c.finishStep(context.Background(), e.jobID, step.Number, "skipped", 0)
+		_ = e.c.finishStep(context.Background(), e.jobID, step.Number, "skipped", 0, nil)
 		return "skipped", nil
+	}
+
+	// Operator-approved remediation for a requeued job runs before the step.
+	if fix := e.claim.Remediations[strconv.Itoa(step.Number)]; len(fix) > 0 {
+		e.logStep(step, "KERN: applying approved remediation")
+		e.applyFix(ctx, step, fix)
 	}
 
 	if err := e.c.startStep(ctx, e.jobID, step.Number); err != nil {
@@ -45,6 +52,31 @@ func (e *executor) runStep(ctx context.Context, step StepSpec) (string, error) {
 		outcome, code = e.runUsesStep(ctx, step)
 	}
 
+	var diag *diagnosis
+	if outcome == "failure" && !e.cancelled.Load() {
+		errText := ""
+		if stepErr != nil {
+			errText = stepErr.Error()
+		}
+		diag = diagnose(step, code, e.lastTail, errText)
+		// self_heal=auto: apply the allow-listed fix and retry the step once.
+		if diag.Fixable && diag.Remediation != nil && e.claim.SelfHeal == "auto" {
+			e.logStep(step, "KERN: self-heal auto — applying fix: "+strings.Join(diag.Remediation.Fix, "; "))
+			if e.applyFix(ctx, step, diag.Remediation.Fix) {
+				retry, retryCode, retryErr := e.runStepBody(ctx, step)
+				diag.Remediation.Applied = true
+				if retry == "success" && retryErr == nil {
+					diag.Remediation.Result = "step passed after fix"
+					outcome, code = "success", retryCode
+				} else {
+					diag.Remediation.Result = "step still failing after fix"
+				}
+			} else {
+				diag.Remediation.Result = "fix commands failed"
+			}
+		}
+	}
+
 	conclusion := outcome
 	if e.cancelled.Load() {
 		conclusion = "cancelled"
@@ -57,8 +89,25 @@ func (e *executor) runStep(ctx context.Context, step StepSpec) (string, error) {
 		outputs, _ = parseKeyValue(string(data))
 	}
 	e.recordStep(step, conclusion, outcome, outputs)
-	_ = e.c.finishStep(context.Background(), e.jobID, step.Number, conclusion, code)
+	_ = e.c.finishStep(context.Background(), e.jobID, step.Number, conclusion, code, diag)
 	return conclusion, nil
+}
+
+// applyFix runs an allow-listed remediation plan as root inside the job
+// container. Commands never contain secrets — they are fixed templates.
+func (e *executor) applyFix(ctx context.Context, step StepSpec, fix []string) bool {
+	for _, cmdline := range fix {
+		cmd := exec.CommandContext(ctx, "docker", "exec", "--user", "0:0",
+			e.container, "sh", "-c", cmdline)
+		out, err := cmd.CombinedOutput()
+		if len(out) > 0 {
+			e.logStep(step, "KERN: fix: "+tailStr(string(out), 500))
+		}
+		if err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func (e *executor) recordStep(step StepSpec, conclusion, outcome string, outputs map[string]string) {
@@ -148,6 +197,7 @@ func (e *executor) runStepBody(ctx context.Context, step StepSpec) (string, int,
 	}
 
 	e.harvestEnv()
+	e.lastTail = string(pump.tail)
 	code := exitValue(cmd)
 	if code == 0 {
 		return "success", 0, nil
@@ -354,6 +404,7 @@ type logPump struct {
 	jobID string
 	step  int
 	buf   []byte
+	tail  []byte // last bytes seen, for failure diagnosis
 }
 
 func newLogPump(c *client, jobID string, step int) *logPump {
@@ -363,6 +414,10 @@ func newLogPump(c *client, jobID string, step int) *logPump {
 // write buffers a chunk (a full line); a masker would run before render on the server.
 func (p *logPump) write(line []byte) {
 	p.buf = append(p.buf, line...)
+	p.tail = append(p.tail, line...)
+	if len(p.tail) > 8<<10 {
+		p.tail = p.tail[len(p.tail)-8<<10:]
+	}
 	if len(p.buf) >= 64<<10 {
 		p.flush()
 	}

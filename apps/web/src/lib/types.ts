@@ -73,6 +73,14 @@ export interface Step {
 	completed_at: string | null;
 	spec?: StepSpec;
 	log_bytes: number;
+	diagnosis?: {
+		kind: string;
+		summary: string;
+		suggestion: string;
+		agent_prompt: string;
+		fixable: boolean;
+		remediation?: { fix: string[]; applied?: boolean; approved?: boolean; result?: string };
+	} | null;
 }
 
 export interface StepSpec {
