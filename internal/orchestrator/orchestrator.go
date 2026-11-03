@@ -25,6 +25,7 @@ type Orchestrator struct {
 	MaxAttempts int
 	// StaleRunnerTimeout flips heartbeats-missed runners offline.
 	StaleRunnerTimeout time.Duration
+	lastScheduleCheck  time.Time
 }
 
 func New(st *store.Store, log *zap.Logger, compiler workflows.Compiler) *Orchestrator {
@@ -111,6 +112,7 @@ func (o *Orchestrator) Tick(ctx context.Context) {
 			o.Log.Error("advance run", zap.String("run_id", id.String()), zap.Error(err))
 		}
 	}
+	o.MintScheduledRuns(ctx, time.Now())
 }
 
 // AdvanceRun gates queued jobs on their dependencies and evaluates conditions.

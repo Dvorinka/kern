@@ -16,7 +16,7 @@ never silently ignored.
 | `on: workflow_dispatch` | done | `POST /projects/:p/workflows/:id/runs` |
 | `on: pull_request_target` | partial | parsed; strict handling lands with the GitHub App (M4) |
 | `on: release`, `repository_dispatch`, `workflow_run` | partial | parsed and modelled; no provider events yet |
-| `on: schedule` | partial | cron recorded; no scheduler yet |
+| `on: schedule` | done | 5-field cron in UTC; the scheduler mints a run per due instant, deduped; missed windows are not caught up (same as GitHub) |
 | `on: workflow_call` / reusable workflows | no | compile error `reusable-workflow` |
 | Trigger filters (`branches`, `paths`, `tags`, `types`…) | partial | parsed; unknown filters emit a warning and are ignored |
 
@@ -81,5 +81,4 @@ never silently ignored.
 - Cache paths outside the workspace; cache eviction/retention; `upload-chunk-size` and other action tuning inputs
 - OIDC, deployment environments, approvals (M5+)
 - Some string functions, arithmetic operators, object filters `a.*`
-- Scheduled (`cron`) execution — triggers are parsed and recorded; the scheduler does not mint runs yet
 - Artifact retention/expiry and deletion (`expires_at` is recorded, not enforced)
