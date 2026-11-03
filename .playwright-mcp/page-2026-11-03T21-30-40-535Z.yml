@@ -1,0 +1,32 @@
+- generic [ref=f4e3]:
+  - complementary [ref=f4e4]:
+    - generic [ref=f4e5]: KERN
+    - navigation [ref=f4e10]:
+      - link "Overview" [ref=f4e11] [cursor=pointer]:
+        - /url: /
+      - link "Projects" [ref=f4e17] [cursor=pointer]:
+        - /url: /projects
+      - link "Runs" [ref=f4e23] [cursor=pointer]:
+        - /url: /runs
+      - link "Runners" [ref=f4e26] [cursor=pointer]:
+        - /url: /runners
+      - link "Secrets" [ref=f4e30] [cursor=pointer]:
+        - /url: /secrets
+      - link "Artifacts" [ref=f4e34] [cursor=pointer]:
+        - /url: /artifacts
+    - generic [ref=f4e40]:
+      - generic "admin@kern.local" [ref=f4e43]
+      - button "Toggle theme" [ref=f4e44] [cursor=pointer]
+      - button "Sign out" [ref=f4e51] [cursor=pointer]
+  - main [ref=f4e55]:
+    - generic [ref=f4e56]:
+      - generic [ref=f4e58]:
+        - heading "Runners" [level=1] [ref=f4e59]
+        - paragraph [ref=f4e60]: Registered execution agents
+      - generic [ref=f4e61]:
+        - generic [ref=f4e62]: "Self-heal (org):"
+        - combobox [ref=f4e63]:
+          - option "off" [selected]
+          - option "auto"
+          - option "approve"
+        - generic [ref=f4e64]: allow-listed fixes for fixable step failures; audit-logged

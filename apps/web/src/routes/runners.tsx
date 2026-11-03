@@ -67,7 +67,10 @@ export function RunnersPage() {
 									<span className="font-medium">{r.name}</span>
 									<span className="ml-2 text-xs text-[var(--text-faint)]">{r.hostname}</span>
 								</span>
-								<span className="w-36 truncate text-xs text-[var(--text-muted)]">
+								<span
+									className="w-36 truncate text-xs text-[var(--text-muted)]"
+									title={(r.labels ?? []).join(", ")}
+								>
 									{(r.labels ?? []).slice(0, 3).join(", ")}
 									{(r.labels ?? []).length > 3 && ` +${r.labels.length - 3}`}
 								</span>

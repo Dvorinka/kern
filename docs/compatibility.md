@@ -48,11 +48,11 @@ never silently ignored.
 | `run:` scripts | done | bash wrapper, `set -eo pipefail`, working-directory, `${{ }}` interpolated |
 | `uses: actions/checkout` | done | native checkout before step execution |
 | `uses: actions/upload-artifact`, `actions/download-artifact` | done | native; `name`, `path` (glob incl. `**`), `if-no-files-found` (`warn`/`error`/`ignore`) |
-| `uses: actions/cache` (+ `/restore`, `/save`) | partial | native; `key`, `path`, `restore-keys` (prefix, newest wins), `cache-hit` output, `fail-on-cache-miss`, `lookup-only`. Combined action saves at job end on miss/partial restore. Limits: workspace-relative paths only; branch-level scoping approximated by run trust (`pull_request` runs read trusted entries, save to their own scope); no eviction |
+| `uses: actions/cache` (+ `/restore`, `/save`) | partial | native; `key`, `path`, `restore-keys` (prefix, newest wins), `cache-hit` output, `fail-on-cache-miss`, `lookup-only`. Combined action saves at job end on miss/partial restore. Limits: workspace-relative paths only; branch-level scoping approximated by run trust (`pull_request` runs read trusted entries, save to their own scope); entries unused for 7 days are evicted |
 | Other `uses:` actions | no | compile error `action-unsupported`; composite/JS/Docker actions are M5 |
 | `shell:` | partial | `bash` honoured; `sh` honoured; bash-less images fall back to `sh` |
 | `working-directory:` | done | |
-| File commands `GITHUB_ENV`, `GITHUB_PATH`, `GITHUB_OUTPUT`, `GITHUB_STEP_SUMMARY` | done | summary is captured, not yet rendered in UI |
+| File commands `GITHUB_ENV`, `GITHUB_PATH`, `GITHUB_OUTPUT`, `GITHUB_STEP_SUMMARY` | done | summaries stored per step, rendered as sanitized markdown in run detail |
 | `::error::`/`::warning::` annotations | no | passthrough in logs only |
 
 ## Expressions
@@ -78,7 +78,6 @@ never silently ignored.
 - Composite, JavaScript, and Docker action runtimes (M5)
 - Reusable workflows `jobs.<id>.uses` (M5)
 - Service containers; job `container` options beyond `image` (M5)
-- Cache paths outside the workspace; cache eviction/retention; `upload-chunk-size` and other action tuning inputs
+- Cache paths outside the workspace; cache size quotas; `upload-chunk-size` and other action tuning inputs
 - OIDC, deployment environments, approvals (M5+)
 - Some string functions, arithmetic operators, object filters `a.*`
-- Artifact retention/expiry and deletion (`expires_at` is recorded, not enforced)

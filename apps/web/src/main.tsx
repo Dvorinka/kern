@@ -13,6 +13,7 @@ import { RunDetailPage } from "./routes/run-detail";
 import { RunnersPage } from "./routes/runners";
 import { SecretsPage } from "./routes/secrets";
 import { ArtifactsPage } from "./routes/artifacts";
+import { CachePage } from "./routes/cache";
 
 const router = createBrowserRouter([
 	{ path: "/login", element: <LoginPage /> },
@@ -28,6 +29,7 @@ const router = createBrowserRouter([
 			{ path: "runners", element: <RunnersPage /> },
 			{ path: "secrets", element: <SecretsPage /> },
 			{ path: "artifacts", element: <ArtifactsPage /> },
+			{ path: "cache", element: <CachePage /> },
 		],
 	},
 ]);

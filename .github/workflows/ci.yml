@@ -5,7 +5,7 @@ on:
   pull_request:
 jobs:
   go:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -16,7 +16,7 @@ jobs:
       - run: go build ./...
       - run: go test ./... -count=1
   web:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
     defaults:
       run:
         working-directory: apps/web

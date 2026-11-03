@@ -27,7 +27,10 @@ type Orchestrator struct {
 	MaxAttempts int
 	// StaleRunnerTimeout flips heartbeats-missed runners offline.
 	StaleRunnerTimeout time.Duration
-	lastScheduleCheck  time.Time
+	// CacheMaxAge evicts cache entries untouched for this long (GitHub: 7 days).
+	// Zero disables the sweep.
+	CacheMaxAge       time.Duration
+	lastScheduleCheck time.Time
 }
 
 func New(st *store.Store, log *zap.Logger, compiler workflows.Compiler) *Orchestrator {
@@ -110,6 +113,15 @@ func (o *Orchestrator) Tick(ctx context.Context) {
 		} else {
 			for _, ref := range refs {
 				_ = o.Blobs.Delete(ref)
+			}
+		}
+		if o.CacheMaxAge > 0 {
+			if refs, err := o.Store.DeleteStaleCacheEntries(ctx, o.CacheMaxAge); err != nil {
+				o.Log.Error("sweep stale cache", zap.Error(err))
+			} else {
+				for _, ref := range refs {
+					_ = o.Blobs.Delete(ref)
+				}
 			}
 		}
 	}

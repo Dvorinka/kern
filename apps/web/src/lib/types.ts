@@ -73,6 +73,7 @@ export interface Step {
 	completed_at: string | null;
 	spec?: StepSpec;
 	log_bytes: number;
+	has_summary?: boolean;
 	diagnosis?: {
 		kind: string;
 		summary: string;
@@ -192,6 +193,18 @@ export interface Artifact {
 	expires_at: string | null;
 	run_number: number;
 	project_slug: string;
+}
+
+export interface CacheEntry {
+	id: string;
+	project_id: string;
+	key: string;
+	version: string;
+	scope: "trusted" | "pull_request";
+	size_bytes: number;
+	created_at: string;
+	last_used_at: string;
+	expires_at: string | null;
 }
 
 export interface APIToken {

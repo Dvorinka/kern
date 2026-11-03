@@ -223,6 +223,28 @@ func (c *client) finishStep(ctx context.Context, jobID string, n int, conclusion
 	return c.do(ctx, http.MethodPost, path, body, nil)
 }
 
+// uploadSummary ships the step's GITHUB_STEP_SUMMARY markdown to the control
+// plane, which stores it as a blob and marks the step.
+func (c *client) uploadSummary(ctx context.Context, jobID string, n int, data []byte) error {
+	path := fmt.Sprintf("/api/v1/runners/jobs/%s/steps/%d/summary", url.PathEscape(jobID), n)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.base+path, bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/octet-stream")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		return &APIError{Status: resp.StatusCode, Body: strings.TrimSpace(string(body))}
+	}
+	return nil
+}
+
 func (c *client) finishJob(ctx context.Context, jobID, conclusion string, outputs map[string]string, errMsg string) error {
 	path := "/api/v1/runners/jobs/" + url.PathEscape(jobID) + "/finish"
 	return c.do(ctx, http.MethodPost, path, map[string]any{

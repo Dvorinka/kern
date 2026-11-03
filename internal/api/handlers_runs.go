@@ -150,6 +150,24 @@ func (s *Server) stepLogs(c *gin.Context) {
 	})
 }
 
+// stepSummary serves a step's stored GITHUB_STEP_SUMMARY markdown.
+func (s *Server) stepSummary(c *gin.Context) {
+	step, _, _, err := s.StepByIDParam(c)
+	if err != nil {
+		return
+	}
+	if step.SummaryRef == "" {
+		c.JSON(http.StatusOK, gin.H{"text": ""})
+		return
+	}
+	data, _, err := s.Blobs.ReadFrom(step.SummaryRef, 0, 1<<20)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"text": string(data)})
+}
+
 // stepLogStream streams a running step's log over Server-Sent Events.
 func (s *Server) stepLogStream(c *gin.Context) {
 	step, _, _, err := s.StepByIDParam(c)

@@ -1,6 +1,7 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
 	Activity,
+	Database,
 	FolderGit2,
 	HardDrive,
 	KeyRound,
@@ -23,6 +24,7 @@ const NAV = [
 	{ to: "/runners", label: "Runners", icon: Server },
 	{ to: "/secrets", label: "Secrets", icon: KeyRound },
 	{ to: "/artifacts", label: "Artifacts", icon: Package },
+	{ to: "/cache", label: "Cache", icon: Database },
 ];
 
 export function Layout() {

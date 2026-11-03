@@ -29,6 +29,7 @@ type Config struct {
 	JobLease        time.Duration
 	MaxJobAttempts  int
 	LogRetention    time.Duration
+	CacheMaxAge     time.Duration
 	AllowedOrigins  []string
 	DefaultImage    string
 }
@@ -66,6 +67,7 @@ func Load() (*Config, error) {
 		JobLease:        duration("KERN_JOB_LEASE", 90*time.Second),
 		MaxJobAttempts:  integer("KERN_MAX_JOB_ATTEMPTS", 3),
 		LogRetention:    duration("KERN_LOG_RETENTION", 30*24*time.Hour),
+		CacheMaxAge:     duration("KERN_CACHE_MAX_AGE", 7*24*time.Hour),
 		AllowedOrigins:  splitList(env("KERN_ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:8081")),
 		DefaultImage:    env("KERN_DEFAULT_IMAGE", "ubuntu:24.04"),
 	}

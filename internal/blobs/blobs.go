@@ -184,3 +184,8 @@ func (f *Filesystem) Delete(key string) error {
 func LogKey(runID, jobID string, stepNumber int) string {
 	return fmt.Sprintf("logs/%s/%s/%d.log", runID, jobID, stepNumber)
 }
+
+// SummaryKey is the canonical blob key for a step's markdown summary.
+func SummaryKey(jobID string, stepNumber int) string {
+	return fmt.Sprintf("summaries/%s/%d.md", jobID, stepNumber)
+}

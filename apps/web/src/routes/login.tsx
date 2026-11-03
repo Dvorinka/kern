@@ -38,11 +38,24 @@ export function LoginPage() {
 				</div>
 				<label className="mb-3 block">
 					<span className="mb-1 block text-xs text-[var(--text-muted)]">Email</span>
-					<Input type="email" required autoFocus value={email} onChange={(e) => setEmail(e.target.value)} />
+					<Input
+						type="email"
+						required
+						autoFocus
+						autoComplete="email"
+						value={email}
+						onChange={(e) => setEmail(e.target.value)}
+					/>
 				</label>
 				<label className="mb-4 block">
 					<span className="mb-1 block text-xs text-[var(--text-muted)]">Password</span>
-					<Input type="password" required value={password} onChange={(e) => setPassword(e.target.value)} />
+					<Input
+						type="password"
+						required
+						autoComplete="current-password"
+						value={password}
+						onChange={(e) => setPassword(e.target.value)}
+					/>
 				</label>
 				{err && <p className="mb-3 text-xs text-[var(--err)]">{err}</p>}
 				<Button type="submit" variant="primary" className="w-full" disabled={busy}>

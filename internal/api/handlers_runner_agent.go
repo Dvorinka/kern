@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -245,6 +246,37 @@ func (s *Server) appendLog(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true, "size": size})
+}
+
+// uploadStepSummary stores a step's GITHUB_STEP_SUMMARY markdown as a blob.
+// GitHub caps summaries at 1 MiB per step; the same bound applies here and the
+// content is masked like log output.
+func (s *Server) uploadStepSummary(c *gin.Context) {
+	job, _, ok := s.runnerJob(c)
+	if !ok {
+		return
+	}
+	n := parseInt(c.Param("n"), 0)
+	body, err := io.ReadAll(io.LimitReader(c.Request.Body, 1<<20))
+	if err != nil {
+		fail(c, http.StatusBadRequest, "invalid_body", "summary too large or unreadable")
+		return
+	}
+	if len(body) == 0 {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+		return
+	}
+	masker := s.maskerForRun(c, job.RunID)
+	ref := blobs.SummaryKey(job.ID.String(), n)
+	if _, _, err := s.Blobs.Put(ref, bytes.NewReader(masker.MaskBytes(body))); err != nil {
+		s.internalError(c, err)
+		return
+	}
+	if err := s.Store.SetStepSummary(c.Request.Context(), job.ID, n, ref); err != nil {
+		s.internalError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 // maskerForRun collects every secret value that could appear in this run's logs.

@@ -78,6 +78,7 @@ func (s *Server) buildRouter() *gin.Engine {
 		auth.POST("/runs/:id/rerun", s.rerunRun)
 		auth.GET("/steps/:stepID/logs", s.stepLogs)
 		auth.GET("/steps/:stepID/logs/stream", s.stepLogStream)
+		auth.GET("/steps/:stepID/summary", s.stepSummary)
 
 		auth.GET("/runners", s.listRunners)
 		auth.POST("/enroll-tokens", s.createEnrollToken)
@@ -107,6 +108,7 @@ func (s *Server) buildRouter() *gin.Engine {
 		runner.POST("/runners/jobs/:jobID/steps/:n/start", s.startStep)
 		runner.POST("/runners/jobs/:jobID/steps/:n/logs", s.appendLog)
 		runner.POST("/runners/jobs/:jobID/steps/:n/finish", s.finishStep)
+		runner.PUT("/runners/jobs/:jobID/steps/:n/summary", s.uploadStepSummary)
 		runner.POST("/runners/jobs/:jobID/finish", s.finishJob)
 		runner.GET("/runners/jobs/:jobID/cancel-check", s.cancelCheck)
 		runner.GET("/runners/jobs/:jobID/secrets", s.jobSecrets)

@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import { useState } from "react";
+import { marked } from "marked";
+import DOMPurify from "dompurify";
 import { Ban, ChevronDown, ChevronRight, RotateCw } from "lucide-react";
 import { api } from "../lib/api";
 import type { Job, RunDetail, Step } from "../lib/types";
@@ -113,18 +115,40 @@ function StepRow({ step, open, onToggle }: { step: Step; open: boolean; onToggle
 				<span className="min-w-0 flex-1 truncate text-[13px]">{step.name}</span>
 				<StatusPill status={step.status} conclusion={step.conclusion} />
 				<span className="w-16 text-right text-xs text-[var(--text-muted)]">{duration(step.started_at, step.completed_at)}</span>
-				{step.diagnosis && (
-					<span className="ml-6 mt-1 block text-[11px] text-[var(--err)]">
-						{step.diagnosis.kind}: {step.diagnosis.summary} — {step.diagnosis.suggestion}
-						{step.diagnosis.remediation && ` (${step.diagnosis.remediation.result || "proposed"})`}
-					</span>
-				)}
 			</button>
+			{step.diagnosis && (
+				<div className="border-t border-[var(--border)] bg-[var(--err)]/5 px-4 py-2 text-[11px] text-[var(--err)]">
+					{step.diagnosis.kind}: {step.diagnosis.summary} — {step.diagnosis.suggestion}
+					{step.diagnosis.remediation && ` (${step.diagnosis.remediation.result || "proposed"})`}
+				</div>
+			)}
 			{open && (
-				<div className="px-4 pb-3">
+				<div className="space-y-3 px-4 pb-3">
+					{step.has_summary && <StepSummary stepId={step.id} />}
 					<LogView stepId={step.id} active={live} />
 				</div>
 			)}
+		</div>
+	);
+}
+
+// StepSummary renders a step's GITHUB_STEP_SUMMARY markdown, sanitized before it
+// reaches the DOM.
+function StepSummary({ stepId }: { stepId: string }) {
+	const { data } = useQuery({
+		queryKey: ["step-summary", stepId],
+		queryFn: () => api.get<{ text: string }>(`/steps/${stepId}/summary`),
+	});
+	if (!data?.text) return null;
+	return (
+		<div className="rounded-md border border-[var(--border)] bg-[var(--bg-raised)] p-3">
+			<div className="mb-2 text-[10px] font-medium uppercase tracking-wide text-[var(--text-faint)]">
+				Step summary
+			</div>
+			<div
+				className="prose-kern text-[13px]"
+				dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(marked.parse(data.text, { async: false })) }}
+			/>
 		</div>
 	);
 }

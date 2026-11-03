@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/brand/logo.svg" width="128" alt="KERN logo">
+  <img src="docs/brand/logo-dark-box.svg" width="128" alt="KERN logo">
 </p>
 
 # KERN

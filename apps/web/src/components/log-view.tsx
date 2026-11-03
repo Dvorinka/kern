@@ -10,6 +10,7 @@ interface LogChunk {
 	message?: string;
 }
 
+// oxlint-disable-next-line no-control-regex -- stripping ANSI escapes is the point
 const ANSI = /\x1b\[[0-9;]*[A-Za-z]/g;
 
 export function LogView({ stepId, active }: { stepId: string; active: boolean }) {

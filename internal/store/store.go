@@ -196,6 +196,8 @@ type Step struct {
 	LogRef      string          `json:"-"`
 	LogBytes    int64           `json:"log_bytes"`
 	Diagnosis   json.RawMessage `json:"diagnosis,omitempty"`
+	SummaryRef  string          `json:"-"`
+	HasSummary  bool            `json:"has_summary"`
 }
 
 type Runner struct {

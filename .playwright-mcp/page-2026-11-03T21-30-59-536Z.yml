@@ -1,0 +1,24 @@
+- generic [ref=f6e3]:
+  - complementary [ref=f6e4]:
+    - generic [ref=f6e5]: KERN
+    - navigation [ref=f6e10]:
+      - link "Overview" [ref=f6e11] [cursor=pointer]:
+        - /url: /
+      - link "Projects" [ref=f6e17] [cursor=pointer]:
+        - /url: /projects
+      - link "Runs" [ref=f6e23] [cursor=pointer]:
+        - /url: /runs
+      - link "Runners" [ref=f6e26] [cursor=pointer]:
+        - /url: /runners
+      - link "Secrets" [ref=f6e30] [cursor=pointer]:
+        - /url: /secrets
+      - link "Artifacts" [ref=f6e34] [cursor=pointer]:
+        - /url: /artifacts
+    - generic [ref=f6e40]:
+      - generic "admin@kern.local" [ref=f6e43]
+      - button "Toggle theme" [ref=f6e44] [cursor=pointer]
+      - button "Sign out" [ref=f6e51] [cursor=pointer]
+  - main [ref=f6e55]:
+    - generic [ref=f6e58]:
+      - heading "Artifacts" [level=1] [ref=f6e59]
+      - paragraph [ref=f6e60]: Files uploaded by actions/upload-artifact, stored as compressed archives

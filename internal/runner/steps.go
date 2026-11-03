@@ -88,6 +88,11 @@ func (e *executor) runStep(ctx context.Context, step StepSpec) (string, error) {
 	if data, readErr := os.ReadFile(filepath.Join(e.cmdDir(), "GITHUB_OUTPUT")); readErr == nil {
 		outputs, _ = parseKeyValue(string(data))
 	}
+	if data, readErr := os.ReadFile(filepath.Join(e.cmdDir(), "STEP_SUMMARY")); readErr == nil && len(data) > 0 {
+		if err := e.c.uploadSummary(context.Background(), e.jobID, step.Number, data); err != nil {
+			e.log.Warn("summary upload failed", zap.Int("step", step.Number), zap.Error(err))
+		}
+	}
 	e.recordStep(step, conclusion, outcome, outputs)
 	_ = e.c.finishStep(context.Background(), e.jobID, step.Number, conclusion, code, diag)
 	return conclusion, nil

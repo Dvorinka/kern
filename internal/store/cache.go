@@ -85,6 +85,30 @@ func (s *Store) SaveCacheEntry(ctx context.Context, projectID uuid.UUID, key, ve
 	return e, err
 }
 
+// DeleteStaleCacheEntries evicts entries GitHub would consider dead: untouched
+// for maxAge (GitHub evicts after 7 days without a hit) or past an explicit
+// expires_at. Returns blob references so the caller can drop the archives.
+func (s *Store) DeleteStaleCacheEntries(ctx context.Context, maxAge time.Duration) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `
+		DELETE FROM cache_entries
+		WHERE last_used_at < now() - make_interval(secs => $1)
+		   OR (expires_at IS NOT NULL AND expires_at < now())
+		RETURNING blob_ref`, int64(maxAge.Seconds()))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var refs []string
+	for rows.Next() {
+		var ref string
+		if err := rows.Scan(&ref); err != nil {
+			return nil, err
+		}
+		refs = append(refs, ref)
+	}
+	return refs, rows.Err()
+}
+
 // TouchCache refreshes last_used_at for eviction bookkeeping.
 func (s *Store) TouchCache(ctx context.Context, id uuid.UUID) {
 	_, _ = s.pool.Exec(ctx, `UPDATE cache_entries SET last_used_at = now() WHERE id = $1`, id)

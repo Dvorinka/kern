@@ -174,10 +174,11 @@ func (s *Store) StartStep(ctx context.Context, jobID uuid.UUID, number int) (Ste
 		UPDATE steps SET status = 'running', started_at = now()
 		WHERE job_id = $1 AND number = $2
 		RETURNING id, job_id, number, key, name, status, conclusion, exit_code, started_at,
-		          completed_at, spec, log_ref, log_bytes, diagnosis`, jobID, number).
+		          completed_at, spec, log_ref, log_bytes, diagnosis, summary_ref`, jobID, number).
 		Scan(&st.ID, &st.JobID, &st.Number, &st.Key, &st.Name, &st.Status, &st.Conclusion,
 			&st.ExitCode, &st.StartedAt, &st.CompletedAt, &st.Spec, &st.LogRef, &st.LogBytes,
-			&st.Diagnosis)
+			&st.Diagnosis, &st.SummaryRef)
+	st.HasSummary = st.SummaryRef != ""
 	return st, err
 }
 
@@ -186,6 +187,14 @@ func (s *Store) FinishStep(ctx context.Context, jobID uuid.UUID, number int, con
 		UPDATE steps SET status = CASE WHEN $3 = 'skipped' THEN 'skipped' ELSE 'completed' END,
 			conclusion = $3, exit_code = $4, completed_at = now(), diagnosis = $5
 		WHERE job_id = $1 AND number = $2`, jobID, number, conclusion, exitCode, diagnosis)
+	return err
+}
+
+// SetStepSummary records the blob reference of a step's markdown summary.
+func (s *Store) SetStepSummary(ctx context.Context, jobID uuid.UUID, number int, ref string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE steps SET summary_ref = $3
+		WHERE job_id = $1 AND number = $2`, jobID, number, ref)
 	return err
 }
 
