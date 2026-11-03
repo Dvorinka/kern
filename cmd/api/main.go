@@ -90,6 +90,7 @@ func run() int {
 	}
 	orch := orchestrator.New(st, log, compiler)
 	orch.MaxAttempts = cfg.MaxJobAttempts
+	orch.Blobs = blobStore
 	srv := api.New(cfg, st, orch, blobStore, cipher, log)
 
 	// The scheduler advances gated runs between job completions.

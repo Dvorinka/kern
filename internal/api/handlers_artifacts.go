@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 var artifactNameRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
@@ -100,6 +101,25 @@ func (s *Server) listArtifacts(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"artifacts": rows})
+}
+
+func (s *Server) deleteArtifact(c *gin.Context) {
+	user, _ := currentUser(c)
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		fail(c, http.StatusBadRequest, "invalid_id", "artifact id must be a uuid")
+		return
+	}
+	ref, err := s.Store.DeleteArtifact(c.Request.Context(), user.OrgID, id)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	if err := s.Blobs.Delete(ref); err != nil {
+		s.Log.Error("delete artifact blob", zap.String("ref", ref), zap.Error(err))
+	}
+	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "artifact.delete", id.String())
+	c.Status(http.StatusNoContent)
 }
 
 func (s *Server) getArtifact(c *gin.Context) {

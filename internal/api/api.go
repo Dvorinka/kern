@@ -119,6 +119,7 @@ func (s *Server) buildRouter() *gin.Engine {
 
 	auth.GET("/artifacts", s.listArtifacts)
 	auth.GET("/artifacts/:id/download", s.getArtifact)
+	auth.DELETE("/artifacts/:id", s.deleteArtifact)
 	return r
 }
 

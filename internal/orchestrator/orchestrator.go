@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/dvorinka/kern/internal/blobs"
 	"github.com/dvorinka/kern/internal/expressions"
 	"github.com/dvorinka/kern/internal/store"
 	"github.com/dvorinka/kern/internal/workflows"
@@ -19,6 +20,7 @@ import (
 
 type Orchestrator struct {
 	Store    *store.Store
+	Blobs    blobs.Store
 	Log      *zap.Logger
 	Compiler workflows.Compiler
 	// MaxAttempts bounds how often an expired-lease job is retried (KERN_MAX_JOB_ATTEMPTS).
@@ -100,6 +102,15 @@ func (o *Orchestrator) Tick(ctx context.Context) {
 	if o.StaleRunnerTimeout > 0 {
 		if _, err := o.Store.MarkStaleRunnersOffline(ctx, o.StaleRunnerTimeout); err != nil {
 			o.Log.Error("mark stale runners", zap.Error(err))
+		}
+	}
+	if o.Blobs != nil {
+		if refs, err := o.Store.DeleteExpiredArtifacts(ctx); err != nil {
+			o.Log.Error("sweep expired artifacts", zap.Error(err))
+		} else {
+			for _, ref := range refs {
+				_ = o.Blobs.Delete(ref)
+			}
 		}
 	}
 	ids, err := o.Store.ActiveRunIDs(ctx, 200)

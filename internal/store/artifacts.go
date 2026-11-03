@@ -27,8 +27,8 @@ type Artifact struct {
 func (s *Store) CreateArtifact(ctx context.Context, runID, jobID uuid.UUID, name, blobRef string, size int64, sha256 string) (Artifact, error) {
 	var a Artifact
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO artifacts (run_id, job_id, name, blob_ref, size_bytes, sha256)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO artifacts (run_id, job_id, name, blob_ref, size_bytes, sha256, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, now() + interval '90 days')
 		ON CONFLICT (run_id, name) DO UPDATE SET
 			job_id = EXCLUDED.job_id, blob_ref = EXCLUDED.blob_ref,
 			size_bytes = EXCLUDED.size_bytes, sha256 = EXCLUDED.sha256
@@ -60,6 +60,42 @@ func (s *Store) Artifact(ctx context.Context, id uuid.UUID) (Artifact, error) {
 		return Artifact{}, ErrNotFound
 	}
 	return a, err
+}
+
+// DeleteExpiredArtifacts removes rows past expires_at and returns their blob
+// references so the caller can drop the archives. Rows with NULL expires_at
+// never expire.
+func (s *Store) DeleteExpiredArtifacts(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `
+		DELETE FROM artifacts WHERE expires_at IS NOT NULL AND expires_at < now()
+		RETURNING blob_ref`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var refs []string
+	for rows.Next() {
+		var ref string
+		if err := rows.Scan(&ref); err != nil {
+			return nil, err
+		}
+		refs = append(refs, ref)
+	}
+	return refs, rows.Err()
+}
+
+// DeleteArtifact removes one artifact owned by the org (via run→project join)
+// and returns its blob reference.
+func (s *Store) DeleteArtifact(ctx context.Context, orgID, id uuid.UUID) (string, error) {
+	var ref string
+	err := s.pool.QueryRow(ctx, `
+		DELETE FROM artifacts a USING workflow_runs r, projects p
+		WHERE a.id = $1 AND r.id = a.run_id AND p.id = r.project_id AND p.org_id = $2
+		RETURNING a.blob_ref`, id, orgID).Scan(&ref)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	return ref, err
 }
 
 func (s *Store) Artifacts(ctx context.Context, orgID uuid.UUID, limit int) ([]Artifact, error) {
