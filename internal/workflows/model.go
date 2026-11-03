@@ -152,6 +152,7 @@ type StepPlan struct {
 	WorkingDirectory string            `json:"working_directory,omitempty"`
 	If               string            `json:"if,omitempty"`
 	Env              map[string]string `json:"env,omitempty"`
+	With             map[string]any    `json:"with,omitempty"`
 	ContinueOnError  bool              `json:"continue_on_error"`
 	TimeoutSeconds   int               `json:"timeout_seconds"`
 }
@@ -182,12 +183,15 @@ type Edge struct {
 }
 
 type Plan struct {
-	Name        string    `json:"name"`
-	Events      []string  `json:"events"`
-	Concurrency string    `json:"concurrency,omitempty"`
-	FailFast    bool      `json:"fail_fast"`
-	Jobs        []JobPlan `json:"jobs"`
-	Edges       []Edge    `json:"edges"`
+	Name        string   `json:"name"`
+	Events      []string `json:"events"`
+	Concurrency string   `json:"concurrency,omitempty"`
+	// CancelInProgress mirrors concurrency.cancel-in-progress (GitHub semantics:
+	// a newer run in the same group cancels the older one).
+	CancelInProgress bool      `json:"cancel_in_progress,omitempty"`
+	FailFast         bool      `json:"fail_fast"`
+	Jobs             []JobPlan `json:"jobs"`
+	Edges            []Edge    `json:"edges"`
 	// Triggers keeps the raw trigger configuration for filtering later phases.
 	Triggers map[string]any `json:"triggers,omitempty"`
 }

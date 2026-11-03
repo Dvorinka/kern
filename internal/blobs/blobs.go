@@ -22,6 +22,9 @@ type Store interface {
 	Put(key string, r io.Reader) (int64, string, error)
 	// ReadFrom returns up to max bytes starting at offset, plus the total size.
 	ReadFrom(key string, offset int64, max int) ([]byte, int64, error)
+	// Open streams the whole object; the caller closes it. Returns ErrNotFound-able
+	// nil reader semantics: (nil, 0, nil) when the key does not exist.
+	Open(key string) (io.ReadCloser, int64, error)
 	// Size returns the current size of a key.
 	Size(key string) (int64, error)
 	Delete(key string) error
@@ -129,6 +132,26 @@ func (f *Filesystem) ReadFrom(key string, offset int64, max int) ([]byte, int64,
 		return nil, size, err
 	}
 	return buf[:n], size, nil
+}
+
+func (f *Filesystem) Open(key string) (io.ReadCloser, int64, error) {
+	p, err := f.path(key)
+	if err != nil {
+		return nil, 0, err
+	}
+	fh, err := os.Open(p)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, 0, nil
+		}
+		return nil, 0, err
+	}
+	info, err := fh.Stat()
+	if err != nil {
+		fh.Close()
+		return nil, 0, err
+	}
+	return fh, info.Size(), nil
 }
 
 func (f *Filesystem) Size(key string) (int64, error) {

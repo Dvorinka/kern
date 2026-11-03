@@ -119,7 +119,7 @@ func (s *Server) respondWithClaim(c *gin.Context, claimed *store.ClaimedJob) {
 			"number": st.Number, "id": spec.ID, "name": st.Name, "status": st.Status,
 			"run": spec.Run, "uses": spec.Uses, "shell": spec.Shell,
 			"working_directory": spec.WorkingDirectory, "if": spec.If,
-			"env": spec.Env, "continue_on_error": spec.ContinueOnError,
+			"env": spec.Env, "with": spec.With, "continue_on_error": spec.ContinueOnError,
 			"timeout_seconds": spec.TimeoutSeconds,
 		})
 	}

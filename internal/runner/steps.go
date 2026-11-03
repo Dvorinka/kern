@@ -152,15 +152,20 @@ func (e *executor) runStepBody(ctx context.Context, step StepSpec) (string, int,
 	return "failure", code, nil
 }
 
-// runUsesStep supports actions/checkout implicitly and fails explicit unsupported
-// actions with an explicit diagnostic (compatibility.md guarantees loud, not silent).
+// runUsesStep handles the natively-supported actions; anything else fails with
+// an explicit diagnostic (compatibility.md guarantees loud, not silent).
 func (e *executor) runUsesStep(_ context.Context, step StepSpec) (string, int) {
 	ref := strings.TrimSpace(step.Uses)
-	if ref == "actions/checkout" || strings.HasPrefix(ref, "actions/checkout@") {
+	name := strings.ToLower(strings.SplitN(ref, "@", 2)[0])
+	switch name {
+	case "actions/checkout":
 		// The workspace was checked out during prepare; an explicit step keeps that state.
 		return "success", 0
+	case "actions/upload-artifact":
+		return e.artifactUpload(step)
+	case "actions/download-artifact":
+		return e.artifactDownload(step)
 	}
-	// ponytail: composite/JS/Docker action runtimes land in M5; fail loudly.
 	e.log.Warn("action kind unavailable", zap.Int("step", step.Number), zap.String("uses", ref))
 	diag := fmt.Sprintf("KERN: action %q is not supported yet (action runtimes ship in a later phase). "+
 		"The step fails by design rather than being silently ignored; see docs/compatibility.md.", ref)

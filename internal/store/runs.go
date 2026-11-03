@@ -47,6 +47,7 @@ type CreateRunParams struct {
 	TrustLevel        string
 	Source            map[string]any
 	ConcurrencyGroup  string
+	CancelInProgress  bool
 }
 
 // CreateRun persists a run and its compiled jobs atomically. Run numbers are allocated
@@ -82,13 +83,13 @@ func (s *Store) createRunOnce(ctx context.Context, p CreateRunParams, jobs []Job
 	err = tx.QueryRow(ctx, `
 		INSERT INTO workflow_runs
 			(project_id, workflow_id, workflow_version_id, run_number, event, ref, sha,
-			 commit_message, actor, trust_level, source, concurrency_group, status)
+			 commit_message, actor, trust_level, source, concurrency_group, cancel_in_progress, status)
 		VALUES ($1, $2, $3,
 		        (SELECT COALESCE(MAX(run_number), 0) + 1 FROM workflow_runs WHERE workflow_id = $2),
-		        $4, $5, $6, $7, $8, $9, $10, $11, 'queued')
+		        $4, $5, $6, $7, $8, $9, $10, $11, $12, 'queued')
 		RETURNING id`,
 		p.ProjectID, p.WorkflowID, p.WorkflowVersionID, p.Event, p.Ref, p.SHA,
-		p.CommitMessage, p.Actor, p.TrustLevel, source, p.ConcurrencyGroup).Scan(&id)
+		p.CommitMessage, p.Actor, p.TrustLevel, source, p.ConcurrencyGroup, p.CancelInProgress).Scan(&id)
 	if err != nil {
 		return Run{}, err
 	}
@@ -313,8 +314,22 @@ func (s *Store) CancelRun(ctx context.Context, runID uuid.UUID) (Run, error) {
 	return s.Run(ctx, runID)
 }
 
-// PromoteQueuedRuns moves serialized runs (concurrency groups) forward when the group is free.
+// PromoteQueuedRuns moves serialized runs (concurrency groups) forward when the
+// group is free. When a newer queued run shares a group with an in-progress run
+// that opted into cancel-in-progress, the older run is cancelled first.
 func (s *Store) PromoteQueuedRuns(ctx context.Context) (int, error) {
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE workflow_runs SET status = 'cancelled', conclusion = 'cancelled', completed_at = now()
+		WHERE id IN (
+			SELECT o.id FROM workflow_runs o
+			JOIN workflow_runs n ON n.project_id = o.project_id
+				AND n.concurrency_group = o.concurrency_group
+				AND n.status = 'queued'
+				AND (n.created_at, n.id) > (o.created_at, o.id)
+			WHERE o.status IN ('queued', 'in_progress')
+			  AND o.cancel_in_progress)`); err != nil {
+		return 0, err
+	}
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE workflow_runs r SET status = 'in_progress', started_at = now()
 		WHERE r.status = 'queued'

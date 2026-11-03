@@ -99,7 +99,13 @@ func (s *Server) buildRouter() *gin.Engine {
 		runner.POST("/runners/jobs/:jobID/finish", s.finishJob)
 		runner.GET("/runners/jobs/:jobID/cancel-check", s.cancelCheck)
 		runner.GET("/runners/jobs/:jobID/secrets", s.jobSecrets)
+		runner.GET("/runners/jobs/:jobID/artifacts", s.jobArtifacts)
+		runner.PUT("/runners/jobs/:jobID/artifacts/:name", s.uploadArtifact)
+		runner.GET("/runners/jobs/:jobID/artifacts/:name", s.downloadArtifact)
 	}
+
+	auth.GET("/artifacts", s.listArtifacts)
+	auth.GET("/artifacts/:id/download", s.getArtifact)
 	return r
 }
 

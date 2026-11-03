@@ -81,11 +81,12 @@ func Compile(content string, c Compiler) (Result, error) {
 	}
 
 	plan := &Plan{
-		Name:        name,
-		Events:      wf.On.Events,
-		Concurrency: wf.Concurrency.Group,
-		FailFast:    true,
-		Triggers:    wf.On.Raw,
+		Name:             name,
+		Events:           wf.On.Events,
+		Concurrency:      wf.Concurrency.Group,
+		CancelInProgress: wf.Concurrency.CancelInProgress,
+		FailFast:         true,
+		Triggers:         wf.On.Raw,
 	}
 
 	jobIDs := sortedKeys(wf.Jobs)
@@ -112,7 +113,23 @@ func Compile(content string, c Compiler) (Result, error) {
 			d.errorf("runs-on", "jobs."+id+".runs-on", "job must declare runs-on")
 		}
 		if job.Container != nil {
-			d.errorf("job-container", "jobs."+id+".container", "job containers are not implemented by KERN yet; remove 'container'")
+			switch c := job.Container.(type) {
+			case string:
+				if strings.TrimSpace(c) == "" {
+					d.errorf("job-container", "jobs."+id+".container", "container image must not be empty")
+				}
+			case map[string]any:
+				if _, ok := c["image"].(string); !ok {
+					d.errorf("job-container", "jobs."+id+".container", "container.image is required")
+				}
+				for k := range c {
+					if k != "image" {
+						d.warnf("job-container", "jobs."+id+".container."+k, fmt.Sprintf("container option %q is not implemented and is ignored", k))
+					}
+				}
+			default:
+				d.errorf("job-container", "jobs."+id+".container", "container must be an image string or a mapping")
+			}
 		}
 		if len(job.Services) > 0 {
 			d.errorf("services", "jobs."+id+".services", "service containers are not implemented by KERN yet")
@@ -219,6 +236,17 @@ func compileJob(wf Workflow, id string, job *Job, matrix map[string]any, c Compi
 	env := mergeEnv(wf.Env, job.Env)
 
 	// Step defaults come from workflow defaults, overridden per job.
+	image := c.resolveImage(job.RunsOn)
+	if job.Container != nil {
+		switch cont := job.Container.(type) {
+		case string:
+			image = cont
+		case map[string]any:
+			if img, ok := cont["image"].(string); ok && img != "" {
+				image = img
+			}
+		}
+	}
 	shell := wf.Defaults.Run.Shell
 	workdir := wf.Defaults.Run.WorkingDirectory
 	if job.Defaults != nil {
@@ -247,6 +275,7 @@ func compileJob(wf Workflow, id string, job *Job, matrix map[string]any, c Compi
 			WorkingDirectory: firstNonEmpty(s.WorkingDirectory, workdir),
 			If:               s.If,
 			Env:              mergeEnv(nil, s.Env),
+			With:             s.With,
 			ContinueOnError:  s.ContinueOnError,
 		}
 		if s.TimeoutMinutes > 0 {
@@ -262,7 +291,7 @@ func compileJob(wf Workflow, id string, job *Job, matrix map[string]any, c Compi
 		Name:            displayName,
 		Needs:           dedupe(job.Needs),
 		RunsOn:          []string(job.RunsOn),
-		Image:           c.resolveImage(job.RunsOn),
+		Image:           image,
 		Matrix:          matrix,
 		Env:             env,
 		If:              job.If,
@@ -393,7 +422,13 @@ func validateStep(d *diagnostics, path string, s Step, seenIDs map[string]bool) 
 	if hasUses {
 		if !isSupportedAction(s.Uses) {
 			d.errorf("action-unsupported", path+".uses",
-				fmt.Sprintf("action %q is not implemented by KERN yet; only actions/checkout is supported natively", s.Uses))
+				fmt.Sprintf("action %q is not implemented by KERN yet; supported: actions/checkout, actions/upload-artifact, actions/download-artifact", s.Uses))
+		}
+		lname := strings.ToLower(strings.SplitN(s.Uses, "@", 2)[0])
+		if lname == "actions/upload-artifact" {
+			if p, ok := s.With["path"].(string); !ok || strings.TrimSpace(p) == "" {
+				d.errorf("artifact-path", path+".with.path", "actions/upload-artifact requires with.path")
+			}
 		}
 	}
 	if s.TimeoutMinutes < 0 {
@@ -408,7 +443,7 @@ func isSupportedAction(uses string) bool {
 		name = uses[:i]
 	}
 	switch strings.ToLower(name) {
-	case "actions/checkout":
+	case "actions/checkout", "actions/upload-artifact", "actions/download-artifact":
 		return true
 	}
 	return false

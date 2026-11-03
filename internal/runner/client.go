@@ -8,10 +8,19 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// fh2bytes adapts a *os.File body for do(), which only understands []byte and
+// JSON-marshallable values. It reads eagerly so do() can set Content-Length-free
+// octet-stream bodies; artifact sizes are bounded by the server-side limit.
+func fh2bytes(f *os.File) []byte {
+	data, _ := io.ReadAll(f)
+	return data
+}
 
 // Claim mirrors the control plane's claim payload. It is the runner's only view of a job.
 type Claim struct {
@@ -60,6 +69,7 @@ type StepSpec struct {
 	WorkingDirectory string            `json:"working_directory"`
 	If               string            `json:"if"`
 	Env              map[string]string `json:"env"`
+	With             map[string]any    `json:"with"`
 	ContinueOnError  bool              `json:"continue_on_error"`
 	TimeoutSeconds   int               `json:"timeout_seconds"`
 }
@@ -222,6 +232,52 @@ func (c *client) cancelCheck(ctx context.Context, jobID string) (bool, error) {
 		return false, err
 	}
 	return out.Cancelled, nil
+}
+
+func (c *client) uploadArtifact(ctx context.Context, jobID, name, path string) error {
+	fh, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer fh.Close()
+	return c.do(ctx, http.MethodPut,
+		"/api/v1/runners/jobs/"+url.PathEscape(jobID)+"/artifacts/"+url.PathEscape(name), fh2bytes(fh), nil)
+}
+
+func (c *client) downloadArtifact(ctx context.Context, jobID, name, path string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		c.base+"/api/v1/runners/jobs/"+url.PathEscape(jobID)+"/artifacts/"+url.PathEscape(name), nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		return &APIError{Status: resp.StatusCode, Body: strings.TrimSpace(string(data))}
+	}
+	fh, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer fh.Close()
+	_, err = io.Copy(fh, resp.Body)
+	return err
+}
+
+func (c *client) listArtifacts(ctx context.Context, jobID string) ([]string, error) {
+	var out struct {
+		Artifacts []string `json:"artifacts"`
+	}
+	path := "/api/v1/runners/jobs/" + url.PathEscape(jobID) + "/artifacts"
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Artifacts, nil
 }
 
 func (c *client) jobSecrets(ctx context.Context, jobID string) (map[string]string, bool, error) {

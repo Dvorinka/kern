@@ -38,6 +38,12 @@ func (s *Store) RegisterRunner(ctx context.Context, p RegisterRunnerParams) (Run
 		INSERT INTO runners (org_id, name, hostname, os, arch, cpus, memory_bytes, disk_bytes,
 		                     labels, version, status, token_hash, last_heartbeat_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'online', $11, now())
+		ON CONFLICT (org_id, name) DO UPDATE SET
+			hostname = EXCLUDED.hostname, os = EXCLUDED.os, arch = EXCLUDED.arch,
+			cpus = EXCLUDED.cpus, memory_bytes = EXCLUDED.memory_bytes,
+			disk_bytes = EXCLUDED.disk_bytes, labels = EXCLUDED.labels,
+			version = EXCLUDED.version, status = 'online',
+			token_hash = EXCLUDED.token_hash, last_heartbeat_at = now()
 		RETURNING id, org_id, name, hostname, os, arch, cpus, memory_bytes, disk_bytes, labels,
 		          version, status, draining, ephemeral, last_heartbeat_at, created_at`,
 		p.OrgID, p.Name, p.Hostname, p.OS, p.Arch, p.CPUs, p.MemoryBytes, p.DiskBytes,

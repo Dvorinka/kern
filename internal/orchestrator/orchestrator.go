@@ -57,6 +57,7 @@ func (o *Orchestrator) StartRun(ctx context.Context, p store.CreateRunParams) (s
 		p.ConcurrencyGroup = group
 	}
 
+	p.CancelInProgress = res.Plan.CancelInProgress
 	seeds := make([]store.JobSeed, 0, len(res.Plan.Jobs))
 	for _, jp := range res.Plan.Jobs {
 		seed := store.JobSeed{
