@@ -324,6 +324,7 @@ func (s *Store) PromoteQueuedRuns(ctx context.Context) (int, error) {
 			SELECT o.id FROM workflow_runs o
 			JOIN workflow_runs n ON n.project_id = o.project_id
 				AND n.concurrency_group = o.concurrency_group
+				AND o.concurrency_group <> ''
 				AND n.status = 'queued'
 				AND (n.created_at, n.id) > (o.created_at, o.id)
 			WHERE o.status IN ('queued', 'in_progress')
