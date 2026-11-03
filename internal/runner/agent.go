@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -31,11 +32,13 @@ type Config struct {
 }
 
 type Agent struct {
-	cfg   Config
-	log   *zap.Logger
-	c     *client
-	id    string
-	token string
+	cfg     Config
+	log     *zap.Logger
+	c       *client
+	id      string
+	token   string
+	sampler hostSampler
+	active  atomic.Int32
 }
 
 func New(cfg Config, log *zap.Logger) *Agent {
@@ -77,6 +80,16 @@ func (a *Agent) Register(ctx context.Context) error {
 	a.log.Info("registered with control plane", zap.String("runner_id", runnerID), zap.String("name", name))
 	return nil
 }
+
+// SetToken skips registration: the agent runs with a previously issued runner
+// credential (written by `kern-runner join`).
+func (a *Agent) SetToken(token string) {
+	a.token = token
+	a.c = newClient(a.cfg.ControlURL, token)
+}
+
+// Token exposes the credential issued at registration for the join flow.
+func (a *Agent) Token() string { return a.token }
 
 func (a *Agent) labels() []string {
 	base := []string{"self-hosted", "kern", runtime.GOOS, "linux-" + string(runtime.GOARCH)}
@@ -142,7 +155,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			hctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			err := a.c.heartbeat(hctx)
+			err := a.c.heartbeat(hctx, a.sampler.sample(a.cfg.WorkRoot, int(a.active.Load())))
 			cancel()
 			if err != nil {
 				failures++
@@ -175,7 +188,9 @@ func (a *Agent) workerLoop(ctx context.Context, n int) {
 		if claim == nil {
 			continue
 		}
+		a.active.Add(1)
 		a.executeJob(ctx, claim)
+		a.active.Add(-1)
 	}
 }
 

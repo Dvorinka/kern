@@ -52,6 +52,7 @@ func (s *Server) buildRouter() *gin.Engine {
 	r.GET("/api/v1/meta", s.meta)
 	r.GET("/api/v1/metrics", s.prometheus)
 	r.POST("/api/v1/auth/login", s.login)
+	r.POST("/api/v1/auth/token", s.cliToken)
 	r.POST("/api/v1/webhooks/github", s.githubWebhook)
 
 	api := r.Group("/api/v1")
@@ -79,8 +80,12 @@ func (s *Server) buildRouter() *gin.Engine {
 		auth.GET("/steps/:stepID/logs/stream", s.stepLogStream)
 
 		auth.GET("/runners", s.listRunners)
+		auth.POST("/enroll-tokens", s.createEnrollToken)
 		auth.POST("/runners/:id/drain", s.drainRunner)
 		auth.DELETE("/runners/:id", s.deleteRunner)
+
+		auth.GET("/cache", s.listCache)
+		auth.DELETE("/cache/:id", s.deleteCache)
 
 		auth.GET("/secrets", s.listSecrets)
 		auth.PUT("/secrets/:name", s.putSecret)

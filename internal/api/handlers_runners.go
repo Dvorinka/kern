@@ -1,12 +1,14 @@
 package api
 
 import (
+	"io"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"github.com/dvorinka/kern/internal/auth"
 	"github.com/dvorinka/kern/internal/store"
 )
 
@@ -66,6 +68,44 @@ func (s *Server) deleteRunner(c *gin.Context) {
 	}
 	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "runner.delete", id.String())
 	c.Status(http.StatusNoContent)
+}
+
+type enrollRequest struct {
+	Name       string `json:"name"`
+	TTLMinutes int    `json:"ttl_minutes"`
+}
+
+// createEnrollToken mints a one-time runner enrollment token. The plaintext is
+// returned once and shown to the operator for `kern-runner join`; only the hash
+// is stored. Registered under /enroll-tokens rather than /runners/enroll-tokens
+// because gin rejects a static segment that collides with /runners/:id.
+func (s *Server) createEnrollToken(c *gin.Context) {
+	user, _ := currentUser(c)
+	var req enrollRequest
+	if err := c.ShouldBindJSON(&req); err != nil && err != io.EOF {
+		fail(c, http.StatusBadRequest, "invalid_body", "invalid enroll token body")
+		return
+	}
+	ttl := req.TTLMinutes
+	if ttl <= 0 {
+		ttl = 60
+	}
+	if ttl > 24*60 {
+		ttl = 24 * 60
+	}
+	token, hash, err := auth.NewToken(auth.EnrollPrefix)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	rec, err := s.Store.CreateEnrollToken(c.Request.Context(), user.OrgID, &user.ID,
+		req.Name, hash, time.Now().Add(time.Duration(ttl)*time.Minute))
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "runner.enroll_token", req.Name)
+	c.JSON(http.StatusCreated, gin.H{"token": token, "record": rec})
 }
 
 // runnersOnlineWindow is how long after the last heartbeat a runner is considered online.

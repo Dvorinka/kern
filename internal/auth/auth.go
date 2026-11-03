@@ -21,6 +21,7 @@ const (
 	SessionCookie = "kern_session"
 	APIPrefix     = "kern_"
 	RunnerPrefix  = "kernr_"
+	EnrollPrefix  = "kerne_"
 )
 
 // HashPassword returns an argon2id PHC string.

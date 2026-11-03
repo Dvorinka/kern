@@ -135,6 +135,10 @@ export interface Runner {
 	status: "online" | "offline" | "draining";
 	draining: boolean;
 	last_heartbeat_at: string | null;
+	cpu_percent: number | null;
+	mem_used_bytes: number | null;
+	disk_free_bytes: number | null;
+	metrics_at: string | null;
 	created_at: string;
 	active_jobs?: number;
 }

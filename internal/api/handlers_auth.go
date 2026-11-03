@@ -53,6 +53,58 @@ func (s *Server) login(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"user": user, "expires_at": expires})
 }
 
+// cliToken is the kern CLI login path: password credentials in, an API token
+// out. It shares the login rate limiter and never mints a session cookie, so it
+// needs no CSRF origin check.
+type cliTokenRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	Name     string `json:"name"`
+	Days     int    `json:"days"`
+}
+
+func (s *Server) cliToken(c *gin.Context) {
+	var req cliTokenRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "invalid_body", "email and password are required")
+		return
+	}
+	key := c.ClientIP() + "|" + strings.ToLower(req.Email)
+	if !s.limiter.allow(key) {
+		fail(c, http.StatusTooManyRequests, "rate_limited", "too many login attempts; try again later")
+		return
+	}
+	user, err := s.Store.UserByEmail(c.Request.Context(), strings.ToLower(strings.TrimSpace(req.Email)))
+	if err != nil || !auth.VerifyPassword(user.PasswordHash, req.Password) {
+		s.limiter.record(key)
+		fail(c, http.StatusUnauthorized, "invalid_credentials", "email or password is incorrect")
+		return
+	}
+	s.limiter.reset(key)
+	if req.Name == "" {
+		req.Name = "kern-cli"
+	}
+	var expires *time.Time
+	if req.Days > 0 {
+		t := time.Now().Add(time.Duration(req.Days) * 24 * time.Hour)
+		expires = &t
+	}
+	token, hash, err := auth.NewToken(auth.APIPrefix)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	rec, err := s.Store.CreateAPIToken(c.Request.Context(), user.ID, req.Name,
+		auth.TokenPrefix(token), hash, []string{"read", "write", "admin"}, expires)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "token.create", req.Name)
+	c.JSON(http.StatusCreated, gin.H{"token": token, "record": rec,
+		"user": gin.H{"email": user.Email, "org_id": user.OrgID}})
+}
+
 func (s *Server) logout(c *gin.Context) {
 	if cookie, err := c.Cookie(auth.SessionCookie); err == nil && cookie != "" {
 		_ = s.Store.DeleteSession(c.Request.Context(), auth.HashToken(cookie))

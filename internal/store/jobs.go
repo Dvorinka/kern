@@ -41,6 +41,20 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 			  AND rn.status = 'online'
 			  AND NOT rn.draining
 			  AND j.runs_on <@ (rn.labels || ARRAY['self-hosted', 'kern'])
+			  -- Least-loaded placement: yield to any eligible runner carrying
+			  -- fewer in-progress jobs than this one.
+			  AND NOT EXISTS (
+				SELECT 1 FROM runners o
+				WHERE o.org_id = rn.org_id
+				  AND o.id <> rn.id
+				  AND o.status = 'online'
+				  AND NOT o.draining
+				  AND j.runs_on <@ (o.labels || ARRAY['self-hosted', 'kern'])
+				  AND (SELECT count(*) FROM jobs a
+				       WHERE a.runner_id = o.id AND a.status = 'in_progress')
+				    < (SELECT count(*) FROM jobs a
+				       WHERE a.runner_id = rn.id AND a.status = 'in_progress')
+			  )
 			ORDER BY j.priority DESC, j.queued_at
 			FOR UPDATE OF j SKIP LOCKED
 			LIMIT 1
@@ -144,12 +158,13 @@ func (s *Store) RenewLease(ctx context.Context, runnerID, jobID uuid.UUID, lease
 	return true, err
 }
 
-// Heartbeat records liveness for a runner.
-func (s *Store) Heartbeat(ctx context.Context, runnerID uuid.UUID) error {
+// Heartbeat records liveness and the latest utilization snapshot for a runner.
+func (s *Store) Heartbeat(ctx context.Context, runnerID uuid.UUID, m HostMetrics) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE runners SET last_heartbeat_at = now(),
-			status = CASE WHEN draining THEN 'draining' ELSE 'online' END
-		WHERE id = $1`, runnerID)
+			status = CASE WHEN draining THEN 'draining' ELSE 'online' END,
+			cpu_percent = $2, mem_used_bytes = $3, disk_free_bytes = $4, metrics_at = now()
+		WHERE id = $1`, runnerID, m.CPUPercent, m.MemUsedBytes, m.DiskFreeBytes)
 	return err
 }
 

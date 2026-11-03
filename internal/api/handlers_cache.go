@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"go.uber.org/zap"
 
 	"github.com/dvorinka/kern/internal/store"
 )
@@ -78,6 +80,39 @@ func (s *Server) cacheRestore(c *gin.Context) {
 	s.Store.TouchCache(c.Request.Context(), entry.ID)
 	c.Header("X-Kern-Cache-Key", entry.Key)
 	c.DataFromReader(http.StatusOK, size, "application/gzip", rc, nil)
+}
+
+// listCache exposes the org's cache entries to operators (CLI and web).
+func (s *Server) listCache(c *gin.Context) {
+	user, _ := currentUser(c)
+	entries, err := s.Store.CacheEntries(c.Request.Context(), user.OrgID,
+		parseInt(c.DefaultQuery("limit", "200"), 200))
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"entries": entries})
+}
+
+// deleteCache removes one entry and its archive. Manual eviction until
+// automatic retention lands.
+func (s *Server) deleteCache(c *gin.Context) {
+	user, _ := currentUser(c)
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		fail(c, http.StatusBadRequest, "invalid_id", "cache id must be a uuid")
+		return
+	}
+	blobRef, err := s.Store.DeleteCacheEntry(c.Request.Context(), user.OrgID, id)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	if err := s.Blobs.Delete(blobRef); err != nil {
+		s.Log.Error("delete cache blob", zap.String("ref", blobRef), zap.Error(err))
+	}
+	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "cache.delete", id.String())
+	c.Status(http.StatusNoContent)
 }
 
 // cacheSave stores an archive under (project, key, version, scope). Caches are

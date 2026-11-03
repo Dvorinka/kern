@@ -161,8 +161,8 @@ func (c *client) register(ctx context.Context, req map[string]any) (runnerID, to
 	return out.RunnerID, out.Token, nil
 }
 
-func (c *client) heartbeat(ctx context.Context) error {
-	return c.do(ctx, http.MethodPost, "/api/v1/runners/heartbeat", map[string]any{}, nil)
+func (c *client) heartbeat(ctx context.Context, m heartbeatMetrics) error {
+	return c.do(ctx, http.MethodPost, "/api/v1/runners/heartbeat", m, nil)
 }
 
 func (c *client) claim(ctx context.Context, wait int) (*Claim, error) {

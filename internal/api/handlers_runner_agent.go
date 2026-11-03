@@ -31,20 +31,31 @@ type registerRequest struct {
 	Version     string   `json:"version"`
 }
 
+// registerRunner accepts either the shared static join token (dev escape
+// hatch) or a one-time enrollment token minted via POST /enroll-tokens.
 func (s *Server) registerRunner(c *gin.Context) {
 	var req registerRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		fail(c, http.StatusBadRequest, "invalid_body", "invalid registration body")
 		return
 	}
-	if !s.joinTokenValid(req.JoinToken) {
-		fail(c, http.StatusUnauthorized, "invalid_join_token", "runner join token is invalid")
-		return
-	}
-	org, err := s.Store.FirstOrg(c.Request.Context())
-	if err != nil {
-		s.internalError(c, err)
-		return
+	var orgID uuid.UUID
+	if s.joinTokenValid(req.JoinToken) {
+		org, err := s.Store.FirstOrg(c.Request.Context())
+		if err != nil {
+			s.internalError(c, err)
+			return
+		}
+		orgID = org.ID
+	} else {
+		var err error
+		orgID, err = s.Store.ConsumeEnrollToken(c.Request.Context(), auth.HashToken(req.JoinToken))
+		if err != nil {
+			fail(c, http.StatusUnauthorized, "invalid_join_token",
+				"join token is invalid, expired or already used")
+			return
+		}
+		s.Store.Audit(c.Request.Context(), orgID, nil, "runner.enroll", req.Name)
 	}
 	if req.Name == "" {
 		req.Name = "runner-" + uuid.NewString()[:8]
@@ -55,7 +66,7 @@ func (s *Server) registerRunner(c *gin.Context) {
 		return
 	}
 	runner, err := s.Store.RegisterRunner(c.Request.Context(), store.RegisterRunnerParams{
-		OrgID: org.ID, Name: req.Name, Hostname: req.Hostname, OS: req.OS, Arch: req.Arch,
+		OrgID: orgID, Name: req.Name, Hostname: req.Hostname, OS: req.OS, Arch: req.Arch,
 		CPUs: req.CPUs, MemoryBytes: req.MemoryBytes, DiskBytes: req.DiskBytes,
 		Labels: req.Labels, Version: req.Version, TokenHash: hash,
 	})
@@ -69,7 +80,13 @@ func (s *Server) registerRunner(c *gin.Context) {
 
 func (s *Server) runnerHeartbeat(c *gin.Context) {
 	runner, _ := currentRunner(c)
-	if err := s.Store.Heartbeat(c.Request.Context(), runner.ID); err != nil {
+	var m store.HostMetrics
+	// An empty body is legal (older runners); fields stay nil.
+	if err := c.ShouldBindJSON(&m); err != nil && err != io.EOF {
+		fail(c, http.StatusBadRequest, "invalid_body", "invalid heartbeat body")
+		return
+	}
+	if err := s.Store.Heartbeat(c.Request.Context(), runner.ID, m); err != nil {
 		s.internalError(c, err)
 		return
 	}

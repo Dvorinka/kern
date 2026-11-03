@@ -90,11 +90,27 @@ func (s *Store) TouchCache(ctx context.Context, id uuid.UUID) {
 	_, _ = s.pool.Exec(ctx, `UPDATE cache_entries SET last_used_at = now() WHERE id = $1`, id)
 }
 
+// DeleteCacheEntry removes an entry owned by the org and returns its blob
+// reference so the caller can drop the archive as well.
+func (s *Store) DeleteCacheEntry(ctx context.Context, orgID, id uuid.UUID) (string, error) {
+	var blobRef string
+	err := s.pool.QueryRow(ctx, `
+		DELETE FROM cache_entries c USING projects p
+		WHERE c.id = $1 AND p.id = c.project_id AND p.org_id = $2
+		RETURNING c.blob_ref`, id, orgID).Scan(&blobRef)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	return blobRef, err
+}
+
 // CacheEntries lists entries for the org overview/metrics surfaces.
 func (s *Store) CacheEntries(ctx context.Context, orgID uuid.UUID, limit int) ([]CacheEntry, error) {
 	limit, _ = page(limit, 0)
 	rows, err := s.pool.Query(ctx, `
-		SELECT `+cacheCols+` FROM cache_entries c
+		SELECT c.id, c.project_id, c.key, c.version, c.scope, c.size_bytes, c.blob_ref,
+		       c.created_at, c.last_used_at, c.expires_at
+		FROM cache_entries c
 		JOIN projects p ON p.id = c.project_id
 		WHERE p.org_id = $1
 		ORDER BY c.last_used_at DESC LIMIT $2`, orgID, limit)

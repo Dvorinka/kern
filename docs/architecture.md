@@ -63,7 +63,14 @@ Checkout happens on the runner host into the workspace dir (`git clone` from
 
 `ClaimJob` is a single statement: pick the oldest queued job whose `runs_on`
 labels are a subset of the runner's labels, `FOR UPDATE SKIP LOCKED`, flip to
-`in_progress` with a lease, insert a `job_leases` row.
+`in_progress` with a lease, insert a `job_leases` row. A least-loaded guard
+makes a runner yield to any eligible online runner carrying fewer in-progress
+jobs — placement prefers idle runners inside the matching label set.
+
+Heartbeats carry a live utilization snapshot (`cpu_percent`, `mem_used_bytes`,
+`disk_free_bytes`, `active_jobs`) stored on the runners row; the runners API
+and dashboard read it back. The authoritative active-job count stays in the
+jobs table — the payload field only corroborates it.
 
 - Lease: `KERN_JOB_LEASE` (default 90s), renewed every 20s by the runner,
   including during prepare (checkout/pull) since the first implementation let
@@ -88,8 +95,15 @@ against every secret value for the run's project + org.
   carried in an HttpOnly cookie (`kern_session`, 14d). Cookie writes are origin
   checked (CSRF). Login is rate limited in-process.
 - API tokens (`kern_…`) and runner tokens (`kernr_…`): random, stored hashed.
-- Runner registration: shared join token (`KERN_RUNNER_JOIN_TOKEN`,
-  constant-time compared) exchanged for a per-runner token.
+- The `kern` CLI authenticates with an API token. `POST /auth/token` exchanges
+  email+password for one (rate-limited, no cookie) — `kern login` uses it.
+- Runner registration accepts either a one-time enrollment token (`kerne_…`,
+  table `runner_enroll_tokens`, expiring, single-use, minted via
+  `POST /enroll-tokens` or `kern runners enroll`) or the shared static join
+  token (`KERN_RUNNER_JOIN_TOKEN`), which remains as a dev escape hatch.
+  `kern-runner join` performs the exchange on the target host and writes an
+  env file plus a systemd user unit; `kern-runner --config envfile` (or
+  `--token`) runs on the stored credential.
 
 ## Storage
 

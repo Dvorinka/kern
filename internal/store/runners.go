@@ -33,8 +33,7 @@ type RegisterRunnerParams struct {
 }
 
 func (s *Store) RegisterRunner(ctx context.Context, p RegisterRunnerParams) (Runner, error) {
-	var r Runner
-	err := s.pool.QueryRow(ctx, `
+	return scanRunner(s.pool.QueryRow(ctx, `
 		INSERT INTO runners (org_id, name, hostname, os, arch, cpus, memory_bytes, disk_bytes,
 		                     labels, version, status, token_hash, last_heartbeat_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'online', $11, now())
@@ -44,25 +43,27 @@ func (s *Store) RegisterRunner(ctx context.Context, p RegisterRunnerParams) (Run
 			disk_bytes = EXCLUDED.disk_bytes, labels = EXCLUDED.labels,
 			version = EXCLUDED.version, status = 'online',
 			token_hash = EXCLUDED.token_hash, last_heartbeat_at = now()
-		RETURNING id, org_id, name, hostname, os, arch, cpus, memory_bytes, disk_bytes, labels,
-		          version, status, draining, ephemeral, last_heartbeat_at, created_at`,
+		RETURNING `+runnerCols,
 		p.OrgID, p.Name, p.Hostname, p.OS, p.Arch, p.CPUs, p.MemoryBytes, p.DiskBytes,
-		p.Labels, p.Version, p.TokenHash).
-		Scan(&r.ID, &r.OrgID, &r.Name, &r.Hostname, &r.OS, &r.Arch, &r.CPUs, &r.MemoryBytes,
-			&r.DiskBytes, &r.Labels, &r.Version, &r.Status, &r.Draining, &r.Ephemeral,
-			&r.LastHeartbeatAt, &r.CreatedAt)
+		p.Labels, p.Version, p.TokenHash))
+}
+
+// runnerCols is the full runners column list; keep scan order in lockstep.
+const runnerCols = `id, org_id, name, hostname, os, arch, cpus, memory_bytes, disk_bytes, labels,
+	version, status, draining, ephemeral, last_heartbeat_at, cpu_percent,
+	mem_used_bytes, disk_free_bytes, metrics_at, created_at`
+
+func scanRunner(row pgx.Row) (Runner, error) {
+	var r Runner
+	err := row.Scan(&r.ID, &r.OrgID, &r.Name, &r.Hostname, &r.OS, &r.Arch, &r.CPUs,
+		&r.MemoryBytes, &r.DiskBytes, &r.Labels, &r.Version, &r.Status, &r.Draining,
+		&r.Ephemeral, &r.LastHeartbeatAt, &r.CPUPercent, &r.MemUsedBytes,
+		&r.DiskFreeBytes, &r.MetricsAt, &r.CreatedAt)
 	return r, err
 }
 
 func (s *Store) RunnerByToken(ctx context.Context, tokenHash string) (Runner, error) {
-	var r Runner
-	err := s.pool.QueryRow(ctx, `
-		SELECT id, org_id, name, hostname, os, arch, cpus, memory_bytes, disk_bytes, labels,
-		       version, status, draining, ephemeral, last_heartbeat_at, created_at
-		FROM runners WHERE token_hash = $1`, tokenHash).
-		Scan(&r.ID, &r.OrgID, &r.Name, &r.Hostname, &r.OS, &r.Arch, &r.CPUs, &r.MemoryBytes,
-			&r.DiskBytes, &r.Labels, &r.Version, &r.Status, &r.Draining, &r.Ephemeral,
-			&r.LastHeartbeatAt, &r.CreatedAt)
+	r, err := scanRunner(s.pool.QueryRow(ctx, `SELECT `+runnerCols+` FROM runners WHERE token_hash = $1`, tokenHash))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Runner{}, ErrNotFound
 	}
@@ -71,19 +72,15 @@ func (s *Store) RunnerByToken(ctx context.Context, tokenHash string) (Runner, er
 
 func (s *Store) Runners(ctx context.Context, orgID uuid.UUID) ([]Runner, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, org_id, name, hostname, os, arch, cpus, memory_bytes, disk_bytes, labels,
-		       version, status, draining, ephemeral, last_heartbeat_at, created_at
-		FROM runners WHERE org_id = $1 ORDER BY created_at DESC`, orgID)
+		SELECT `+runnerCols+` FROM runners WHERE org_id = $1 ORDER BY created_at DESC`, orgID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []Runner{}
 	for rows.Next() {
-		var r Runner
-		if err := rows.Scan(&r.ID, &r.OrgID, &r.Name, &r.Hostname, &r.OS, &r.Arch, &r.CPUs,
-			&r.MemoryBytes, &r.DiskBytes, &r.Labels, &r.Version, &r.Status, &r.Draining,
-			&r.Ephemeral, &r.LastHeartbeatAt, &r.CreatedAt); err != nil {
+		r, err := scanRunner(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, r)

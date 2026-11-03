@@ -47,8 +47,30 @@ export function RunnersPage() {
 									{(r.labels ?? []).slice(0, 3).join(", ")}
 									{(r.labels ?? []).length > 3 && ` +${r.labels.length - 3}`}
 								</span>
-								<span className="w-28 text-xs text-[var(--text-muted)]">
-									{r.cpus} cpu · {bytes(r.memory_bytes)}
+								<span className="w-48">
+									<Meter
+										label="cpu"
+										pct={r.cpu_percent ?? null}
+										sub={r.active_jobs != null ? `${r.active_jobs} job${r.active_jobs === 1 ? "" : "s"}` : ""}
+									/>
+									<Meter
+										label="mem"
+										pct={
+											r.mem_used_bytes != null && r.memory_bytes > 0
+												? (r.mem_used_bytes / r.memory_bytes) * 100
+												: null
+										}
+										sub={r.memory_bytes > 0 ? bytes(r.memory_bytes) : ""}
+									/>
+									<Meter
+										label="disk"
+										pct={
+											r.disk_free_bytes != null && r.disk_bytes > 0
+												? Math.max(0, 100 - (r.disk_free_bytes / r.disk_bytes) * 100)
+												: null
+										}
+										sub={r.disk_free_bytes != null ? `${bytes(r.disk_free_bytes)} free` : ""}
+									/>
 								</span>
 								<span className="w-24 text-right text-xs text-[var(--text-faint)]">
 									{relTime(r.last_heartbeat_at)}
@@ -79,5 +101,27 @@ export function RunnersPage() {
 				</Card>
 			)}
 		</>
+	);
+}
+
+// Meter is a 3-line utilization readout: label, thin bar, secondary detail.
+// null pct means the runner has not reported metrics yet.
+function Meter({ label, pct, sub }: { label: string; pct: number | null; sub: string }) {
+	return (
+		<span className="flex items-center gap-2 text-[10px] leading-4 text-[var(--text-faint)]">
+			<span className="w-7">{label}</span>
+			<span className="h-1 w-16 rounded bg-[var(--border)]">
+				{pct != null && (
+					<span
+						className="block h-1 rounded"
+						style={{
+							width: `${Math.min(100, Math.max(2, pct))}%`,
+							background: pct > 85 ? "var(--err)" : "var(--accent)",
+						}}
+					/>
+				)}
+			</span>
+			<span className="w-16 truncate">{pct != null ? `${Math.round(pct)}%` : "-"} {sub}</span>
+		</span>
 	);
 }

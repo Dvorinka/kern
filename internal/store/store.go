@@ -213,7 +213,19 @@ type Runner struct {
 	Draining        bool       `json:"draining"`
 	Ephemeral       bool       `json:"ephemeral"`
 	LastHeartbeatAt *time.Time `json:"last_heartbeat_at"`
+	CPUPercent      *float64   `json:"cpu_percent"`
+	MemUsedBytes    *int64     `json:"mem_used_bytes"`
+	DiskFreeBytes   *int64     `json:"disk_free_bytes"`
+	MetricsAt       *time.Time `json:"metrics_at"`
 	CreatedAt       time.Time  `json:"created_at"`
+}
+
+// HostMetrics is the live utilization snapshot a runner sends with each
+// heartbeat. Pointer fields let the server distinguish "not reported" from 0.
+type HostMetrics struct {
+	CPUPercent    *float64 `json:"cpu_percent"`
+	MemUsedBytes  *int64   `json:"mem_used_bytes"`
+	DiskFreeBytes *int64   `json:"disk_free_bytes"`
 }
 
 type Secret struct {
