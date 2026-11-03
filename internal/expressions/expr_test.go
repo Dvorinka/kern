@@ -1,6 +1,10 @@
 package expressions
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func ctx() map[string]any {
 	return map[string]any{
@@ -120,6 +124,40 @@ func TestConditionsSuccessStatus(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("%q = %v, want %v (job_status=success)", tc.cond, got, tc.want)
 		}
+	}
+}
+
+func TestHashFiles(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "a.lock"), []byte("aaa"), 0o644)
+	_ = os.MkdirAll(filepath.Join(dir, "sub"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "sub", "b.lock"), []byte("bbb"), 0o644)
+	c := ctx()
+	c["__workspace"] = dir
+
+	got, err := Evaluate(`hashFiles('**/*.lock')`, c)
+	if err != nil {
+		t.Fatalf("hashFiles: %v", err)
+	}
+	sum, ok := got.(string)
+	if !ok || len(sum) != 64 {
+		t.Fatalf("hashFiles = %#v, want 64-char hex", got)
+	}
+
+	// Deterministic, and changes when a matched file changes.
+	got2, _ := Evaluate(`hashFiles('**/*.lock')`, c)
+	if got2 != got {
+		t.Error("hashFiles not deterministic")
+	}
+	_ = os.WriteFile(filepath.Join(dir, "a.lock"), []byte("changed"), 0o644)
+	got3, _ := Evaluate(`hashFiles('**/*.lock')`, c)
+	if got3 == got {
+		t.Error("hashFiles unchanged after content change")
+	}
+
+	// No workspace context → diagnostic, the job-level rejection path.
+	if _, err := Evaluate(`hashFiles('x')`, ctx()); err == nil {
+		t.Error("expected error without __workspace")
 	}
 }
 

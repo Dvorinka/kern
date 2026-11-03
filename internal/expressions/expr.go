@@ -6,11 +6,18 @@
 package expressions
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/bmatcuk/doublestar/v4"
 )
 
 // Interpolate expands every ${{ ... }} segment in tmpl using ctx.
@@ -726,6 +733,12 @@ func call(name string, args []any, ctx map[string]any) (any, error) {
 			return nil, fmt.Errorf("fromJSON: %w", err)
 		}
 		return normalizeJSON(v), nil
+	case "hashfiles":
+		ws, _ := ctx["__workspace"].(string)
+		if ws == "" {
+			return nil, fmt.Errorf("hashFiles is only available in step-level expressions running on a runner (not in job if:, outputs evaluated server-side, or other contexts without a workspace)")
+		}
+		return hashFilesFunc(ws, args)
 	case "success", "failure", "always", "cancelled":
 		status, _ := ctx["__job_status"].(string)
 		switch strings.ToLower(name) {
@@ -738,10 +751,43 @@ func call(name string, args []any, ctx map[string]any) (any, error) {
 		default:
 			return true, nil
 		}
-	case "hashfiles":
-		return nil, fmt.Errorf("hashFiles is not supported by KERN yet")
 	}
 	return nil, fmt.Errorf("unknown function %q", name)
+}
+
+// hashFilesFunc hashes every file matched by the glob patterns under ws —
+// sha256 over the sorted per-file content hashes, GitHub-compatible enough for
+// "did the lockfile change" cache keys.
+func hashFilesFunc(ws string, args []any) (any, error) {
+	if len(args) == 0 {
+		return nil, fmt.Errorf("hashFiles expects at least 1 pattern")
+	}
+	seen := map[string]bool{}
+	var files []string
+	for _, a := range args {
+		pat := Stringify(a)
+		matches, err := doublestar.FilepathGlob(filepath.Join(ws, filepath.FromSlash(pat)))
+		if err != nil {
+			return nil, fmt.Errorf("hashFiles: invalid pattern %q: %w", pat, err)
+		}
+		for _, m := range matches {
+			if info, err := os.Stat(m); err == nil && info.Mode().IsRegular() && !seen[m] {
+				seen[m] = true
+				files = append(files, m)
+			}
+		}
+	}
+	sort.Strings(files)
+	h := sha256.New()
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		sum := sha256.Sum256(data)
+		h.Write(sum[:])
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // normalizeJSON converts encoding/json numbers into the evaluator's numeric type.

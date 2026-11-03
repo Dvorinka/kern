@@ -62,7 +62,7 @@ never silently ignored.
 | Literals, `&&`, `||`, `!`, comparisons, parentheses | done | |
 | Context access `a.b`, `a['b']`, `a[0]` | done | `github`, `env`, `vars`, `matrix`, `needs`, `steps`, `job`, `runner`, `secrets` |
 | Status functions `success()`, `failure()`, `cancelled()`, `always()` | done | |
-| String/object functions (`contains`, `startsWith`, `format`, `toJSON`, `hashFiles`…) | partial | core set implemented; `hashFiles` needs workspace access |
+| String/object functions (`contains`, `startsWith`, `format`, `toJSON`, `hashFiles`…) | partial | core set implemented; `hashFiles` works in step-level expressions on the runner and errors with a diagnostic at job level |
 | Arithmetic, object filters `a.*` | no | parse error at compile time |
 
 ## Secrets and trust
@@ -80,6 +80,6 @@ never silently ignored.
 - Service containers; job `container` options beyond `image` (M5)
 - Cache paths outside the workspace; cache eviction/retention; `upload-chunk-size` and other action tuning inputs
 - OIDC, deployment environments, approvals (M5+)
-- `hashFiles`, some string functions, arithmetic operators
-- Scheduled (`cron`) execution
+- Some string functions, arithmetic operators, object filters `a.*`
+- Scheduled (`cron`) execution — triggers are parsed and recorded; the scheduler does not mint runs yet
 - Artifact retention/expiry and deletion (`expires_at` is recorded, not enforced)

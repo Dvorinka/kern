@@ -330,6 +330,7 @@ func (e *executor) runnerContext() map[string]any {
 		"github": github, "matrix": matrix, "env": env, "steps": steps, "needs": needs,
 		"runner": map[string]any{}, "job": map[string]any{},
 		"__job_status": e.jobStatusSoFar(),
+		"__workspace":  filepath.Join(e.workRoot(), "workspace"),
 	}
 }
 
