@@ -197,9 +197,6 @@ func exitValue(cmd *exec.Cmd) int {
 
 // stepCondition evaluates the step `if:` against runner progress.
 func (e *executor) stepCondition(step StepSpec) (bool, error) {
-	if strings.TrimSpace(step.If) == "" {
-		return true, nil
-	}
 	return expressions.EvaluateCondition(step.If, e.runnerContext())
 }
 

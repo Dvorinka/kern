@@ -8,6 +8,7 @@ package expressions
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -84,14 +85,22 @@ func Evaluate(body string, ctx map[string]any) (any, error) {
 	return expr.eval(ctx)
 }
 
+// statusCheckRe detects an explicit status check function call. A preceding '.'
+// disqualifies the match so property lookups don't read as functions.
+var statusCheckRe = regexp.MustCompile(`(?i)(^|[^.\w])(success|failure|always|cancelled)\s*\(`)
+
 // EvaluateCondition evaluates an `if:` condition. A condition may be wrapped in ${{ }}.
+// GitHub applies an implicit success() when the expression names no status check
+// function — that is what skips jobs and steps after a failure.
 func EvaluateCondition(cond string, ctx map[string]any) (bool, error) {
 	cond = strings.TrimSpace(cond)
-	if cond == "" {
-		return true, nil
-	}
 	if strings.HasPrefix(cond, "${{") && strings.HasSuffix(cond, "}}") {
 		cond = strings.TrimSpace(cond[3 : len(cond)-2])
+	}
+	if cond == "" {
+		cond = "success()"
+	} else if !statusCheckRe.MatchString(cond) {
+		cond = "success() && (" + cond + ")"
 	}
 	v, err := Evaluate(cond, ctx)
 	if err != nil {

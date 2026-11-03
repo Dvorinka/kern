@@ -50,11 +50,16 @@ func (e *executor) artifactUpload(step StepSpec) (string, int) {
 		}
 	}
 	if len(files) == 0 {
-		e.logStep(step, "KERN: no files match artifact path(s); upload skipped")
-		return "success", 0 // GitHub v4 defaults to error only when if-no-files-found=error
-	}
-	if w := withString(step, "if-no-files-found", ""); w == "error" && len(files) == 0 {
-		return "failure", 1
+		switch withString(step, "if-no-files-found", "warn") {
+		case "error":
+			e.logStep(step, "KERN: error: no files were found for artifact path(s)")
+			return "failure", 1
+		case "ignore":
+			return "success", 0
+		default:
+			e.logStep(step, "KERN: warning: no files were found for artifact path(s)")
+			return "success", 0
+		}
 	}
 	tmp := filepath.Join(e.workRoot(), name+".tar.gz")
 	if err := tarGz(files, tmp); err != nil {

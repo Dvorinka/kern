@@ -264,7 +264,10 @@ func (a *Agent) runSteps(ctx context.Context, log *zap.Logger, claim *Claim) (st
 		case "cancelled":
 			jobStatus = "cancelled"
 		}
-		if conclusion == "failure" || conclusion == "cancelled" {
+		// On failure, keep walking the list: remaining steps go through
+		// stepCondition, which records them as skipped unless their `if:`
+		// (e.g. always(), failure()) lets them run. Cancellation hard-stops.
+		if conclusion == "cancelled" {
 			break
 		}
 	}

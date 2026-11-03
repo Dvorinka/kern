@@ -306,11 +306,23 @@ func (s *Store) SetJobQueued(ctx context.Context, jobID uuid.UUID) error {
 }
 
 func (s *Store) SetJobSkipped(ctx context.Context, jobID uuid.UUID, reason string) error {
-	_, err := s.pool.Exec(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
 		UPDATE jobs SET status = 'skipped', conclusion = 'skipped', completed_at = now(),
 			error = $2
-		WHERE id = $1 AND status = 'waiting'`, jobID, reason)
-	return err
+		WHERE id = $1 AND status = 'waiting'`, jobID, reason); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE steps SET status = 'skipped', conclusion = 'skipped', completed_at = now()
+		WHERE job_id = $1 AND status = 'queued'`, jobID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // JobRunID resolves the run for a job (used by log streaming and cancellation checks).

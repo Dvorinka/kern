@@ -28,15 +28,15 @@ never silently ignored.
 | `needs` DAG | done | cycle detection at compile; gating in orchestrator |
 | `strategy.matrix` incl. `include`/`exclude` | done | 256-combination cap |
 | `strategy.fail-fast` | done | cancels pending matrix siblings on failure |
-| `if:` on jobs | done | evaluated server-side with `needs.*` results |
-| `if:` on steps | done | evaluated on the runner with `steps.*`, status functions |
+| `if:` on jobs | done | evaluated server-side with `needs.*` results; implicit `success()` when no status function is used |
+| `if:` on steps | done | evaluated on the runner with `steps.*`, status functions; implicit `success()` when none is used |
 | `env` (workflow/job/step) | done | merged; expressions interpolated |
 | `outputs` (job and step) | done | `GITHUB_OUTPUT` file command; `needs.*.outputs` |
 | `timeout-minutes` | done | job + step |
 | `continue-on-error` | done | conclusion vs outcome preserved |
 | `concurrency.group` | done | serialises runs per project+group |
-| `concurrency.cancel-in-progress` | no | recorded, not enacted |
-| `container` (job image) | no | compile error `job-container` |
+| `concurrency.cancel-in-progress` | done | newer queued run cancels the older in-group run |
+| `container` (job image) | partial | `image` only, string or `container.image`; other options warn and are ignored |
 | `services` | no | compile error `services` |
 | `environment` / approvals | no | compile error `environment` |
 | `permissions` | partial | recorded, not enforced |
@@ -47,8 +47,9 @@ never silently ignored.
 | --- | --- | --- |
 | `run:` scripts | done | bash wrapper, `set -eo pipefail`, working-directory |
 | `uses: actions/checkout` | done | native checkout before step execution |
+| `uses: actions/upload-artifact`, `actions/download-artifact` | done | native; `name`, `path` (glob incl. `**`), `if-no-files-found` (`warn`/`error`/`ignore`) |
 | Other `uses:` actions | no | compile error `action-unsupported`; composite/JS/Docker actions are M5 |
-| `shell:` | partial | `bash` honoured; other shells run under `/bin/bash` |
+| `shell:` | partial | `bash` honoured; `sh` honoured; bash-less images fall back to `sh` |
 | `working-directory:` | done | |
 | File commands `GITHUB_ENV`, `GITHUB_PATH`, `GITHUB_OUTPUT`, `GITHUB_STEP_SUMMARY` | done | summary is captured, not yet rendered in UI |
 | `::error::`/`::warning::` annotations | no | passthrough in logs only |
@@ -75,9 +76,9 @@ never silently ignored.
 
 - Composite, JavaScript, and Docker action runtimes (M5)
 - Reusable workflows `jobs.<id>.uses` (M5)
-- Service containers and job containers (M5)
-- Artifacts (`actions/upload-artifact`), cache action (M5/M6)
+- Service containers; job `container` options beyond `image` (M5)
+- Cache action (`actions/cache`; `cache_entries` table exists, no runner support yet)
 - OIDC, deployment environments, approvals (M5+)
 - `hashFiles`, some string functions, arithmetic operators
 - Scheduled (`cron`) execution
-- `cancel-in-progress` concurrency semantics
+- Artifact retention/expiry and deletion (`expires_at` is recorded, not enforced)

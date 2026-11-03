@@ -8,6 +8,7 @@ import {
 	ListChecks,
 	LogOut,
 	Moon,
+	Package,
 	Server,
 	Sun,
 } from "lucide-react";
@@ -21,6 +22,7 @@ const NAV = [
 	{ to: "/runs", label: "Runs", icon: Activity },
 	{ to: "/runners", label: "Runners", icon: Server },
 	{ to: "/secrets", label: "Secrets", icon: KeyRound },
+	{ to: "/artifacts", label: "Artifacts", icon: Package },
 ];
 
 export function Layout() {

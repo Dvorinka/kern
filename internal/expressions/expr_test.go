@@ -76,13 +76,16 @@ func TestConditions(t *testing.T) {
 		cond string
 		want bool
 	}{
-		{"", true},
 		{"always()", true},
 		{"success()", false},
 		{"failure()", true},
-		{"${{ github.ref == 'refs/heads/main' }}", true},
-		{"env.DEBUG == 'true'", true},
-		{"env.DEBUG", true},
+		{"cancelled()", false},
+		// Implicit success() applies when no status check function is present.
+		{"", false},
+		{"${{ github.ref == 'refs/heads/main' }}", false},
+		{"env.DEBUG == 'true'", false},
+		{"env.DEBUG", false},
+		{"github.ref == 'refs/heads/main' || failure()", true},
 	}
 	for _, tc := range cases {
 		got, err := EvaluateCondition(tc.cond, ctx())
@@ -90,7 +93,32 @@ func TestConditions(t *testing.T) {
 			t.Fatalf("%q: %v", tc.cond, err)
 		}
 		if got != tc.want {
-			t.Errorf("%q = %v, want %v", tc.cond, got, tc.want)
+			t.Errorf("%q = %v, want %v (job_status=failure)", tc.cond, got, tc.want)
+		}
+	}
+}
+
+func TestConditionsSuccessStatus(t *testing.T) {
+	ok := ctx()
+	ok["__job_status"] = "success"
+	cases := []struct {
+		cond string
+		want bool
+	}{
+		{"", true},
+		{"env.DEBUG == 'true'", true},
+		{"env.DEBUG", true},
+		{"failure()", false},
+		{"always()", true},
+		{"success() && github.ref == 'refs/heads/main'", true},
+	}
+	for _, tc := range cases {
+		got, err := EvaluateCondition(tc.cond, ok)
+		if err != nil {
+			t.Fatalf("%q: %v", tc.cond, err)
+		}
+		if got != tc.want {
+			t.Errorf("%q = %v, want %v (job_status=success)", tc.cond, got, tc.want)
 		}
 	}
 }

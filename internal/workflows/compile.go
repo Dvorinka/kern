@@ -317,8 +317,7 @@ func displayNameOf(s Step) string {
 		return s.Name
 	}
 	if s.Uses != "" {
-		// Checkout is handled natively by KERN before any step runs.
-		return "Checkout " + s.Uses
+		return "Run " + s.Uses
 	}
 	firstLine := strings.TrimSpace(strings.SplitN(strings.TrimSpace(s.Run), "\n", 2)[0])
 	if len(firstLine) > 80 {

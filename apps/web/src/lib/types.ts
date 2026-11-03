@@ -169,6 +169,19 @@ export interface SecretSummary {
 	updated_at: string;
 }
 
+export interface Artifact {
+	id: string;
+	run_id: string;
+	job_id: string | null;
+	name: string;
+	size_bytes: number;
+	sha256: string;
+	created_at: string;
+	expires_at: string | null;
+	run_number: number;
+	project_slug: string;
+}
+
 export interface APIToken {
 	id: string;
 	name: string;
