@@ -79,17 +79,17 @@ type User struct {
 }
 
 type Project struct {
-	ID           uuid.UUID `json:"id"`
-	OrgID        uuid.UUID `json:"org_id"`
-	Slug         string    `json:"slug"`
-	Name         string    `json:"name"`
-	Provider     string    `json:"provider"`
-	RepoFullName string    `json:"repo_full_name"`
-	RepoURL      string    `json:"repo_url"`
-	DefaultBranch string   `json:"default_branch"`
-	LocalPath    string    `json:"local_path"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID            uuid.UUID `json:"id"`
+	OrgID         uuid.UUID `json:"org_id"`
+	Slug          string    `json:"slug"`
+	Name          string    `json:"name"`
+	Provider      string    `json:"provider"`
+	RepoFullName  string    `json:"repo_full_name"`
+	RepoURL       string    `json:"repo_url"`
+	DefaultBranch string    `json:"default_branch"`
+	LocalPath     string    `json:"local_path"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 type Workflow struct {
@@ -182,19 +182,19 @@ func (j Job) EnvMap() (map[string]string, error) {
 }
 
 type Step struct {
-	ID          uuid.UUID  `json:"id"`
-	JobID       uuid.UUID  `json:"job_id"`
-	Number      int        `json:"number"`
-	Key         string     `json:"key"`
-	Name        string     `json:"name"`
-	Status      string     `json:"status"`
-	Conclusion  string     `json:"conclusion"`
+	ID          uuid.UUID       `json:"id"`
+	JobID       uuid.UUID       `json:"job_id"`
+	Number      int             `json:"number"`
+	Key         string          `json:"key"`
+	Name        string          `json:"name"`
+	Status      string          `json:"status"`
+	Conclusion  string          `json:"conclusion"`
 	ExitCode    *int            `json:"exit_code"`
 	StartedAt   *time.Time      `json:"started_at"`
 	CompletedAt *time.Time      `json:"completed_at"`
 	Spec        json.RawMessage `json:"spec,omitempty"`
 	LogRef      string          `json:"-"`
-	LogBytes    int64      `json:"log_bytes"`
+	LogBytes    int64           `json:"log_bytes"`
 }
 
 type Runner struct {
@@ -217,14 +217,14 @@ type Runner struct {
 }
 
 type Secret struct {
-	ID             uuid.UUID  `json:"id"`
-	OrgID          uuid.UUID  `json:"org_id"`
-	ProjectID      *uuid.UUID `json:"project_id"`
-	Name           string     `json:"name"`
-	Ciphertext     []byte     `json:"-"`
-	Nonce          []byte     `json:"-"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	ID         uuid.UUID  `json:"id"`
+	OrgID      uuid.UUID  `json:"org_id"`
+	ProjectID  *uuid.UUID `json:"project_id"`
+	Name       string     `json:"name"`
+	Ciphertext []byte     `json:"-"`
+	Nonce      []byte     `json:"-"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
 }
 
 type Overview struct {

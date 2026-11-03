@@ -15,10 +15,10 @@ import (
 )
 
 const (
-	ctxUser       = "kern.user"
-	ctxAuthKind   = "kern.auth_kind"
-	ctxRunner     = "kern.runner"
-	ctxAPIScopes  = "kern.api_scopes"
+	ctxUser      = "kern.user"
+	ctxAuthKind  = "kern.auth_kind"
+	ctxRunner    = "kern.runner"
+	ctxAPIScopes = "kern.api_scopes"
 )
 
 func contextWithTimeout(c *gin.Context, d time.Duration) (context.Context, context.CancelFunc) {

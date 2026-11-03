@@ -130,9 +130,9 @@ func TestInvalidYAML(t *testing.T) {
 
 func TestTriggerForms(t *testing.T) {
 	cases := map[string]string{
-		"`on: push`":                    "on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo a\n",
-		"`on: [push]`":                  "on: [push]\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo a\n",
-		"`on: {push: {}}`":              "on:\n  push:\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo a\n",
+		"`on: push`":                   "on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo a\n",
+		"`on: [push]`":                 "on: [push]\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo a\n",
+		"`on: {push: {}}`":             "on:\n  push:\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo a\n",
 		"workflow_dispatch with input": "on:\n  workflow_dispatch:\n    inputs:\n      env:\n        type: string\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo a\n",
 	}
 	for name, src := range cases {

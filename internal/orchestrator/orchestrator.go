@@ -244,15 +244,15 @@ func JobContext(job store.Job, run store.Run, project store.Project, byJobKey ma
 		}
 	}
 	ctx := map[string]any{
-		"github": github,
-		"matrix": matrix,
-		"needs":  needs,
-		"env":    env,
-		"vars":   map[string]any{},
-		"job":    map[string]any{"status": jobStatus(job)},
-		"runner": map[string]any{},
+		"github":  github,
+		"matrix":  matrix,
+		"needs":   needs,
+		"env":     env,
+		"vars":    map[string]any{},
+		"job":     map[string]any{"status": jobStatus(job)},
+		"runner":  map[string]any{},
 		"secrets": map[string]any{},
-		"steps":  map[string]any{},
+		"steps":   map[string]any{},
 	}
 	return ctx
 }
@@ -333,4 +333,3 @@ func triggerContext(p *store.CreateRunParams) map[string]any {
 		},
 	}
 }
-

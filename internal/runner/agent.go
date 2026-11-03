@@ -305,5 +305,3 @@ func totalMemory() int64 {
 	}
 	return 0
 }
-
-

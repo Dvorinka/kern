@@ -5,14 +5,14 @@ import "testing"
 func ctx() map[string]any {
 	return map[string]any{
 		"github": map[string]any{
-			"ref":      "refs/heads/main",
+			"ref":        "refs/heads/main",
 			"repository": map[string]any{"name": "kern", "full_name": "dvorinka/kern"},
 		},
-		"matrix":  map[string]any{"go": "1.24", "os": "ubuntu-latest"},
-		"needs":   map[string]any{"build": map[string]any{"result": "success", "outputs": map[string]any{"digest": "sha256:abc"}}},
-		"secrets": map[string]any{"TOKEN": "s3cr3t"},
-		"env":     map[string]any{"DEBUG": "true"},
-		"steps":   map[string]any{"one": map[string]any{"outputs": map[string]any{"value": "42"}}},
+		"matrix":       map[string]any{"go": "1.24", "os": "ubuntu-latest"},
+		"needs":        map[string]any{"build": map[string]any{"result": "success", "outputs": map[string]any{"digest": "sha256:abc"}}},
+		"secrets":      map[string]any{"TOKEN": "s3cr3t"},
+		"env":          map[string]any{"DEBUG": "true"},
+		"steps":        map[string]any{"one": map[string]any{"outputs": map[string]any{"value": "42"}}},
 		"__job_status": "failure",
 	}
 }

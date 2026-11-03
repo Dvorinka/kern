@@ -119,9 +119,9 @@ type Job struct {
 }
 
 type Strategy struct {
-	Matrix      map[string][]any   `yaml:"matrix"`
-	FailFast    *bool              `yaml:"fail-fast"`
-	MaxParallel int                `yaml:"max-parallel"`
+	Matrix      map[string][]any `yaml:"matrix"`
+	FailFast    *bool            `yaml:"fail-fast"`
+	MaxParallel int              `yaml:"max-parallel"`
 }
 
 type Step struct {
@@ -182,12 +182,12 @@ type Edge struct {
 }
 
 type Plan struct {
-	Name          string    `json:"name"`
-	Events        []string  `json:"events"`
-	Concurrency   string    `json:"concurrency,omitempty"`
-	FailFast      bool      `json:"fail_fast"`
-	Jobs          []JobPlan `json:"jobs"`
-	Edges         []Edge    `json:"edges"`
+	Name        string    `json:"name"`
+	Events      []string  `json:"events"`
+	Concurrency string    `json:"concurrency,omitempty"`
+	FailFast    bool      `json:"fail_fast"`
+	Jobs        []JobPlan `json:"jobs"`
+	Edges       []Edge    `json:"edges"`
 	// Triggers keeps the raw trigger configuration for filtering later phases.
 	Triggers map[string]any `json:"triggers,omitempty"`
 }

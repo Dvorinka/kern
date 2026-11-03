@@ -27,11 +27,11 @@ func (s *Server) listProjects(c *gin.Context) {
 }
 
 type createProjectRequest struct {
-	Slug         string `json:"slug"`
-	Name         string `json:"name"`
-	RepoURL      string `json:"repo_url"`
-	RepoFullName string `json:"repo_full_name"`
-	LocalPath    string `json:"local_path"`
+	Slug          string `json:"slug"`
+	Name          string `json:"name"`
+	RepoURL       string `json:"repo_url"`
+	RepoFullName  string `json:"repo_full_name"`
+	LocalPath     string `json:"local_path"`
 	DefaultBranch string `json:"default_branch"`
 }
 
@@ -118,9 +118,9 @@ func (s *Server) syncProject(c *gin.Context) {
 	sort.Strings(names)
 
 	type synced struct {
-		Path        string               `json:"path"`
-		Name        string               `json:"name"`
-		Valid       bool                 `json:"valid"`
+		Path        string                 `json:"path"`
+		Name        string                 `json:"name"`
+		Valid       bool                   `json:"valid"`
 		Diagnostics []workflows.Diagnostic `json:"diagnostics"`
 	}
 	out := []synced{}
@@ -267,4 +267,3 @@ func gitHead(dir string) string {
 	}
 	return strings.TrimSpace(string(out))
 }
-

@@ -374,9 +374,9 @@ type envBuilder struct {
 	mu     sync.Mutex
 	jobEnv map[string]string
 	// secrets never enter the log stream; they are env-file only.
-	secrets  map[string]string
-	persist  map[string]string
-	paths    []string
+	secrets map[string]string
+	persist map[string]string
+	paths   []string
 }
 
 func newEnvBuilder(claim *Claim, secrets map[string]string) *envBuilder {

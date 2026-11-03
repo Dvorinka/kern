@@ -61,13 +61,13 @@ func Load() (*Config, error) {
 		},
 		RunnerJoinToken: env("KERN_RUNNER_JOIN_TOKEN", "kern-runner-join"),
 		RunnerTokenTTL:  duration("KERN_RUNNER_TOKEN_TTL", 24*time.Hour),
-		SessionTTL:     duration("KERN_SESSION_TTL", 14*24*time.Hour),
-		SchedulerTick:  duration("KERN_SCHEDULER_TICK", 2*time.Second),
-		JobLease:       duration("KERN_JOB_LEASE", 90*time.Second),
-		MaxJobAttempts: integer("KERN_MAX_JOB_ATTEMPTS", 3),
-		LogRetention:   duration("KERN_LOG_RETENTION", 30*24*time.Hour),
-		AllowedOrigins: splitList(env("KERN_ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:8081")),
-		DefaultImage:   env("KERN_DEFAULT_IMAGE", "ubuntu:24.04"),
+		SessionTTL:      duration("KERN_SESSION_TTL", 14*24*time.Hour),
+		SchedulerTick:   duration("KERN_SCHEDULER_TICK", 2*time.Second),
+		JobLease:        duration("KERN_JOB_LEASE", 90*time.Second),
+		MaxJobAttempts:  integer("KERN_MAX_JOB_ATTEMPTS", 3),
+		LogRetention:    duration("KERN_LOG_RETENTION", 30*24*time.Hour),
+		AllowedOrigins:  splitList(env("KERN_ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:8081")),
+		DefaultImage:    env("KERN_DEFAULT_IMAGE", "ubuntu:24.04"),
 	}
 
 	if len(cfg.SessionSecret) < 32 {
