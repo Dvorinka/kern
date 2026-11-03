@@ -24,14 +24,30 @@ func (e *executor) artifactUpload(step StepSpec) (string, int) {
 		return "failure", 1
 	}
 	ws := filepath.Join(e.workRoot(), "workspace")
-	var files []string
+	// GitHub stores files relative to each search path's literal root
+	// (dist/** -> version.txt, not dist/version.txt).
+	var files []artifactEntry
 	for _, p := range paths {
+		literal := p
+		if i := strings.IndexAny(p, "*?["); i >= 0 {
+			literal = p[:i]
+		}
+		root := filepath.Clean(literal)
+		if info, err := os.Stat(filepath.Join(ws, literal)); err == nil && info.IsDir() {
+			root = filepath.Clean(literal)
+		} else if i := strings.LastIndex(literal, "/"); i >= 0 {
+			root = filepath.Clean(literal[:i])
+		} else {
+			root = "."
+		}
 		matches, err := doublestar.FilepathGlob(filepath.Join(ws, p))
 		if err != nil {
 			e.logStep(step, "KERN: invalid artifact pattern "+p)
 			return "failure", 1
 		}
-		files = append(files, matches...)
+		for _, m := range matches {
+			files = append(files, artifactEntry{file: m, root: filepath.Join(ws, root)})
+		}
 	}
 	if len(files) == 0 {
 		e.logStep(step, "KERN: no files match artifact path(s); upload skipped")
@@ -41,7 +57,7 @@ func (e *executor) artifactUpload(step StepSpec) (string, int) {
 		return "failure", 1
 	}
 	tmp := filepath.Join(e.workRoot(), name+".tar.gz")
-	if err := tarGz(ws, files, tmp); err != nil {
+	if err := tarGz(files, tmp); err != nil {
 		e.logStep(step, "KERN: pack artifact: "+err.Error())
 		return "failure", 1
 	}
@@ -132,7 +148,9 @@ func withLines(s StepSpec, key string) []string {
 	return out
 }
 
-func tarGz(base string, files []string, out string) error {
+type artifactEntry struct{ file, root string }
+
+func tarGz(files []artifactEntry, out string) error {
 	fh, err := os.Create(out)
 	if err != nil {
 		return err
@@ -141,11 +159,11 @@ func tarGz(base string, files []string, out string) error {
 	gw := gzip.NewWriter(fh)
 	tw := tar.NewWriter(gw)
 	for _, f := range files {
-		info, err := os.Stat(f)
+		info, err := os.Stat(f.file)
 		if err != nil || info.IsDir() {
 			continue
 		}
-		rel, err := filepath.Rel(base, f)
+		rel, err := filepath.Rel(f.root, f.file)
 		if err != nil || strings.HasPrefix(rel, "..") {
 			continue
 		}
@@ -157,7 +175,7 @@ func tarGz(base string, files []string, out string) error {
 		if err := tw.WriteHeader(hdr); err != nil {
 			return err
 		}
-		src, err := os.Open(f)
+		src, err := os.Open(f.file)
 		if err != nil {
 			return err
 		}

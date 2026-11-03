@@ -101,7 +101,7 @@ func (e *executor) runStepBody(ctx context.Context, step StepSpec) (string, int,
 		"--user", fmt.Sprintf("%d:%d", jobUID, jobUID),
 		"-w", containerWorkspace,
 		"--env-file", e.stepEnvPath(step),
-		e.container, "/bin/bash", script,
+		e.container, e.shell, script,
 	)
 	stdout, perr := cmd.StdoutPipe()
 	if perr != nil {
@@ -212,8 +212,19 @@ func (e *executor) renderScript(step StepSpec) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	wrapper := "#!/bin/bash\n" +
-		"set -eo pipefail\n" +
+	shell := e.shell
+	if shell == "" {
+		shell = "/bin/bash"
+	}
+	if step.Shell == "sh" {
+		shell = "/bin/sh"
+	}
+	pipefail := "set -eo pipefail\n"
+	if filepath.Base(shell) != "bash" {
+		pipefail = "set -e\n" // pipefail is a bashism
+	}
+	wrapper := "#!" + shell + "\n" +
+		pipefail +
 		"if [ -f " + containerCmdDir + "/PATH_LINES ]; then\n" +
 		"  while IFS= read -r p; do export PATH=\"$p:$PATH\"; done < " + containerCmdDir + "/PATH_LINES\n" +
 		"fi\n" +
@@ -225,7 +236,7 @@ func (e *executor) renderScript(step StepSpec) (string, error) {
 	if wd := strings.TrimSpace(step.WorkingDirectory); wd != "" {
 		wrapper += "cd " + shellQuote(wd) + "\n"
 	}
-	wrapper += "bash -e " + shellQuote(filepath.Join(containerScriptDir, body)) + "\n"
+	wrapper += shell + " -e " + shellQuote(filepath.Join(containerScriptDir, body)) + "\n"
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(wrapper), 0o755); err != nil {
 		return "", err
 	}

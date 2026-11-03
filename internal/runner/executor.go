@@ -45,7 +45,10 @@ type executor struct {
 
 	jobID     string
 	container string
-	enc       *envBuilder
+	// shell is the in-container interpreter; bash when present, sh otherwise
+	// (GitHub runners fall back the same way — e.g. alpine images).
+	shell string
+	enc   *envBuilder
 
 	cancelled   atomic.Bool
 	stepResults map[string]*stepOutcome
@@ -183,7 +186,15 @@ func (e *executor) startContainer(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("docker create: %s", strings.TrimSpace(string(out)))
 	}
-	return e.docker(ctx, "start", e.container)
+	if err := e.docker(ctx, "start", e.container); err != nil {
+		return err
+	}
+	e.shell = "/bin/bash"
+	if exec.CommandContext(ctx, "docker", "exec", e.container,
+		"sh", "-c", "command -v bash >/dev/null").Run() != nil {
+		e.shell = "/bin/sh"
+	}
+	return nil
 }
 
 // checkout materialises the repository inside the workspace directory.
