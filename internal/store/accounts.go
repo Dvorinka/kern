@@ -1,0 +1,191 @@
+package store
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+)
+
+var ErrNotFound = errors.New("not found")
+
+// Bootstrap creates the default organization and admin user when they do not exist.
+func (s *Store) Bootstrap(ctx context.Context, orgSlug, orgName, email, name, passwordHash string) (User, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return User{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var orgID uuid.UUID
+	err = tx.QueryRow(ctx, `
+		INSERT INTO orgs (slug, name) VALUES ($1, $2)
+		ON CONFLICT (slug) DO UPDATE SET name = orgs.name
+		RETURNING id`, orgSlug, orgName).Scan(&orgID)
+	if err != nil {
+		return User{}, fmt.Errorf("bootstrap org: %w", err)
+	}
+
+	var userID uuid.UUID
+	err = tx.QueryRow(ctx, `
+		INSERT INTO users (email, name, password_hash) VALUES ($1, $2, $3)
+		ON CONFLICT (email) DO UPDATE SET name = users.name
+		RETURNING id`, email, name, passwordHash).Scan(&userID)
+	if err != nil {
+		return User{}, fmt.Errorf("bootstrap user: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO org_members (org_id, user_id, role) VALUES ($1, $2, 'owner')
+		ON CONFLICT DO NOTHING`, orgID, userID); err != nil {
+		return User{}, fmt.Errorf("bootstrap membership: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return User{}, err
+	}
+	return s.UserByEmail(ctx, email)
+}
+
+func (s *Store) UserByEmail(ctx context.Context, email string) (User, error) {
+	var u User
+	err := s.pool.QueryRow(ctx, `
+		SELECT u.id, u.email, u.name, u.password_hash, u.created_at,
+		       COALESCE(m.org_id, '00000000-0000-0000-0000-000000000000'::uuid),
+		       COALESCE(m.role, 'member')
+		FROM users u
+		LEFT JOIN org_members m ON m.user_id = u.id
+		WHERE u.email = $1
+		ORDER BY m.created_at
+		LIMIT 1`, email).
+		Scan(&u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.CreatedAt, &u.OrgID, &u.Role)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return User{}, ErrNotFound
+	}
+	return u, err
+}
+
+func (s *Store) UserByID(ctx context.Context, id uuid.UUID) (User, error) {
+	var u User
+	err := s.pool.QueryRow(ctx, `
+		SELECT u.id, u.email, u.name, u.password_hash, u.created_at,
+		       COALESCE(m.org_id, '00000000-0000-0000-0000-000000000000'::uuid),
+		       COALESCE(m.role, 'member')
+		FROM users u
+		LEFT JOIN org_members m ON m.user_id = u.id
+		WHERE u.id = $1
+		ORDER BY m.created_at
+		LIMIT 1`, id).
+		Scan(&u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.CreatedAt, &u.OrgID, &u.Role)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return User{}, ErrNotFound
+	}
+	return u, err
+}
+
+func (s *Store) CreateSession(ctx context.Context, userID uuid.UUID, tokenHash string, expiresAt time.Time) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO sessions (user_id, token_hash, expires_at) VALUES ($1, $2, $3)`,
+		userID, tokenHash, expiresAt)
+	return err
+}
+
+func (s *Store) UserBySession(ctx context.Context, tokenHash string) (User, error) {
+	var u User
+	err := s.pool.QueryRow(ctx, `
+		SELECT u.id, u.email, u.name, u.password_hash, u.created_at,
+		       COALESCE(m.org_id, '00000000-0000-0000-0000-000000000000'::uuid),
+		       COALESCE(m.role, 'member')
+		FROM sessions s
+		JOIN users u ON u.id = s.user_id
+		LEFT JOIN org_members m ON m.user_id = u.id
+		WHERE s.token_hash = $1 AND s.expires_at > now()
+		ORDER BY m.created_at
+		LIMIT 1`, tokenHash).
+		Scan(&u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.CreatedAt, &u.OrgID, &u.Role)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return User{}, ErrNotFound
+	}
+	return u, err
+}
+
+func (s *Store) DeleteSession(ctx context.Context, tokenHash string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE token_hash = $1`, tokenHash)
+	return err
+}
+
+type APIToken struct {
+	ID         uuid.UUID  `json:"id"`
+	Name       string     `json:"name"`
+	Prefix     string     `json:"prefix"`
+	Scopes     []string   `json:"scopes"`
+	LastUsedAt *time.Time `json:"last_used_at"`
+	ExpiresAt  *time.Time `json:"expires_at"`
+	CreatedAt  time.Time  `json:"created_at"`
+}
+
+func (s *Store) CreateAPIToken(ctx context.Context, userID uuid.UUID, name, prefix, hash string, scopes []string, expiresAt *time.Time) (APIToken, error) {
+	var t APIToken
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO api_tokens (user_id, name, prefix, token_hash, scopes, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id, name, prefix, scopes, last_used_at, expires_at, created_at`,
+		userID, name, prefix, hash, scopes, expiresAt).
+		Scan(&t.ID, &t.Name, &t.Prefix, &t.Scopes, &t.LastUsedAt, &t.ExpiresAt, &t.CreatedAt)
+	return t, err
+}
+
+func (s *Store) ListAPITokens(ctx context.Context, userID uuid.UUID) ([]APIToken, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, name, prefix, scopes, last_used_at, expires_at, created_at
+		FROM api_tokens WHERE user_id = $1 ORDER BY created_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []APIToken{}
+	for rows.Next() {
+		var t APIToken
+		if err := rows.Scan(&t.ID, &t.Name, &t.Prefix, &t.Scopes, &t.LastUsedAt, &t.ExpiresAt, &t.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) DeleteAPIToken(ctx context.Context, userID, id uuid.UUID) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM api_tokens WHERE user_id = $1 AND id = $2`, userID, id)
+	return err
+}
+
+func (s *Store) UserByAPIToken(ctx context.Context, hash string) (User, []string, error) {
+	var u User
+	var scopes []string
+	err := s.pool.QueryRow(ctx, `
+		SELECT u.id, u.email, u.name, u.password_hash, u.created_at,
+		       COALESCE(m.org_id, '00000000-0000-0000-0000-000000000000'::uuid),
+		       COALESCE(m.role, 'member'), t.scopes
+		FROM api_tokens t
+		JOIN users u ON u.id = t.user_id
+		LEFT JOIN org_members m ON m.user_id = u.id
+		WHERE t.token_hash = $1 AND (t.expires_at IS NULL OR t.expires_at > now())
+		ORDER BY m.created_at
+		LIMIT 1`, hash).
+		Scan(&u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.CreatedAt, &u.OrgID, &u.Role, &scopes)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return User{}, nil, ErrNotFound
+	}
+	if err != nil {
+		return User{}, nil, err
+	}
+	_, _ = s.pool.Exec(ctx, `UPDATE api_tokens SET last_used_at = now() WHERE token_hash = $1`, hash)
+	return u, scopes, nil
+}
+
+func (s *Store) Audit(ctx context.Context, orgID uuid.UUID, actor *uuid.UUID, action, target string) {
+	_, _ = s.pool.Exec(ctx, `
+		INSERT INTO audit_events (org_id, actor_user_id, action, target) VALUES ($1, $2, $3, $4)`,
+		orgID, actor, action, target)
+}

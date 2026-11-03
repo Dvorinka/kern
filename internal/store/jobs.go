@@ -1,0 +1,335 @@
+package store
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+)
+
+// ClaimedJob is everything a runner needs to execute a job. It deliberately excludes
+// anything the runner must not know (secrets are delivered separately, per job).
+type ClaimedJob struct {
+	Job             Job            `json:"job"`
+	Run             Run            `json:"run"`
+	Project         Project        `json:"-"`
+	StepSpecs       []StepSeed     `json:"-"`
+	LeaseExpiresAt  time.Time      `json:"lease_expires_at"`
+	Attempt         int            `json:"attempt"`
+	Source          map[string]any `json:"-"`
+	TimeoutSeconds  int            `json:"timeout_seconds"`
+	WorkflowContent string         `json:"-"`
+}
+
+// ClaimJob atomically takes one queued job that the runner is compatible with.
+// Returns (nil, nil) when the queue is empty.
+func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Duration) (*ClaimedJob, error) {
+	leaseSeconds := int(lease.Seconds())
+	var jobID uuid.UUID
+	err := s.pool.QueryRow(ctx, `
+		WITH candidate AS (
+			SELECT j.id
+			FROM jobs j
+			JOIN workflow_runs r ON r.id = j.run_id
+			JOIN runners rn ON rn.id = $1
+			WHERE j.status = 'queued'
+			  AND r.status = 'in_progress'
+			  AND rn.status = 'online'
+			  AND NOT rn.draining
+			  AND j.runs_on <@ (rn.labels || ARRAY['self-hosted', 'kern'])
+			ORDER BY j.priority DESC, j.queued_at
+			FOR UPDATE OF j SKIP LOCKED
+			LIMIT 1
+		), claimed AS (
+			UPDATE jobs j SET
+				status = 'in_progress',
+				runner_id = $1,
+				started_at = now(),
+				attempt = j.attempt + 1,
+				lease_expires_at = now() + make_interval(secs => $2),
+				error = ''
+			WHERE j.id IN (SELECT id FROM candidate)
+			RETURNING j.id
+		)
+		INSERT INTO job_leases (job_id, runner_id, expires_at)
+		SELECT id, $1, now() + make_interval(secs => $2) FROM claimed
+		RETURNING job_id`, runnerID, leaseSeconds).Scan(&jobID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("claim job: %w", err)
+	}
+
+	var out ClaimedJob
+	var runID, versionID uuid.UUID
+	err = s.pool.QueryRow(ctx, `
+		SELECT j.id, j.run_id, j.job_key, j.key, j.name, j.status, j.conclusion, j.needs, j.runs_on,
+		       j.image, j.matrix, j.env, j.if_condition, j.timeout_seconds, j.continue_on_error,
+		       j.fail_fast, j.priority, j.attempt, j.runner_id, j.queued_at, j.started_at, j.completed_at,
+		       j.lease_expires_at, j.error, j.outputs, j.outputs_spec,
+		       r.id, r.project_id, r.workflow_id, r.workflow_version_id, r.run_number, r.event,
+		       r.ref, r.sha, r.commit_message, r.actor, r.status, r.conclusion, r.trust_level,
+		       r.source, r.concurrency_group, r.started_at, r.completed_at, r.created_at,
+		       w.name, w.path, p.slug, p.name,
+		       v.content
+		FROM jobs j
+		JOIN workflow_runs r ON r.id = j.run_id
+		JOIN workflows w ON w.id = r.workflow_id
+		JOIN projects p ON p.id = r.project_id
+		JOIN workflow_versions v ON v.id = r.workflow_version_id
+		WHERE j.id = $1`, jobID).
+		Scan(&out.Job.ID, &out.Job.RunID, &out.Job.JobKey, &out.Job.Key, &out.Job.Name, &out.Job.Status,
+			&out.Job.Conclusion, &out.Job.Needs, &out.Job.RunsOn, &out.Job.Image, &out.Job.Matrix,
+			&out.Job.Env, &out.Job.IfCondition, &out.Job.TimeoutSeconds, &out.Job.ContinueOnError,
+			&out.Job.FailFast, &out.Job.Priority, &out.Job.Attempt, &out.Job.RunnerID, &out.Job.QueuedAt,
+			&out.Job.StartedAt, &out.Job.CompletedAt, &out.Job.LeaseExpiresAt, &out.Job.Error,
+			&out.Job.Outputs, &out.Job.OutputsSpec,
+			&out.Run.ID, &out.Run.ProjectID, &runID, &versionID, &out.Run.RunNumber, &out.Run.Event,
+			&out.Run.Ref, &out.Run.SHA, &out.Run.CommitMessage, &out.Run.Actor, &out.Run.Status,
+			&out.Run.Conclusion, &out.Run.TrustLevel, &out.Run.Source, &out.Run.ConcurrencyGroup,
+			&out.Run.StartedAt, &out.Run.CompletedAt, &out.Run.CreatedAt,
+			&out.Run.WorkflowName, &out.Run.WorkflowPath, &out.Run.ProjectSlug, &out.Run.ProjectName,
+			&out.WorkflowContent)
+	if err != nil {
+		return nil, fmt.Errorf("load claimed job: %w", err)
+	}
+	out.Run.WorkflowID = runID
+	out.Run.WorkflowVersionID = versionID
+	out.Attempt = out.Job.Attempt
+	out.TimeoutSeconds = out.Job.TimeoutSeconds
+	if out.Job.LeaseExpiresAt != nil {
+		out.LeaseExpiresAt = *out.Job.LeaseExpiresAt
+	}
+	if err := json.Unmarshal(out.Run.Source, &out.Source); err != nil {
+		out.Source = map[string]any{}
+	}
+	// Step specs are reconstructed from the persisted steps so the runner executes
+	// exactly the steps the planner created.
+	steps, err := s.StepsForJob(ctx, jobID)
+	if err != nil {
+		return nil, err
+	}
+	for i, st := range steps {
+		out.Job.Steps = append(out.Job.Steps, st)
+		out.StepSpecs = append(out.StepSpecs, StepSeed{Key: fmt.Sprintf("%d", i+1), Name: st.Name})
+	}
+	out.Project, _ = s.projectByID(ctx, out.Run.ProjectID)
+	return &out, nil
+}
+
+func (s *Store) projectByID(ctx context.Context, id uuid.UUID) (Project, error) {
+	return scanProject(s.pool.QueryRow(ctx, `SELECT `+projectColumns+` FROM projects WHERE id = $1`, id))
+}
+
+// RenewLease extends the job lease and records a runner heartbeat.
+func (s *Store) RenewLease(ctx context.Context, runnerID, jobID uuid.UUID, lease time.Duration) (bool, error) {
+	var expires time.Time
+	err := s.pool.QueryRow(ctx, `
+		UPDATE jobs SET lease_expires_at = now() + make_interval(secs => $3)
+		WHERE id = $1 AND runner_id = $2 AND status = 'in_progress'
+		RETURNING lease_expires_at`, jobID, runnerID, int(lease.Seconds())).Scan(&expires)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	_, _ = s.pool.Exec(ctx, `UPDATE job_leases SET expires_at = $1 WHERE job_id = $2 AND released_at IS NULL`, expires, jobID)
+	_, err = s.pool.Exec(ctx, `UPDATE runners SET last_heartbeat_at = now() WHERE id = $1`, runnerID)
+	return true, err
+}
+
+// Heartbeat records liveness for a runner.
+func (s *Store) Heartbeat(ctx context.Context, runnerID uuid.UUID) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE runners SET last_heartbeat_at = now(),
+			status = CASE WHEN draining THEN 'draining' ELSE 'online' END
+		WHERE id = $1`, runnerID)
+	return err
+}
+
+func (s *Store) StartStep(ctx context.Context, jobID uuid.UUID, number int) (Step, error) {
+	var st Step
+	err := s.pool.QueryRow(ctx, `
+		UPDATE steps SET status = 'running', started_at = now()
+		WHERE job_id = $1 AND number = $2
+		RETURNING id, job_id, number, key, name, status, conclusion, exit_code, started_at,
+		          completed_at, spec, log_ref, log_bytes`, jobID, number).
+		Scan(&st.ID, &st.JobID, &st.Number, &st.Key, &st.Name, &st.Status, &st.Conclusion,
+			&st.ExitCode, &st.StartedAt, &st.CompletedAt, &st.Spec, &st.LogRef, &st.LogBytes)
+	return st, err
+}
+
+func (s *Store) FinishStep(ctx context.Context, jobID uuid.UUID, number int, conclusion string, exitCode *int) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE steps SET status = CASE WHEN $3 = 'skipped' THEN 'skipped' ELSE 'completed' END,
+			conclusion = $3, exit_code = $4, completed_at = now()
+		WHERE job_id = $1 AND number = $2`, jobID, number, conclusion, exitCode)
+	return err
+}
+
+// AppendStepLog records a log chunk size and reference. Chunks themselves live in blob storage.
+func (s *Store) AppendStepLog(ctx context.Context, jobID uuid.UUID, number int, ref string, size int) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE steps SET log_ref = $3, log_bytes = log_bytes + $4
+		WHERE job_id = $1 AND number = $2`, jobID, number, ref, size)
+	return err
+}
+
+func (s *Store) StepLogRef(ctx context.Context, jobID uuid.UUID, number int) (string, int64, error) {
+	var ref string
+	var size int64
+	err := s.pool.QueryRow(ctx, `
+		SELECT log_ref, log_bytes FROM steps WHERE job_id = $1 AND number = $2`, jobID, number).Scan(&ref, &size)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", 0, ErrNotFound
+	}
+	return ref, size, err
+}
+
+// FinishJob records the terminal state of a job and releases its lease.
+func (s *Store) FinishJob(ctx context.Context, runnerID, jobID uuid.UUID, conclusion, errMsg string, outputs map[string]string) (bool, error) {
+	outputsJSON, err := json.Marshal(outputs)
+	if err != nil {
+		return false, err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+
+	err = tx.QueryRow(ctx, `
+		UPDATE jobs SET
+			status = 'completed',
+			conclusion = $3,
+			completed_at = now(),
+			lease_expires_at = NULL,
+			error = $4,
+			outputs = $5
+		WHERE id = $1 AND runner_id = $2 AND status = 'in_progress'
+		RETURNING id`, jobID, runnerID, conclusion, errMsg, outputsJSON).Scan(&jobID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE job_leases SET released_at = now() WHERE job_id = $1 AND released_at IS NULL`, jobID); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// ReapExpiredLeases requeues jobs whose runner stopped reporting. Returns affected run IDs.
+func (s *Store) ReapExpiredLeases(ctx context.Context, maxAttempts int) ([]uuid.UUID, error) {
+	rows, err := s.pool.Query(ctx, `
+		WITH expired AS (
+			SELECT j.id, j.attempt, j.run_id
+			FROM jobs j
+			WHERE j.status = 'in_progress' AND j.lease_expires_at < now()
+			FOR UPDATE SKIP LOCKED
+		), updated AS (
+			UPDATE jobs j SET
+				status = CASE WHEN e.attempt >= $1 THEN 'completed' ELSE 'queued' END,
+				conclusion = CASE WHEN e.attempt >= $1 THEN 'failure' ELSE '' END,
+				error = CASE WHEN e.attempt >= $1
+					THEN 'lease expired: runner stopped reporting'
+					ELSE 'lease expired: requeued' END,
+				runner_id = NULL,
+				lease_expires_at = NULL,
+				started_at = CASE WHEN e.attempt >= $1 THEN j.started_at ELSE NULL END,
+				completed_at = CASE WHEN e.attempt >= $1 THEN now() ELSE NULL END
+			FROM expired e
+			WHERE j.id = e.id
+			RETURNING j.id, j.run_id
+		)
+		SELECT id, run_id FROM updated`, maxAttempts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	runSet := map[uuid.UUID]struct{}{}
+	var jobIDs []uuid.UUID
+	for rows.Next() {
+		var jobID, runID uuid.UUID
+		if err := rows.Scan(&jobID, &runID); err != nil {
+			return nil, err
+		}
+		jobIDs = append(jobIDs, jobID)
+		runSet[runID] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, jobID := range jobIDs {
+		_, _ = s.pool.Exec(ctx, `
+			UPDATE job_leases SET released_at = now() WHERE job_id = $1 AND released_at IS NULL`, jobID)
+		_, _ = s.pool.Exec(ctx, `
+			UPDATE steps SET status = 'queued', conclusion = '', started_at = NULL,
+				completed_at = NULL, exit_code = NULL
+			WHERE job_id = $1 AND status <> 'completed'`, jobID)
+	}
+	out := make([]uuid.UUID, 0, len(runSet))
+	for id := range runSet {
+		out = append(out, id)
+	}
+	return out, nil
+}
+
+// MarkStaleRunnersOffline flips runners that missed heartbeats.
+func (s *Store) MarkStaleRunnersOffline(ctx context.Context, timeout time.Duration) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE runners SET status = 'offline'
+		WHERE status IN ('online', 'draining')
+		  AND (last_heartbeat_at IS NULL OR last_heartbeat_at < now() - make_interval(secs => $1))`,
+		int(timeout.Seconds()))
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+func (s *Store) SetJobQueued(ctx context.Context, jobID uuid.UUID) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE jobs SET status = 'queued', queued_at = now() WHERE id = $1 AND status = 'waiting'`, jobID)
+	return err
+}
+
+func (s *Store) SetJobSkipped(ctx context.Context, jobID uuid.UUID, reason string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE jobs SET status = 'skipped', conclusion = 'skipped', completed_at = now(),
+			error = $2
+		WHERE id = $1 AND status = 'waiting'`, jobID, reason)
+	return err
+}
+
+// JobRunID resolves the run for a job (used by log streaming and cancellation checks).
+func (s *Store) JobRunID(ctx context.Context, jobID uuid.UUID) (uuid.UUID, string, error) {
+	var runID uuid.UUID
+	var status string
+	err := s.pool.QueryRow(ctx, `SELECT run_id, status FROM jobs WHERE id = $1`, jobID).Scan(&runID, &status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, "", ErrNotFound
+	}
+	return runID, status, err
+}
+
+// RunStatus is a lightweight status read.
+func (s *Store) RunStatus(ctx context.Context, runID uuid.UUID) (string, string, error) {
+	var status, conclusion string
+	err := s.pool.QueryRow(ctx, `SELECT status, conclusion FROM workflow_runs WHERE id = $1`, runID).Scan(&status, &conclusion)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", ErrNotFound
+	}
+	return status, conclusion, err
+}

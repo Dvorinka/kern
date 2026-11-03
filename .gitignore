@@ -1,0 +1,13 @@
+*.data/
+.data/
+blob-data/
+/out/
+/tmp/
+*.log
+.env
+.env.local
+node_modules/
+dist/
+.DS_Store
+coverage/
+*.tsbuildinfo

@@ -1,0 +1,26 @@
+name: Hostile
+on: push
+unknown_top_level: true
+jobs:
+  a:
+    needs: b
+    runs-on: ubuntu-latest
+    steps:
+      - uses: evil/action@main
+      - run: echo hi
+        uses: actions/checkout@v4
+  b:
+    needs: a
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo b
+  c:
+    runs-on: ubuntu-latest
+    steps: []
+  d:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7
+    steps:
+      - run: echo d

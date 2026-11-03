@@ -1,0 +1,143 @@
+package api
+
+import (
+	"errors"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+
+	"github.com/dvorinka/kern/internal/auth"
+	"github.com/dvorinka/kern/internal/store"
+)
+
+type loginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+func (s *Server) login(c *gin.Context) {
+	var req loginRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "invalid_body", "email and password are required")
+		return
+	}
+	key := c.ClientIP() + "|" + strings.ToLower(req.Email)
+	if !s.limiter.allow(key) {
+		fail(c, http.StatusTooManyRequests, "rate_limited", "too many login attempts; try again later")
+		return
+	}
+	user, err := s.Store.UserByEmail(c.Request.Context(), strings.ToLower(strings.TrimSpace(req.Email)))
+	if err != nil || !auth.VerifyPassword(user.PasswordHash, req.Password) {
+		s.limiter.record(key)
+		fail(c, http.StatusUnauthorized, "invalid_credentials", "email or password is incorrect")
+		return
+	}
+	s.limiter.reset(key)
+
+	token, hash, err := auth.NewToken("")
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	expires := time.Now().Add(s.Cfg.SessionTTL)
+	if err := s.Store.CreateSession(c.Request.Context(), user.ID, hash, expires); err != nil {
+		s.internalError(c, err)
+		return
+	}
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie(auth.SessionCookie, token, int(s.Cfg.SessionTTL.Seconds()), "/", "", s.Cfg.Env == "production", true)
+	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "auth.login", user.Email)
+	c.JSON(http.StatusOK, gin.H{"user": user, "expires_at": expires})
+}
+
+func (s *Server) logout(c *gin.Context) {
+	if cookie, err := c.Cookie(auth.SessionCookie); err == nil && cookie != "" {
+		_ = s.Store.DeleteSession(c.Request.Context(), auth.HashToken(cookie))
+	}
+	c.SetCookie(auth.SessionCookie, "", -1, "/", "", s.Cfg.Env == "production", true)
+	c.Status(http.StatusNoContent)
+}
+
+func (s *Server) me(c *gin.Context) {
+	user, ok := currentUser(c)
+	if !ok {
+		fail(c, http.StatusUnauthorized, "unauthenticated", "authentication required")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"user": user})
+}
+
+type createTokenRequest struct {
+	Name   string   `json:"name"`
+	Scopes []string `json:"scopes"`
+	Days   int      `json:"days"`
+}
+
+func (s *Server) createToken(c *gin.Context) {
+	user, _ := currentUser(c)
+	var req createTokenRequest
+	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.Name) == "" {
+		fail(c, http.StatusBadRequest, "invalid_body", "token name is required")
+		return
+	}
+	scopes := req.Scopes
+	if len(scopes) == 0 {
+		scopes = []string{"read"}
+	}
+	for _, sc := range scopes {
+		switch sc {
+		case "read", "write", "admin":
+		default:
+			fail(c, http.StatusBadRequest, "invalid_scope", "scopes must be read, write or admin")
+			return
+		}
+	}
+	var expires *time.Time
+	if req.Days > 0 {
+		t := time.Now().Add(time.Duration(req.Days) * 24 * time.Hour)
+		expires = &t
+	}
+	token, hash, err := auth.NewToken(auth.APIPrefix)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	rec, err := s.Store.CreateAPIToken(c.Request.Context(), user.ID, req.Name, auth.TokenPrefix(token), hash, scopes, expires)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "token.create", req.Name)
+	c.JSON(http.StatusCreated, gin.H{"token": token, "record": rec})
+}
+
+func (s *Server) listTokens(c *gin.Context) {
+	user, _ := currentUser(c)
+	tokens, err := s.Store.ListAPITokens(c.Request.Context(), user.ID)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"tokens": tokens})
+}
+
+func (s *Server) deleteToken(c *gin.Context) {
+	user, _ := currentUser(c)
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		fail(c, http.StatusBadRequest, "invalid_id", "token id must be a uuid")
+		return
+	}
+	if err := s.Store.DeleteAPIToken(c.Request.Context(), user.ID, id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			fail(c, http.StatusNotFound, "not_found", "token not found")
+			return
+		}
+		s.internalError(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}

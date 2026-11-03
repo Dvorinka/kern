@@ -1,0 +1,210 @@
+package api
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"go.uber.org/zap"
+
+	"github.com/dvorinka/kern/internal/store"
+)
+
+func (s *Server) overview(c *gin.Context) {
+	ctx, cancel := contextWithTimeout(c, 5*time.Second)
+	defer cancel()
+	o, err := s.Store.Overview(ctx)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	series, _ := s.Store.QueueSeries(ctx)
+	failures, _ := s.Store.RecentFailures(ctx, 5)
+	cacheEntries, cacheBytes, _ := s.Store.CacheStats(ctx)
+	c.JSON(http.StatusOK, gin.H{
+		"overview": o,
+		"series":   series,
+		"failures": failures,
+		"cache":    gin.H{"entries": cacheEntries, "bytes": cacheBytes},
+	})
+}
+
+// prometheus exposes a minimal text exposition format for scraping.
+func (s *Server) prometheus(c *gin.Context) {
+	ctx, cancel := contextWithTimeout(c, 3*time.Second)
+	defer cancel()
+	o, err := s.Store.Overview(ctx)
+	if err != nil {
+		fail(c, http.StatusServiceUnavailable, "metrics_unavailable", "could not read metrics")
+		return
+	}
+	var b strings.Builder
+	writeMetric := func(name, help, kind string, value float64) {
+		fmt.Fprintf(&b, "# HELP %s %s\n# TYPE %s %s\n%s %g\n", name, help, name, kind, name, value)
+	}
+	writeMetric("kern_runs_total", "Total workflow runs", "counter", float64(o.RunsTotal))
+	writeMetric("kern_runs_success_total", "Successful workflow runs", "counter", float64(o.RunsSuccess))
+	writeMetric("kern_runs_failure_total", "Failed workflow runs", "counter", float64(o.RunsFailure))
+	writeMetric("kern_runs_active", "Runs currently queued or running", "gauge", float64(o.RunsActive))
+	writeMetric("kern_jobs_queued", "Jobs waiting for a runner", "gauge", float64(o.JobsQueued))
+	writeMetric("kern_jobs_running", "Jobs currently executing", "gauge", float64(o.JobsRunning))
+	writeMetric("kern_runners_online", "Runners with a recent heartbeat", "gauge", float64(o.RunnersOnline))
+	writeMetric("kern_job_queue_seconds_avg", "Average queue wait over 24h", "gauge", o.AvgQueueSeconds)
+	writeMetric("kern_job_queue_seconds_p95", "p95 queue wait over 24h", "gauge", o.P95QueueSeconds)
+	writeMetric("kern_run_seconds_avg", "Average run duration", "gauge", o.AvgRunSeconds)
+	c.Header("Content-Type", "text/plain; version=0.0.4")
+	c.String(http.StatusOK, b.String())
+}
+
+// githubWebhook verifies the HMAC, persists the delivery and acknowledges duplicates.
+func (s *Server) githubWebhook(c *gin.Context) {
+	if s.Cfg.GitHub.WebhookSecret == "" {
+		fail(c, http.StatusNotImplemented, "github_not_configured", "GitHub webhook secret is not configured")
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(c.Request.Body, 25<<20))
+	if err != nil {
+		fail(c, http.StatusBadRequest, "invalid_body", "could not read webhook payload")
+		return
+	}
+	signature := c.GetHeader("X-Hub-Signature-256")
+	if !validSignature(s.Cfg.GitHub.WebhookSecret, body, signature) {
+		fail(c, http.StatusUnauthorized, "invalid_signature", "webhook signature does not match")
+		return
+	}
+	delivery := c.GetHeader("X-GitHub-Delivery")
+	event := c.GetHeader("X-GitHub-Event")
+	if delivery == "" || event == "" {
+		fail(c, http.StatusBadRequest, "missing_headers", "X-GitHub-Delivery and X-GitHub-Event are required")
+		return
+	}
+	inserted, err := s.Store.SaveWebhookDelivery(c.Request.Context(), "github", delivery, event, body)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	if !inserted {
+		c.JSON(http.StatusOK, gin.H{"duplicate": true})
+		return
+	}
+	s.Log.Info("github webhook received", zap.String("event", event), zap.String("delivery", delivery))
+	c.JSON(http.StatusAccepted, gin.H{"delivery": delivery, "event": event})
+}
+
+func validSignature(secret string, body []byte, header string) bool {
+	const prefix = "sha256="
+	if !strings.HasPrefix(header, prefix) {
+		return false
+	}
+	want, err := hex.DecodeString(strings.TrimPrefix(header, prefix))
+	if err != nil {
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	return hmac.Equal(mac.Sum(nil), want)
+}
+
+// secretScope resolves the optional ?project=<slug> scope into a project id.
+func (s *Server) secretScope(c *gin.Context) (*uuid.UUID, bool) {
+	scope := c.Query("project")
+	if scope == "" {
+		return nil, true
+	}
+	user, _ := currentUser(c)
+	p, err := s.Store.Project(c.Request.Context(), user.OrgID, scope)
+	if err != nil {
+		s.internalError(c, err)
+		return nil, false
+	}
+	return &p.ID, true
+}
+
+func (s *Server) listSecrets(c *gin.Context) {
+	user, _ := currentUser(c)
+	projectID, ok := s.secretScope(c)
+	if !ok {
+		return
+	}
+	rows, err := s.Store.Secrets(c.Request.Context(), user.OrgID, projectID)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"secrets": secretSummaries(rows)})
+}
+
+func secretSummaries(rows []store.Secret) []gin.H {
+	out := make([]gin.H, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, gin.H{
+			"id": r.ID, "name": r.Name, "project_id": r.ProjectID,
+			"created_at": r.CreatedAt, "updated_at": r.UpdatedAt,
+		})
+	}
+	return out
+}
+
+func (s *Server) putSecret(c *gin.Context) {
+	user, _ := currentUser(c)
+	name := strings.TrimSpace(c.Param("name"))
+	if name == "" || strings.ContainsAny(name, " =") {
+		fail(c, http.StatusBadRequest, "invalid_name", "secret name must not contain spaces or '='")
+		return
+	}
+	projectID, ok := s.secretScope(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		Value string `json:"value"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Value == "" {
+		fail(c, http.StatusBadRequest, "invalid_body", "secret value is required")
+		return
+	}
+	ct, nonce, err := s.Cipher.Encrypt(req.Value)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	if err := s.Store.UpsertSecret(c.Request.Context(), user.OrgID, projectID, name, ct, nonce); err != nil {
+		s.internalError(c, err)
+		return
+	}
+	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "secret.write", name)
+	c.Status(http.StatusNoContent)
+}
+
+func (s *Server) deleteSecret(c *gin.Context) {
+	user, _ := currentUser(c)
+	name := c.Param("name")
+	projectID, ok := s.secretScope(c)
+	if !ok {
+		return
+	}
+	rows, err := s.Store.Secrets(c.Request.Context(), user.OrgID, projectID)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	for _, r := range rows {
+		if r.Name == name {
+			if err := s.Store.DeleteSecret(c.Request.Context(), user.OrgID, r.ID); err != nil {
+				s.internalError(c, err)
+				return
+			}
+			s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "secret.delete", name)
+			c.Status(http.StatusNoContent)
+			return
+		}
+	}
+	fail(c, http.StatusNotFound, "not_found", "secret not found")
+}

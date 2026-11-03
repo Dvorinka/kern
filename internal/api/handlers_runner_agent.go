@@ -1,0 +1,382 @@
+package api
+
+import (
+	"encoding/json"
+	"io"
+	"net/http"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"go.uber.org/zap"
+
+	"github.com/dvorinka/kern/internal/auth"
+	"github.com/dvorinka/kern/internal/blobs"
+	"github.com/dvorinka/kern/internal/secrets"
+	"github.com/dvorinka/kern/internal/store"
+	"github.com/dvorinka/kern/internal/workflows"
+)
+
+type registerRequest struct {
+	JoinToken   string   `json:"join_token"`
+	Name        string   `json:"name"`
+	Hostname    string   `json:"hostname"`
+	OS          string   `json:"os"`
+	Arch        string   `json:"arch"`
+	CPUs        int      `json:"cpus"`
+	MemoryBytes int64    `json:"memory_bytes"`
+	DiskBytes   int64    `json:"disk_bytes"`
+	Labels      []string `json:"labels"`
+	Version     string   `json:"version"`
+}
+
+func (s *Server) registerRunner(c *gin.Context) {
+	var req registerRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "invalid_body", "invalid registration body")
+		return
+	}
+	if !s.joinTokenValid(req.JoinToken) {
+		fail(c, http.StatusUnauthorized, "invalid_join_token", "runner join token is invalid")
+		return
+	}
+	org, err := s.Store.FirstOrg(c.Request.Context())
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	if req.Name == "" {
+		req.Name = "runner-" + uuid.NewString()[:8]
+	}
+	token, hash, err := auth.NewToken(auth.RunnerPrefix)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	runner, err := s.Store.RegisterRunner(c.Request.Context(), store.RegisterRunnerParams{
+		OrgID: org.ID, Name: req.Name, Hostname: req.Hostname, OS: req.OS, Arch: req.Arch,
+		CPUs: req.CPUs, MemoryBytes: req.MemoryBytes, DiskBytes: req.DiskBytes,
+		Labels: req.Labels, Version: req.Version, TokenHash: hash,
+	})
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	s.Log.Info("runner registered", zap.String("runner", runner.Name), zap.String("runner_id", runner.ID.String()))
+	c.JSON(http.StatusCreated, gin.H{"runner_id": runner.ID, "name": runner.Name, "token": token})
+}
+
+func (s *Server) runnerHeartbeat(c *gin.Context) {
+	runner, _ := currentRunner(c)
+	if err := s.Store.Heartbeat(c.Request.Context(), runner.ID); err != nil {
+		s.internalError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "draining": runner.Draining})
+}
+
+// claimJob long-polls for compatible work; it returns 204 when the wait expires.
+func (s *Server) claimJob(c *gin.Context) {
+	runner, _ := currentRunner(c)
+	wait := parseInt(c.DefaultQuery("wait", "25"), 25)
+	if wait < 0 {
+		wait = 0
+	}
+	if wait > 30 {
+		wait = 30
+	}
+	deadline := time.Now().Add(time.Duration(wait) * time.Second)
+	for {
+		claimed, err := s.Store.ClaimJob(c.Request.Context(), runner.ID, s.Cfg.JobLease)
+		if err != nil {
+			s.internalError(c, err)
+			return
+		}
+		if claimed != nil {
+			s.respondWithClaim(c, claimed)
+			return
+		}
+		if time.Now().After(deadline) {
+			c.Status(http.StatusNoContent)
+			return
+		}
+		select {
+		case <-c.Request.Context().Done():
+			return
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+func (s *Server) respondWithClaim(c *gin.Context, claimed *store.ClaimedJob) {
+	steps := make([]gin.H, 0, len(claimed.Job.Steps))
+	for _, st := range claimed.Job.Steps {
+		var spec workflows.StepPlan
+		if len(st.Spec) > 0 {
+			_ = json.Unmarshal(st.Spec, &spec)
+		}
+		steps = append(steps, gin.H{
+			"number": st.Number, "id": spec.ID, "name": st.Name, "status": st.Status,
+			"run": spec.Run, "uses": spec.Uses, "shell": spec.Shell,
+			"working_directory": spec.WorkingDirectory, "if": spec.If,
+			"env": spec.Env, "continue_on_error": spec.ContinueOnError,
+			"timeout_seconds": spec.TimeoutSeconds,
+		})
+	}
+	secretNames := []string{}
+	if project, err := s.Store.ProjectByID(c.Request.Context(), claimed.Run.ProjectID); err == nil {
+		if secretRows, err := s.Store.SecretsForProject(c.Request.Context(), project.OrgID, project.ID); err == nil {
+			for _, sec := range secretRows {
+				secretNames = append(secretNames, sec.Name)
+			}
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"job": gin.H{
+			"id": claimed.Job.ID, "run_id": claimed.Job.RunID, "key": claimed.Job.Key,
+			"name": claimed.Job.Name, "attempt": claimed.Attempt, "image": claimed.Job.Image,
+			"env": claimed.Job.Env, "matrix": claimed.Job.Matrix, "runs_on": claimed.Job.RunsOn,
+			"timeout_seconds": claimed.Job.TimeoutSeconds, "continue_on_error": claimed.Job.ContinueOnError,
+			"outputs_spec": claimed.Job.OutputsSpec,
+		},
+		"run": gin.H{
+			"id": claimed.Run.ID, "number": claimed.Run.RunNumber, "event": claimed.Run.Event,
+			"ref": claimed.Run.Ref, "sha": claimed.Run.SHA, "actor": claimed.Run.Actor,
+			"workflow": claimed.Run.WorkflowName, "project": claimed.Run.ProjectName,
+			"project_slug": claimed.Run.ProjectSlug, "trust_level": claimed.Run.TrustLevel,
+			"repo_url": claimed.Source["repo_url"], "repo_full_name": claimed.Source["repo_full_name"],
+			"default_branch": claimed.Source["default_branch"], "local_path": claimed.Source["local_path"],
+		},
+		"steps":            steps,
+		"secrets":          secretNames,
+		"lease_expires_at": claimed.LeaseExpiresAt,
+	})
+}
+
+func (s *Server) renewJobLease(c *gin.Context) {
+	job, runner, ok := s.runnerJob(c)
+	if !ok {
+		return
+	}
+	alive, err := s.Store.RenewLease(c.Request.Context(), runner.ID, job.ID, s.Cfg.JobLease)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	runStatus, _, _ := s.Store.RunStatus(c.Request.Context(), job.RunID)
+	c.JSON(http.StatusOK, gin.H{"ok": alive, "cancelled": !alive || runStatus == "cancelled"})
+}
+
+func (s *Server) startStep(c *gin.Context) {
+	job, _, ok := s.runnerJob(c)
+	if !ok {
+		return
+	}
+	n := parseInt(c.Param("n"), 0)
+	step, err := s.Store.StartStep(c.Request.Context(), job.ID, n)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"step": step})
+}
+
+// appendLog stores a masked log chunk for a step.
+func (s *Server) appendLog(c *gin.Context) {
+	job, _, ok := s.runnerJob(c)
+	if !ok {
+		return
+	}
+	n := parseInt(c.Param("n"), 0)
+	body, err := io.ReadAll(io.LimitReader(c.Request.Body, 1<<20))
+	if err != nil {
+		fail(c, http.StatusBadRequest, "invalid_body", "log chunk too large or unreadable")
+		return
+	}
+	masker := s.maskerForRun(c, job.RunID)
+	data := masker.MaskBytes(body)
+	key := blobs.LogKey(job.RunID.String(), job.ID.String(), n)
+	size, err := s.Blobs.Append(key, data)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	if err := s.Store.AppendStepLog(c.Request.Context(), job.ID, n, key, len(data)); err != nil {
+		s.internalError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "size": size})
+}
+
+// maskerForRun collects every secret value that could appear in this run's logs.
+func (s *Server) maskerForRun(c *gin.Context, runID uuid.UUID) *secrets.Masker {
+	run, err := s.Store.Run(c.Request.Context(), runID)
+	if err != nil {
+		return secrets.NewMasker(nil)
+	}
+	project, err := s.Store.ProjectByID(c.Request.Context(), run.ProjectID)
+	if err != nil {
+		return secrets.NewMasker(nil)
+	}
+	rows, err := s.Store.SecretsForProject(c.Request.Context(), project.OrgID, project.ID)
+	if err != nil {
+		return secrets.NewMasker(nil)
+	}
+	values := make([]string, 0, len(rows))
+	for _, sec := range rows {
+		if plain, err := s.Cipher.Decrypt(sec.Ciphertext, sec.Nonce); err == nil {
+			values = append(values, plain)
+		}
+	}
+	return secrets.NewMasker(values)
+}
+
+type finishStepRequest struct {
+	Conclusion string `json:"conclusion"`
+	ExitCode   *int   `json:"exit_code"`
+}
+
+func (s *Server) finishStep(c *gin.Context) {
+	job, _, ok := s.runnerJob(c)
+	if !ok {
+		return
+	}
+	n := parseInt(c.Param("n"), 0)
+	var req finishStepRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "invalid_body", "invalid finish body")
+		return
+	}
+	switch req.Conclusion {
+	case "success", "failure", "skipped", "cancelled":
+	default:
+		fail(c, http.StatusBadRequest, "invalid_conclusion", "conclusion must be success, failure, skipped or cancelled")
+		return
+	}
+	if err := s.Store.FinishStep(c.Request.Context(), job.ID, n, req.Conclusion, req.ExitCode); err != nil {
+		s.internalError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+type finishJobRequest struct {
+	Conclusion string            `json:"conclusion"`
+	Outputs    map[string]string `json:"outputs"`
+	Error      string            `json:"error"`
+}
+
+func (s *Server) finishJob(c *gin.Context) {
+	job, runner, ok := s.runnerJob(c)
+	if !ok {
+		return
+	}
+	var req finishJobRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "invalid_body", "invalid finish body")
+		return
+	}
+	switch req.Conclusion {
+	case "success", "failure", "cancelled", "skipped":
+	default:
+		fail(c, http.StatusBadRequest, "invalid_conclusion", "invalid conclusion")
+		return
+	}
+	updated, err := s.Store.FinishJob(c.Request.Context(), runner.ID, job.ID, req.Conclusion, req.Error, req.Outputs)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	if !updated {
+		fail(c, http.StatusConflict, "lease_lost", "job is no longer leased to this runner")
+		return
+	}
+	if err := s.Orch.AdvanceRun(c.Request.Context(), job.RunID); err != nil {
+		s.Log.Error("advance after job finish", zap.Error(err))
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (s *Server) cancelCheck(c *gin.Context) {
+	job, _, ok := s.runnerJob(c)
+	if !ok {
+		return
+	}
+	runStatus, conclusion, err := s.Store.RunStatus(c.Request.Context(), job.RunID)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	current, err := s.Store.Job(c.Request.Context(), job.ID)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	cancelled := current.Status == "cancelled" || runStatus == "cancelled" ||
+		(runStatus == "completed" && conclusion == "cancelled")
+	c.JSON(http.StatusOK, gin.H{"cancelled": cancelled})
+}
+
+// jobSecrets delivers decrypted secret values only to trusted runs.
+func (s *Server) jobSecrets(c *gin.Context) {
+	job, _, ok := s.runnerJob(c)
+	if !ok {
+		return
+	}
+	run, err := s.Store.Run(c.Request.Context(), job.RunID)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	switch run.TrustLevel {
+	case "fork", "pull_request":
+		c.JSON(http.StatusOK, gin.H{"secrets": map[string]string{}, "blocked": true,
+			"reason": "untrusted pull request runs never receive repository secrets"})
+		return
+	}
+	project, err := s.Store.ProjectByID(c.Request.Context(), run.ProjectID)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	rows, err := s.Store.SecretsForProject(c.Request.Context(), project.OrgID, project.ID)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	out := map[string]string{}
+	for _, sec := range rows {
+		plain, err := s.Cipher.Decrypt(sec.Ciphertext, sec.Nonce)
+		if err != nil {
+			s.Log.Error("decrypt secret", zap.String("secret", sec.Name), zap.Error(err))
+			continue
+		}
+		out[sec.Name] = plain
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, gin.H{"secrets": out, "blocked": false})
+}
+
+// runnerJob loads the job and verifies it is leased to the authenticated runner.
+func (s *Server) runnerJob(c *gin.Context) (store.Job, store.Runner, bool) {
+	runner, ok := currentRunner(c)
+	if !ok {
+		fail(c, http.StatusUnauthorized, "unauthenticated", "runner authentication required")
+		return store.Job{}, store.Runner{}, false
+	}
+	id, err := uuid.Parse(c.Param("jobID"))
+	if err != nil {
+		fail(c, http.StatusBadRequest, "invalid_id", "job id must be a uuid")
+		return store.Job{}, store.Runner{}, false
+	}
+	job, err := s.Store.Job(c.Request.Context(), id)
+	if err != nil {
+		s.internalError(c, err)
+		return store.Job{}, store.Runner{}, false
+	}
+	if job.RunnerID == nil || *job.RunnerID != runner.ID {
+		fail(c, http.StatusNotFound, "not_found", "job is not leased to this runner")
+		return store.Job{}, store.Runner{}, false
+	}
+	return job, runner, true
+}

@@ -1,0 +1,27 @@
+name: CI
+on:
+  push:
+    branches: [main]
+env:
+  GOFLAGS: -mod=readonly
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    outputs:
+      digest: ${{ steps.meta.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: go build ./...
+      - id: meta
+        run: echo "digest=sha256:abc" >> "$GITHUB_OUTPUT"
+  test:
+    needs: build
+    runs-on: ubuntu-24.04
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - run: go test ./...
+        env:
+          TEST_LEVEL: 2
