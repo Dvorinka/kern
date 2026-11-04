@@ -374,14 +374,19 @@ func (s *Store) FinishRunIfDone(ctx context.Context, runID uuid.UUID) error {
 	if pending > 0 {
 		return nil
 	}
-	// Conclusion: failure wins, then cancelled, then success. Skipped-only runs are reported skipped.
+	// Conclusion: failure wins, then cancelled, then success. Skipped-only runs
+	// are reported skipped. A failed continue-on-error job keeps its stored
+	// conclusion (the UI shows it failed) but, per GitHub semantics, must not
+	// fail the run.
 	if _, err := tx.Exec(ctx, `
 		UPDATE workflow_runs SET
 			status = 'completed',
 			conclusion = CASE
-				WHEN EXISTS (SELECT 1 FROM jobs WHERE run_id = $1 AND conclusion = 'failure') THEN 'failure'
+				WHEN EXISTS (SELECT 1 FROM jobs WHERE run_id = $1
+					AND conclusion = 'failure' AND NOT continue_on_error) THEN 'failure'
 				WHEN EXISTS (SELECT 1 FROM jobs WHERE run_id = $1 AND conclusion = 'cancelled') THEN 'cancelled'
-				WHEN NOT EXISTS (SELECT 1 FROM jobs WHERE run_id = $1 AND conclusion = 'success') THEN 'skipped'
+				WHEN NOT EXISTS (SELECT 1 FROM jobs WHERE run_id = $1
+					AND (conclusion = 'success' OR (conclusion = 'failure' AND continue_on_error))) THEN 'skipped'
 				ELSE 'success'
 			END,
 			completed_at = now()

@@ -2,11 +2,13 @@ package store
 
 // Integration tests against a real PostgreSQL. Set KERN_TEST_DATABASE_URL to
 // run them; they skip otherwise. Each test truncates the mutable tables first,
-// so a dirty dev database is fine.
+// so the DSN must name a throwaway database — the guard below refuses the
+// shared dev database, which these tests have wiped before.
 
 import (
 	"context"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -19,6 +21,9 @@ func testStore(t *testing.T) (*Store, context.Context) {
 	dsn := os.Getenv("KERN_TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("KERN_TEST_DATABASE_URL not set")
+	}
+	if !strings.Contains(dsn, "kern_test") {
+		t.Skip("refusing to truncate a shared database: KERN_TEST_DATABASE_URL must point at a throwaway DB whose name contains 'kern_test'")
 	}
 	ctx := context.Background()
 	s, err := Open(ctx, dsn)

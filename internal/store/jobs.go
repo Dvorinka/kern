@@ -311,6 +311,59 @@ func (s *Store) ReapExpiredLeases(ctx context.Context, maxAttempts int) ([]uuid.
 	return out, nil
 }
 
+// TimeoutOverdueJobs fails in-progress jobs that exceeded their
+// timeout_seconds ceiling. This is a belt-and-braces watchdog: the runner
+// enforces the same timeout via context, so this only fires when a runner
+// keeps renewing the lease without enforcing it.
+func (s *Store) TimeoutOverdueJobs(ctx context.Context) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE jobs SET status = 'completed', conclusion = 'failure',
+			error = 'job exceeded timeout-minutes', completed_at = now(),
+			lease_expires_at = NULL
+		WHERE status = 'in_progress'
+		  AND started_at IS NOT NULL
+		  AND started_at + make_interval(secs => timeout_seconds) < now()`)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+// PruneStepBlobs clears log and summary references on steps of runs completed
+// before the cutoff, returning the blob keys the caller should delete.
+func (s *Store) PruneStepBlobs(ctx context.Context, olderThan time.Duration) ([]string, error) {
+	secs := int(olderThan.Seconds())
+	var refs []string
+	for _, q := range []struct{ col, set string }{
+		{"log_ref", "log_ref = '', log_bytes = 0"},
+		{"summary_ref", "summary_ref = ''"},
+	} {
+		rows, err := s.pool.Query(ctx, fmt.Sprintf(`
+			UPDATE steps s SET %s
+			FROM jobs j JOIN workflow_runs r ON r.id = j.run_id
+			WHERE s.job_id = j.id AND s.%s <> ''
+			  AND r.completed_at IS NOT NULL
+			  AND r.completed_at < now() - make_interval(secs => $1)
+			RETURNING s.%s`, q.set, q.col, q.col), secs)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var ref string
+			if err := rows.Scan(&ref); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			refs = append(refs, ref)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	return refs, nil
+}
+
 // MarkStaleRunnersOffline flips runners that missed heartbeats.
 func (s *Store) MarkStaleRunnersOffline(ctx context.Context, timeout time.Duration) (int64, error) {
 	tag, err := s.pool.Exec(ctx, `

@@ -4,6 +4,9 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -48,7 +51,7 @@ func (c *cli) cmdExec(ctx context.Context, args []string) error {
 		w = os.Stderr // keep stdout for the final JSON result
 	}
 
-	bundle, files, err := bundleDir(dir)
+	bundle, files, digest, err := bundleDir(dir)
 	if err != nil {
 		return fmt.Errorf("bundle: %w", err)
 	}
@@ -56,20 +59,32 @@ func (c *cli) cmdExec(ctx context.Context, args []string) error {
 	binfo, _ := os.Stat(bundle)
 	fmt.Fprintf(w, "bundled %d files from %s (%s)\n", files, dir, humanBytes(binfo.Size()))
 
-	fh, err := os.Open(bundle)
-	if err != nil {
-		return err
-	}
+	// Content-addressed dedupe: an identical tree already uploaded is reused
+	// without re-sending the archive.
 	var up struct {
 		BundleRef string `json:"bundle_ref"`
 		SizeBytes int64  `json:"size_bytes"`
+		Deduped   bool   `json:"deduped"`
 	}
-	err = c.api().putFile(ctx, "/projects/"+slug+"/source", fh, &up)
-	fh.Close()
-	if err != nil {
-		return err
+	resolveErr := c.api().get(ctx, "/projects/"+slug+"/source/resolve",
+		url.Values{"sha256": {digest}}, &up)
+	switch {
+	case resolveErr == nil:
+		fmt.Fprintf(w, "reusing %s (content already uploaded)\n", up.BundleRef)
+	case isStatus(resolveErr, 404):
+		fh, err := os.Open(bundle)
+		if err != nil {
+			return err
+		}
+		err = c.api().putFile(ctx, "/projects/"+slug+"/source?sha256="+digest, fh, &up)
+		fh.Close()
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(w, "uploaded %s\n", up.BundleRef)
+	default:
+		return resolveErr
 	}
-	fmt.Fprintf(w, "uploaded %s\n", up.BundleRef)
 
 	workflowID, err := c.resolveWorkflow(ctx, slug, wf)
 	if err != nil {
@@ -193,19 +208,23 @@ func (c *cli) pullArtifacts(ctx context.Context, w io.Writer, runID, dir string)
 	return nil
 }
 
-// bundleDir packs dir into a gzipped tar and returns its path plus the file
-// count. Inside a git worktree it ships tracked + untracked-nonignored files
-// (git ls-files --exclude-standard); elsewhere it walks the tree, always
-// excluding .git.
-func bundleDir(dir string) (string, int, error) {
+// bundleDir packs dir into a gzipped tar and returns its path, the file count
+// and a content digest of the tree. Inside a git worktree it ships tracked +
+// untracked-nonignored files (git ls-files --exclude-standard); elsewhere it
+// walks the tree, always excluding .git.
+//
+// The digest covers each entry's path and content (or symlink target), so it
+// is stable across runs even though tar metadata like mtimes is not.
+func bundleDir(dir string) (string, int, string, error) {
 	entries, err := listBundleFiles(dir)
 	if err != nil {
-		return "", 0, err
+		return "", 0, "", err
 	}
 	tmp, err := os.CreateTemp("", "kern-exec-*.tar.gz")
 	if err != nil {
-		return "", 0, err
+		return "", 0, "", err
 	}
+	digest := sha256.New()
 	gz := gzip.NewWriter(tmp)
 	tw := tar.NewWriter(gz)
 	for _, rel := range entries {
@@ -227,34 +246,49 @@ func bundleDir(dir string) (string, int, error) {
 		hdr.Name = filepath.ToSlash(rel)
 		if err := tw.WriteHeader(hdr); err != nil {
 			tmp.Close()
-			return "", 0, err
+			return "", 0, "", err
+		}
+		fmt.Fprintf(digest, "%s\x00", hdr.Name)
+		if fi.Mode()&os.ModeSymlink != 0 {
+			fmt.Fprintf(digest, "symlink:%s\x00", link)
+			continue
 		}
 		if fi.Mode().IsRegular() {
+			fh := sha256.New()
 			src, err := os.Open(full)
 			if err != nil {
 				tmp.Close()
-				return "", 0, err
+				return "", 0, "", err
 			}
-			_, copyErr := io.Copy(tw, src)
+			_, copyErr := io.Copy(tw, io.TeeReader(src, fh))
 			src.Close()
 			if copyErr != nil {
 				tmp.Close()
-				return "", 0, copyErr
+				return "", 0, "", copyErr
 			}
+			fmt.Fprintf(digest, "file:%x\x00", fh.Sum(nil))
+			continue
 		}
+		fmt.Fprintf(digest, "mode:%v\x00", fi.Mode())
 	}
 	if err := tw.Close(); err != nil {
 		tmp.Close()
-		return "", 0, err
+		return "", 0, "", err
 	}
 	if err := gz.Close(); err != nil {
 		tmp.Close()
-		return "", 0, err
+		return "", 0, "", err
 	}
 	if err := tmp.Close(); err != nil {
-		return "", 0, err
+		return "", 0, "", err
 	}
-	return tmp.Name(), len(entries), nil
+	return tmp.Name(), len(entries), hex.EncodeToString(digest.Sum(nil)), nil
+}
+
+// isStatus reports whether err is an apiError with the given HTTP status.
+func isStatus(err error, status int) bool {
+	var ae *apiError
+	return errors.As(err, &ae) && ae.Status == status
 }
 
 func listBundleFiles(dir string) ([]string, error) {

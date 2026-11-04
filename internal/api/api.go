@@ -120,6 +120,7 @@ func (s *Server) buildRouter() *gin.Engine {
 		auth.GET("/projects/:project", s.getProject)
 		auth.POST("/projects/:project/sync", s.syncProject)
 		auth.PUT("/projects/:project/source", s.uploadSource)
+		auth.GET("/projects/:project/source/resolve", s.resolveSource)
 		auth.GET("/projects/:project/workflows", s.listWorkflows)
 		auth.POST("/projects/:project/workflows/:workflowID/runs", s.triggerRun)
 		auth.GET("/github-app/manifest", s.githubAppManifest)

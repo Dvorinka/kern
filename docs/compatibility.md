@@ -12,7 +12,7 @@ never silently ignored.
 | Feature | Status | Notes |
 | --- | --- | --- |
 | `on: push` | done | parsed, modelled |
-| `on: pull_request` | done | live via webhook: runs on the head SHA; fork heads get trust `fork` (no secrets, own cache scope), same-repo PRs `pull_request`; `types`/`branches` filters honoured |
+| `on: pull_request` | done | live via webhook: runs the head SHA (`refs/pull/N/head`) — GitHub tests `refs/pull/N/merge` instead, a documented divergence; fork heads get trust `fork` (no secrets, own cache scope), same-repo PRs `pull_request`; `types`/`branches` filters honoured |
 | `on: workflow_dispatch` | done | `POST /projects/:p/workflows/:id/runs` |
 | `on: pull_request_target` | partial | parsed; strict handling lands with the GitHub App (M4) |
 | `on: release`, `repository_dispatch`, `workflow_run` | partial | parsed and modelled; no provider events yet |
@@ -33,7 +33,7 @@ never silently ignored.
 | `env` (workflow/job/step) | done | merged; expressions interpolated |
 | `outputs` (job and step) | done | `GITHUB_OUTPUT` file command; `needs.*.outputs` resolved in downstream step bodies and conditions |
 | `timeout-minutes` | done | job + step |
-| `continue-on-error` | done | conclusion vs outcome preserved |
+| `continue-on-error` | done | conclusion vs outcome preserved; a failed continue-on-error job does not fail the run and reports `needs.<id>.result = success` |
 | `concurrency.group` | done | serialises runs per project+group |
 | `concurrency.cancel-in-progress` | done | newer queued run cancels the older in-group run |
 | `container` (job image) | partial | `image` only, string or `container.image`; other options warn and are ignored |
@@ -83,6 +83,13 @@ never silently ignored.
 | AES-256-GCM at rest | done | org + project scoped rows |
 | Masking in logs | done | server-side at ingestion |
 | Fork / pull_request runs receive no secrets | done | `{blocked: true}` contract |
+
+## Runner behaviour (not GitHub-surface, documented for operators)
+
+- Every job container mounts the runner-persistent host dir `<work-root>/_cache` at `/kern/cache` (`KERN_CACHE_DIR` is exported). Point tool caches there (`GOMODCACHE`, `GOCACHE`, npm/pip caches) to get warm runs without `actions/cache` round trips. The dir survives job cleanup and is shared by all projects on the runner — do not place secrets in it.
+- Images the runner pulls are tracked and garbage-collected after `KERN_RUNNER_IMAGE_MAX_AGE` of disuse (default `168h`; `0` disables). GC only removes images KERN recorded, and only while no job is running.
+- `KERN_RUNNER_LOAD_GATE` pauses job claiming while `loadavg1` exceeds `n` × CPU count (`0` = off). Use it on hosts where parallel builds starve the control plane.
+- Step logs flush to the control plane every second or at 256 KiB buffered, whichever comes first.
 
 ## Not implemented (tracked)
 

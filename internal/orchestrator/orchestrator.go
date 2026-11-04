@@ -30,6 +30,10 @@ type Orchestrator struct {
 	// CacheMaxAge evicts cache entries untouched for this long (GitHub: 7 days).
 	// Zero disables the sweep.
 	CacheMaxAge time.Duration
+	// LogRetention drops step log and summary blobs of runs completed longer
+	// ago than this (KERN_LOG_RETENTION). Zero disables pruning.
+	LogRetention       time.Duration
+	lastRetentionSweep time.Time
 	// PostStatus, when set, reports a run's GitHub commit status. It is called
 	// with "pending" at run creation and a terminal state on completion.
 	PostStatus        func(ctx context.Context, run store.Run, state string)
@@ -130,6 +134,13 @@ func (o *Orchestrator) Tick(ctx context.Context) {
 	} else if len(reaped) > 0 {
 		o.Log.Warn("reaped jobs", zap.Int("jobs", len(reaped)))
 	}
+	// Belt-and-braces job timeout: the runner enforces the same ceiling, so a
+	// hit here means a runner renewed its lease without enforcing it.
+	if n, err := o.Store.TimeoutOverdueJobs(ctx); err != nil {
+		o.Log.Error("timeout overdue jobs", zap.Error(err))
+	} else if n > 0 {
+		o.Log.Warn("jobs failed by timeout watchdog", zap.Int64("jobs", n))
+	}
 	if o.StaleRunnerTimeout > 0 {
 		if _, err := o.Store.MarkStaleRunnersOffline(ctx, o.StaleRunnerTimeout); err != nil {
 			o.Log.Error("mark stale runners", zap.Error(err))
@@ -149,6 +160,19 @@ func (o *Orchestrator) Tick(ctx context.Context) {
 			} else {
 				for _, ref := range refs {
 					_ = o.Blobs.Delete(ref)
+				}
+			}
+		}
+		if o.LogRetention > 0 && time.Since(o.lastRetentionSweep) > time.Hour {
+			o.lastRetentionSweep = time.Now()
+			if refs, err := o.Store.PruneStepBlobs(ctx, o.LogRetention); err != nil {
+				o.Log.Error("prune step blobs", zap.Error(err))
+			} else {
+				for _, ref := range refs {
+					_ = o.Blobs.Delete(ref)
+				}
+				if len(refs) > 0 {
+					o.Log.Info("log retention pruned step blobs", zap.Int("blobs", len(refs)))
 				}
 			}
 		}
@@ -257,6 +281,11 @@ func NeedsMap(byJobKey map[string][]store.Job) map[string]any {
 		for _, j := range jobs {
 			if j.Conclusion != "" {
 				result = j.Conclusion
+				// needs.<id>.result reports the post-continue-on-error
+				// conclusion, like GitHub's job result.
+				if j.Conclusion == "failure" && j.ContinueOnError {
+					result = "success"
+				}
 			}
 			var out map[string]any
 			if len(j.Outputs) > 0 && string(j.Outputs) != "{}" {
@@ -287,7 +316,11 @@ func dependencyStatus(needs []string, byJobKey map[string][]store.Job) (string, 
 				return "", false
 			}
 			switch j.Conclusion {
-			case "failure", "cancelled":
+			case "failure":
+				if !j.ContinueOnError {
+					status = "failure"
+				}
+			case "cancelled":
 				status = "failure"
 			case "skipped":
 				if status == "success" {
