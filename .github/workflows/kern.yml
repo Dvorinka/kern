@@ -5,6 +5,7 @@ name: KERN CI
 on:
   push:
     branches: [master]
+  pull_request:
 jobs:
   go:
     runs-on: ubuntu-latest
