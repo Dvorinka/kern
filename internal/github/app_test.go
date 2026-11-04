@@ -108,39 +108,3 @@ func TestAppRejectsBadKey(t *testing.T) {
 		t.Fatal("expected parse error")
 	}
 }
-
-func TestResolverPrefersApp(t *testing.T) {
-	key, pemStr := testKey(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		verifyJWT(t, r, &key.PublicKey, "1")
-		if r.URL.Path == "/repos/o/r/installation" {
-			json.NewEncoder(w).Encode(map[string]any{"id": 7})
-			return
-		}
-		json.NewEncoder(w).Encode(map[string]any{
-			"token": "ghs_x", "expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
-		})
-	}))
-	defer srv.Close()
-	app, err := NewApp("1", pemStr, srv.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r := &Resolver{App: app, PAT: New(srv.URL, "pat-token")}
-	cl, err := r.Client(context.Background(), "o/r")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cl.token != "ghs_x" {
-		t.Fatalf("resolver returned pat client, want app token (got %q)", cl.token)
-	}
-}
-
-func TestResolverFallsBackToPAT(t *testing.T) {
-	pat := New("https://api.github.com", "pat-token")
-	r := &Resolver{PAT: pat}
-	cl, err := r.Client(context.Background(), "o/r")
-	if err != nil || cl != pat {
-		t.Fatalf("want pat client, got %v %v", cl, err)
-	}
-}

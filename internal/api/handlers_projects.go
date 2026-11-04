@@ -160,7 +160,7 @@ func (s *Server) syncProject(c *gin.Context) {
 // stores each file as a compiled workflow version, mirroring the local path.
 func (s *Server) syncProjectGitHub(c *gin.Context, user store.User, p store.Project) {
 	ctx := c.Request.Context()
-	gh, err := s.GH.Client(ctx, p.RepoFullName)
+	gh, err := s.githubClient(ctx, p.RepoFullName)
 	if err != nil {
 		fail(c, http.StatusBadGateway, "github_fetch_failed", err.Error())
 		return

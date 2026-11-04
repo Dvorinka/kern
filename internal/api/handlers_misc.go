@@ -66,8 +66,9 @@ func (s *Server) prometheus(c *gin.Context) {
 
 // githubWebhook verifies the HMAC, persists the delivery and acknowledges duplicates.
 func (s *Server) githubWebhook(c *gin.Context) {
-	if s.Cfg.GitHub.WebhookSecret == "" {
-		fail(c, http.StatusNotImplemented, "github_not_configured", "GitHub webhook secret is not configured")
+	secrets := s.webhookSecrets(c.Request.Context())
+	if len(secrets) == 0 {
+		fail(c, http.StatusNotImplemented, "github_not_configured", "no webhook secret is configured")
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(c.Request.Body, 25<<20))
@@ -76,7 +77,14 @@ func (s *Server) githubWebhook(c *gin.Context) {
 		return
 	}
 	signature := c.GetHeader("X-Hub-Signature-256")
-	if !validSignature(s.Cfg.GitHub.WebhookSecret, body, signature) {
+	valid := false
+	for _, secret := range secrets {
+		if validSignature(secret, body, signature) {
+			valid = true
+			break
+		}
+	}
+	if !valid {
 		fail(c, http.StatusUnauthorized, "invalid_signature", "webhook signature does not match")
 		return
 	}

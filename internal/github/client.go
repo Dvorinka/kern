@@ -119,6 +119,25 @@ func (c *Client) ListWorkflowFiles(ctx context.Context, repo, ref string) ([]Wor
 	return files, nil
 }
 
+// ManifestConversion is the credential bundle GitHub returns when a
+// manifest-flow code is converted into a registered app.
+type ManifestConversion struct {
+	ID            int64  `json:"id"`
+	Slug          string `json:"slug"`
+	Name          string `json:"name"`
+	PEM           string `json:"pem"`
+	WebhookSecret string `json:"webhook_secret"`
+	HTMLURL       string `json:"html_url"`
+}
+
+// ConvertManifestCode exchanges the code GitHub appends to the manifest
+// redirect URL for the new app's credentials. Unauthenticated by design.
+func (c *Client) ConvertManifestCode(ctx context.Context, code string) (ManifestConversion, error) {
+	var out ManifestConversion
+	err := c.do(ctx, http.MethodPost, "/app-manifests/"+code+"/conversions", "", nil, &out)
+	return out, err
+}
+
 // FileContent downloads a file's raw content at ref.
 func (c *Client) FileContent(ctx context.Context, repo, path, ref string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,

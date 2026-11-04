@@ -7,9 +7,11 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/dvorinka/kern/internal/blobs"
@@ -31,6 +33,10 @@ type Server struct {
 	Engine  *gin.Engine
 	GH      *github.Resolver
 	limiter *loginLimiter
+
+	ghAppsMu  sync.Mutex
+	ghApps    map[uuid.UUID]*github.App // github_apps.id -> lazily built app
+	ghRepoApp map[string]uuid.UUID      // repo -> github_apps.id (probe cache)
 }
 
 func New(cfg *config.Config, st *store.Store, orch *orchestrator.Orchestrator, blobStore blobs.Store,
@@ -49,7 +55,8 @@ func New(cfg *config.Config, st *store.Store, orch *orchestrator.Orchestrator, b
 	s := &Server{
 		Cfg: cfg, Store: st, Orch: orch, Blobs: blobStore, Cipher: cipher,
 		Log: log, Started: time.Now(), limiter: newLoginLimiter(8, time.Minute),
-		GH: &github.Resolver{App: app, PAT: github.New(cfg.GitHub.APIBaseURL, cfg.GitHub.StatusToken)},
+		GH:     &github.Resolver{App: app, PAT: github.New(cfg.GitHub.APIBaseURL, cfg.GitHub.StatusToken)},
+		ghApps: make(map[uuid.UUID]*github.App), ghRepoApp: make(map[string]uuid.UUID),
 	}
 	s.wireCommitStatus()
 	s.Engine = s.buildRouter()
@@ -57,11 +64,9 @@ func New(cfg *config.Config, st *store.Store, orch *orchestrator.Orchestrator, b
 }
 
 // wireCommitStatus reports each run's state back to GitHub as a commit status,
-// posted as the App installation when configured, else the PAT.
+// posted as the App installation when configured, else the PAT. Runs without a
+// repo binding no-op before any client work, so this is always safe to wire.
 func (s *Server) wireCommitStatus() {
-	if s.GH.App == nil && s.Cfg.GitHub.StatusToken == "" {
-		return
-	}
 	s.Orch.PostStatus = func(ctx context.Context, run store.Run, state string) {
 		var src map[string]any
 		_ = json.Unmarshal(run.Source, &src)
@@ -69,7 +74,7 @@ func (s *Server) wireCommitStatus() {
 		if repo == "" || run.SHA == "" {
 			return
 		}
-		cl, err := s.GH.Client(ctx, repo)
+		cl, err := s.githubClient(ctx, repo)
 		if err != nil {
 			s.Log.Warn("github client", zap.String("repo", repo), zap.Error(err))
 			return
@@ -115,6 +120,8 @@ func (s *Server) buildRouter() *gin.Engine {
 		auth.PUT("/projects/:project/source", s.uploadSource)
 		auth.GET("/projects/:project/workflows", s.listWorkflows)
 		auth.POST("/projects/:project/workflows/:workflowID/runs", s.triggerRun)
+		auth.GET("/github-app/manifest", s.githubAppManifest)
+		auth.GET("/github-app/callback", s.githubAppCallback)
 
 		auth.GET("/runs", s.listRuns)
 		auth.GET("/runs/:id", s.getRun)

@@ -265,7 +265,7 @@ func contains(items []string, want string) bool {
 func (s *Server) workflowAtSHA(c *gin.Context, fullName string, projectID uuid.UUID,
 	wf store.Workflow, sha string) (store.WorkflowVersion, *workflows.Plan, error) {
 	ctx := c.Request.Context()
-	gh, err := s.GH.Client(ctx, fullName)
+	gh, err := s.githubClient(ctx, fullName)
 	var content string
 	if err == nil {
 		content, err = gh.FileContent(ctx, fullName, wf.Path, sha)

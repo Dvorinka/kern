@@ -180,21 +180,10 @@ func (a *App) Client(ctx context.Context, repo string) (*Client, error) {
 	return New(a.base, tok), nil
 }
 
-// Resolver picks the credential for a repo: the app's installation token when
-// configured, else the static-token client (PAT; possibly anonymous).
+// Resolver holds the env-level credentials: the app when configured, else the
+// static-token client (PAT; possibly anonymous). Repo-level resolution across
+// registered apps lives in the api layer.
 type Resolver struct {
 	App *App
 	PAT *Client
-}
-
-// Client resolves repo to a usable client. Falls back to the PAT client when
-// no app is configured.
-func (r *Resolver) Client(ctx context.Context, repo string) (*Client, error) {
-	if r.App != nil {
-		return r.App.Client(ctx, repo)
-	}
-	if r.PAT != nil {
-		return r.PAT, nil
-	}
-	return nil, fmt.Errorf("no github credentials configured")
 }

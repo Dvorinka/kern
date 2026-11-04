@@ -12,7 +12,7 @@ never silently ignored.
 | Feature | Status | Notes |
 | --- | --- | --- |
 | `on: push` | done | parsed, modelled |
-| `on: pull_request` | done | parsed, modelled; trust level `pull_request` withholds secrets |
+| `on: pull_request` | done | live via webhook: runs on the head SHA; fork heads get trust `fork` (no secrets, own cache scope), same-repo PRs `pull_request`; `types`/`branches` filters honoured |
 | `on: workflow_dispatch` | done | `POST /projects/:p/workflows/:id/runs` |
 | `on: pull_request_target` | partial | parsed; strict handling lands with the GitHub App (M4) |
 | `on: release`, `repository_dispatch`, `workflow_run` | partial | parsed and modelled; no provider events yet |
@@ -70,9 +70,11 @@ never silently ignored.
 | Feature | Status | Notes |
 | --- | --- | --- |
 | Inbound `push` webhooks | done | HMAC-verified deliveries persisted + processed; matching projects trigger runs compiled at the pushed SHA; `branches`/`branches-ignore` honoured, other filters are declared skips |
-| Workflow discovery from GitHub | done | contents/tree API via `repo_full_name`; `KERN_GITHUB_TOKEN` for private repos |
-| Commit statuses | done | `pending` at run creation, terminal state on completion; context `kern/<workflow>` |
-| `pull_request` events, check-runs | no | needs GitHub App installation tokens (M4) |
+| Inbound `pull_request` webhooks | done | head-SHA runs compiled at the head SHA on the base repo; checkout comes from the head repo so forks work; default action set + `types`/`branches` filters honoured |
+| GitHub App auth | done | RS256 JWT → installation access tokens (cached); repo → installation resolved via API; preferred over `KERN_GITHUB_TOKEN` when `KERN_GITHUB_APP_ID` + key are set; `KERN_GITHUB_APP_PRIVATE_KEY_FILE` for pem paths |
+| Workflow discovery from GitHub | done | contents/tree API via `repo_full_name`; App token or `KERN_GITHUB_TOKEN` for private repos |
+| Commit statuses | done | `pending` at run creation, terminal state on completion; context `kern/<workflow>`; posted as the App installation when configured |
+| Check-runs | no | commit statuses only for now |
 
 ## Secrets and trust
 

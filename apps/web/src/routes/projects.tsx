@@ -23,13 +23,38 @@ export function ProjectsPage() {
 			qc.invalidateQueries({ queryKey: ["projects"] });
 		},
 	});
+	// GitHub's app-manifest flow must leave the browser as a form POST — fetch
+	// the manifest, then submit it to github.com so the app is created under
+	// the user's own account.
+	const connect = useMutation({
+		mutationFn: () => api.get<{ url: string; manifest: Record<string, unknown> }>("/github-app/manifest"),
+		onSuccess: (data) => {
+			const form = document.createElement("form");
+			form.method = "post";
+			form.action = data.url;
+			const input = document.createElement("input");
+			input.type = "hidden";
+			input.name = "manifest";
+			input.value = JSON.stringify(data.manifest);
+			form.appendChild(input);
+			document.body.appendChild(form);
+			form.submit();
+		},
+	});
 
 	return (
 		<>
 			<PageHeader
 				title="Projects"
 				sub="Repositories wired into KERN"
-				actions={<Button size="sm" variant="primary" onClick={() => setCreating((c) => !c)}>New project</Button>}
+				actions={
+					<div className="flex gap-2">
+						<Button size="sm" onClick={() => connect.mutate()} disabled={connect.isPending}>
+							Connect GitHub
+						</Button>
+						<Button size="sm" variant="primary" onClick={() => setCreating((c) => !c)}>New project</Button>
+					</div>
+				}
 			/>
 			{creating && (
 				<Card className="mb-4 p-4">
