@@ -81,7 +81,7 @@ func (s *Server) getProject(c *gin.Context) {
 
 // syncProject discovers workflow files. Local checkouts use the filesystem;
 // projects bound to a GitHub repo are discovered through the contents API
-// (KERN_GITHUB_TOKEN for private repos).
+// (App installation token, else KERN_GITHUB_TOKEN).
 func (s *Server) syncProject(c *gin.Context) {
 	user, _ := currentUser(c)
 	p, err := s.Store.Project(c.Request.Context(), user.OrgID, c.Param("project"))
@@ -160,13 +160,18 @@ func (s *Server) syncProject(c *gin.Context) {
 // stores each file as a compiled workflow version, mirroring the local path.
 func (s *Server) syncProjectGitHub(c *gin.Context, user store.User, p store.Project) {
 	ctx := c.Request.Context()
+	gh, err := s.GH.Client(ctx, p.RepoFullName)
+	if err != nil {
+		fail(c, http.StatusBadGateway, "github_fetch_failed", err.Error())
+		return
+	}
 	ref := firstNonEmpty(p.DefaultBranch, "main")
-	sha, err := s.GH.HeadSHA(ctx, p.RepoFullName, ref)
+	sha, err := gh.HeadSHA(ctx, p.RepoFullName, ref)
 	if err != nil {
 		fail(c, http.StatusBadGateway, "github_fetch_failed", "could not resolve "+ref+": "+err.Error())
 		return
 	}
-	files, err := s.GH.ListWorkflowFiles(ctx, p.RepoFullName, ref)
+	files, err := gh.ListWorkflowFiles(ctx, p.RepoFullName, ref)
 	if err != nil {
 		fail(c, http.StatusBadGateway, "github_fetch_failed", err.Error())
 		return
@@ -183,7 +188,7 @@ func (s *Server) syncProjectGitHub(c *gin.Context, user store.User, p store.Proj
 	}
 	out := []synced{}
 	for _, f := range files {
-		content, err := s.GH.FileContent(ctx, p.RepoFullName, f.Path, sha)
+		content, err := gh.FileContent(ctx, p.RepoFullName, f.Path, sha)
 		if err != nil {
 			s.Log.Error("fetch workflow file", zap.String("path", f.Path), zap.Error(err))
 			continue

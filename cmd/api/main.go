@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -20,7 +19,6 @@ import (
 	"github.com/dvorinka/kern/internal/auth"
 	"github.com/dvorinka/kern/internal/blobs"
 	"github.com/dvorinka/kern/internal/config"
-	"github.com/dvorinka/kern/internal/github"
 	"github.com/dvorinka/kern/internal/orchestrator"
 	"github.com/dvorinka/kern/internal/secrets"
 	"github.com/dvorinka/kern/internal/store"
@@ -95,23 +93,6 @@ func run() int {
 	orch.MaxAttempts = cfg.MaxJobAttempts
 	orch.CacheMaxAge = cfg.CacheMaxAge
 	orch.Blobs = blobStore
-	if cfg.GitHub.StatusToken != "" {
-		gh := github.New(cfg.GitHub.APIBaseURL, cfg.GitHub.StatusToken)
-		orch.PostStatus = func(ctx context.Context, run store.Run, state string) {
-			var src map[string]any
-			_ = json.Unmarshal(run.Source, &src)
-			repo, _ := src["repo_full_name"].(string)
-			if repo == "" || run.SHA == "" {
-				return
-			}
-			target := cfg.PublicBaseURL + "/runs/" + run.ID.String()
-			err := gh.PostCommitStatus(ctx, repo, run.SHA, state,
-				"kern/"+run.WorkflowName, target, "KERN "+run.WorkflowName+": "+state)
-			if err != nil {
-				log.Warn("commit status failed", zap.String("repo", repo), zap.Error(err))
-			}
-		}
-	}
 	srv := api.New(cfg, st, orch, blobStore, cipher, log)
 
 	// The scheduler advances gated runs between job completions.

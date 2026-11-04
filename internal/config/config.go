@@ -59,7 +59,7 @@ func Load() (*Config, error) {
 		PublicBaseURL:  strings.TrimRight(env("KERN_PUBLIC_URL", "http://localhost:8080"), "/"),
 		GitHub: GitHubConfig{
 			AppID:         env("KERN_GITHUB_APP_ID", ""),
-			PrivateKeyPEM: env("KERN_GITHUB_APP_PRIVATE_KEY", ""),
+			PrivateKeyPEM: strings.ReplaceAll(env("KERN_GITHUB_APP_PRIVATE_KEY", ""), `\n`, "\n"),
 			WebhookSecret: env("KERN_GITHUB_WEBHOOK_SECRET", ""),
 			APIBaseURL:    env("KERN_GITHUB_API_URL", "https://api.github.com"),
 			StatusToken:   env("KERN_GITHUB_TOKEN", ""),
@@ -76,6 +76,13 @@ func Load() (*Config, error) {
 		DefaultImage:    env("KERN_DEFAULT_IMAGE", "ubuntu:24.04"),
 	}
 
+	if f := env("KERN_GITHUB_APP_PRIVATE_KEY_FILE", ""); f != "" {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			return nil, fmt.Errorf("KERN_GITHUB_APP_PRIVATE_KEY_FILE: %w", err)
+		}
+		cfg.GitHub.PrivateKeyPEM = string(data)
+	}
 	if len(cfg.SessionSecret) < 32 {
 		if cfg.Env == "development" {
 			cfg.SessionSecret = "dev-only-session-secret-please-change-0123456789"

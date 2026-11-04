@@ -2,6 +2,8 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -27,19 +29,57 @@ type Server struct {
 	Log     *zap.Logger
 	Started time.Time
 	Engine  *gin.Engine
-	GH      *github.Client
+	GH      *github.Resolver
 	limiter *loginLimiter
 }
 
 func New(cfg *config.Config, st *store.Store, orch *orchestrator.Orchestrator, blobStore blobs.Store,
 	cipher *secrets.Cipher, log *zap.Logger) *Server {
+	// App credentials, when present and parseable, outrank the PAT: statuses
+	// and repo reads then run as the GitHub App installation.
+	var app *github.App
+	if cfg.GitHub.AppID != "" && cfg.GitHub.PrivateKeyPEM != "" {
+		a, err := github.NewApp(cfg.GitHub.AppID, cfg.GitHub.PrivateKeyPEM, cfg.GitHub.APIBaseURL)
+		if err != nil {
+			log.Error("github app credentials invalid; falling back to token auth", zap.Error(err))
+		} else {
+			app = a
+		}
+	}
 	s := &Server{
 		Cfg: cfg, Store: st, Orch: orch, Blobs: blobStore, Cipher: cipher,
 		Log: log, Started: time.Now(), limiter: newLoginLimiter(8, time.Minute),
-		GH: github.New(cfg.GitHub.APIBaseURL, cfg.GitHub.StatusToken),
+		GH: &github.Resolver{App: app, PAT: github.New(cfg.GitHub.APIBaseURL, cfg.GitHub.StatusToken)},
 	}
+	s.wireCommitStatus()
 	s.Engine = s.buildRouter()
 	return s
+}
+
+// wireCommitStatus reports each run's state back to GitHub as a commit status,
+// posted as the App installation when configured, else the PAT.
+func (s *Server) wireCommitStatus() {
+	if s.GH.App == nil && s.Cfg.GitHub.StatusToken == "" {
+		return
+	}
+	s.Orch.PostStatus = func(ctx context.Context, run store.Run, state string) {
+		var src map[string]any
+		_ = json.Unmarshal(run.Source, &src)
+		repo, _ := src["repo_full_name"].(string)
+		if repo == "" || run.SHA == "" {
+			return
+		}
+		cl, err := s.GH.Client(ctx, repo)
+		if err != nil {
+			s.Log.Warn("github client", zap.String("repo", repo), zap.Error(err))
+			return
+		}
+		target := s.Cfg.PublicBaseURL + "/runs/" + run.ID.String()
+		if err := cl.PostCommitStatus(ctx, repo, run.SHA, state,
+			"kern/"+run.WorkflowName, target, "KERN "+run.WorkflowName+": "+state); err != nil {
+			s.Log.Warn("commit status failed", zap.String("repo", repo), zap.Error(err))
+		}
+	}
 }
 
 func (s *Server) buildRouter() *gin.Engine {
