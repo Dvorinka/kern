@@ -1,6 +1,6 @@
 module github.com/dvorinka/kern
 
-go 1.24.0
+go 1.26.0
 
 require (
 	github.com/bmatcuk/doublestar/v4 v4.10.4
@@ -10,7 +10,8 @@ require (
 	github.com/pressly/goose/v3 v3.26.0
 	go.uber.org/zap v1.27.0
 	golang.org/x/crypto v0.42.0
-	golang.org/x/sys v0.36.0
+	golang.org/x/sys v0.49.0
+	golang.org/x/term v0.47.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 

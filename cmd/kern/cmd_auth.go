@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"golang.org/x/sys/unix"
+	"golang.org/x/term"
 )
 
 // readPassword prompts on stderr and reads a line from stdin with echo off
@@ -15,18 +15,15 @@ import (
 func readPassword(prompt string) (string, error) {
 	fmt.Fprint(os.Stderr, prompt)
 	fd := int(os.Stdin.Fd())
-	var old *unix.Termios
-	if t, err := unix.IoctlGetTermios(fd, unix.TCGETS); err == nil {
-		old = t
-		n := *t
-		n.Lflag &^= unix.ECHO
-		_ = unix.IoctlSetTermios(fd, unix.TCSETS, &n)
+	if term.IsTerminal(fd) {
+		b, err := term.ReadPassword(fd)
+		fmt.Fprintln(os.Stderr)
+		if err != nil {
+			return "", fmt.Errorf("read password: %w", err)
+		}
+		return string(b), nil
 	}
 	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
-	if old != nil {
-		_ = unix.IoctlSetTermios(fd, unix.TCSETS, old)
-		fmt.Fprintln(os.Stderr)
-	}
 	if err != nil && line == "" {
 		return "", fmt.Errorf("read password: %w", err)
 	}
