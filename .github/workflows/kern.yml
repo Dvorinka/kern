@@ -20,6 +20,9 @@ jobs:
       GOMODCACHE: /kern/cache/gomod
       GOPATH: /kern/cache/gopath
       GOTMPDIR: /github/cmd/gotmp
+      # VCS stamping needs git access to .git; ownership differs inside the
+      # GHA job container and KERN doesn't rely on it anyway.
+      GOFLAGS: -buildvcs=false
     steps:
       # KERN performs checkout natively and treats this step as a no-op; GitHub
       # Actions needs it to materialise the workspace.
