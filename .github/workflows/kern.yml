@@ -11,13 +11,21 @@ jobs:
     container:
       image: golang:1.26
     env:
-      # job containers are read-only and /tmp is a small tmpfs; keep Go's
-      # caches and build dir on the /github/cmd bind mount (host disk)
+      # job containers are read-only and /tmp is a small tmpfs; Go dirs live on
+      # the /github/cmd bind mount. GOMODCACHE stays workspace-relative so
+      # actions/cache can persist it between runs.
       GOCACHE: /github/cmd/gocache
-      GOMODCACHE: /github/cmd/gomod
+      GOMODCACHE: .gomod
       GOPATH: /github/cmd/gopath
       GOTMPDIR: /github/cmd/gotmp
     steps:
+      - uses: actions/cache@v4
+        id: modcache
+        with:
+          key: kern-go-mod-${{ hashFiles('go.sum') }}
+          path: .gomod
+          restore-keys: |
+            kern-go-mod-
       - name: prep Go dirs
         run: mkdir -p "$GOTMPDIR" "$GOCACHE" "$GOMODCACHE" "$GOPATH"
       - name: build
