@@ -1,0 +1,191 @@
+package workflows
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestCompilePlanCarriesExecutionFields(t *testing.T) {
+	src := `name: Ship
+on: push
+env:
+  SHARED: root
+  OVER: workflow
+defaults:
+  run:
+    shell: bash
+    working-directory: /src
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    continue-on-error: true
+    outputs:
+      bin: ${{ steps.make.outputs.bin }}
+    env:
+      OVER: job
+      N: 2
+    container: golang:1.26
+    defaults:
+      run:
+        working-directory: /src/cmd
+    steps:
+      - uses: actions/checkout@v4
+      - id: make
+        run: make
+        timeout-minutes: 1.5
+        continue-on-error: true
+        working-directory: /src/cmd/kern
+        shell: sh
+      - run: echo hi
+  test:
+    needs: build
+    if: always()
+    runs-on: [linux-x64]
+    steps:
+      - name: Go
+        run: go test ./...
+`
+	res, err := Compile(src, testCompiler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Valid {
+		t.Fatalf("diagnostics: %+v", res.Diagnostics)
+	}
+	if res.Plan.Concurrency != "ci-${{ github.ref }}" || !res.Plan.CancelInProgress {
+		t.Fatalf("concurrency = %q cancel=%v", res.Plan.Concurrency, res.Plan.CancelInProgress)
+	}
+	build := findJob(t, res, "build")
+	if build.TimeoutSeconds != 120 || !build.ContinueOnError {
+		t.Fatalf("build timeout/coe = %d %v", build.TimeoutSeconds, build.ContinueOnError)
+	}
+	if build.Image != "golang:1.26" {
+		t.Fatalf("container image = %q", build.Image)
+	}
+	if build.Outputs["bin"] != "${{ steps.make.outputs.bin }}" {
+		t.Fatalf("outputs = %v", build.Outputs)
+	}
+	if build.Env["SHARED"] != "root" || build.Env["OVER"] != "job" || build.Env["N"] != "2" {
+		t.Fatalf("env = %v", build.Env)
+	}
+	if len(build.Steps) != 3 {
+		t.Fatalf("steps = %d", len(build.Steps))
+	}
+	checkout := build.Steps[0]
+	if checkout.Name != "Run actions/checkout@v4" || checkout.Shell != "bash" || checkout.WorkingDirectory != "/src/cmd" {
+		t.Fatalf("checkout = %+v", checkout)
+	}
+	makeStep := build.Steps[1]
+	if makeStep.ID != "make" || makeStep.TimeoutSeconds != 90 || !makeStep.ContinueOnError {
+		t.Fatalf("make step = %+v", makeStep)
+	}
+	if makeStep.Shell != "sh" || makeStep.WorkingDirectory != "/src/cmd/kern" {
+		t.Fatalf("make step overrides = %+v", makeStep)
+	}
+	if build.Steps[2].TimeoutSeconds != 0 || build.Steps[2].Name != "echo hi" {
+		t.Fatalf("plain step = %+v", build.Steps[2])
+	}
+	testJob := findJob(t, res, "test")
+	if testJob.TimeoutSeconds != 3600 {
+		t.Fatalf("default timeout = %d, want 3600", testJob.TimeoutSeconds)
+	}
+	if len(testJob.Needs) != 1 || testJob.Needs[0] != "build" || testJob.If != "always()" {
+		t.Fatalf("test job = %+v", testJob)
+	}
+	if testJob.Image != "ubuntu:24.04" || testJob.Steps[0].Name != "Go" || testJob.Steps[0].Shell != "bash" {
+		t.Fatalf("test step = %+v image %q", testJob.Steps[0], testJob.Image)
+	}
+}
+
+func TestCompileConcurrencyWithoutGroupWarns(t *testing.T) {
+	src := `on: push
+concurrency:
+  cancel-in-progress: true
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo a
+`
+	res, err := Compile(src, testCompiler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Valid || !res.Plan.CancelInProgress || res.Plan.Concurrency != "" {
+		t.Fatalf("plan valid=%v concurrency=%q cancel=%v", res.Valid, res.Plan.Concurrency, res.Plan.CancelInProgress)
+	}
+	if !hasDiagnostic(res, "concurrency") {
+		t.Fatalf("expected concurrency warning, got %+v", res.Diagnostics)
+	}
+}
+
+func TestCompileContainerAndReusableWorkflow(t *testing.T) {
+	src := `on: push
+jobs:
+  boxed:
+    runs-on: ubuntu-latest
+    container:
+      image: alpine:3.20
+      credentials: {username: u}
+    steps:
+      - run: echo a
+  call:
+    uses: org/repo/.github/workflows/x.yml@main
+`
+	res, err := Compile(src, testCompiler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Valid {
+		t.Fatal("reusable workflow should be invalid")
+	}
+	if !hasDiagnostic(res, "reusable-workflow") {
+		t.Fatalf("diagnostics: %+v", res.Diagnostics)
+	}
+	boxed := findJob(t, res, "boxed")
+	if boxed.Image != "alpine:3.20" {
+		t.Fatalf("container.image = %q", boxed.Image)
+	}
+	if !hasDiagnostic(res, "job-container") {
+		t.Fatalf("expected ignored container option, got %+v", res.Diagnostics)
+	}
+}
+
+func TestCompileRunLineTruncates(t *testing.T) {
+	long := "echo " + strings.Repeat("a", 90)
+	res, err := Compile("on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: "+long+"\n", testCompiler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Valid {
+		t.Fatalf("diagnostics: %+v", res.Diagnostics)
+	}
+	name := res.Plan.Jobs[0].Steps[0].Name
+	if len(name) != 80 || name[77:] != "..." {
+		t.Fatalf("name = %q len %d", name, len(name))
+	}
+}
+
+func findJob(t *testing.T, res Result, id string) JobPlan {
+	t.Helper()
+	for _, j := range res.Plan.Jobs {
+		if j.JobID == id || j.Key == id {
+			return j
+		}
+	}
+	t.Fatalf("no job %s", id)
+	return JobPlan{}
+}
+
+func hasDiagnostic(res Result, code string) bool {
+	for _, d := range res.Diagnostics {
+		if d.Code == code {
+			return true
+		}
+	}
+	return false
+}
