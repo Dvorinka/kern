@@ -55,6 +55,26 @@ func (s *Store) Projects(ctx context.Context, orgID uuid.UUID) ([]Project, error
 	return out, rows.Err()
 }
 
+// ProjectsByRepoFullName finds projects bound to a provider repo across orgs.
+// Webhook deliveries are instance-level, so the match is not org-scoped.
+func (s *Store) ProjectsByRepoFullName(ctx context.Context, fullName string) ([]Project, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+projectColumns+` FROM projects WHERE repo_full_name = $1`, fullName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Project{}
+	for rows.Next() {
+		p, err := scanProject(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) Project(ctx context.Context, orgID uuid.UUID, id string) (Project, error) {
 	uid, err := uuid.Parse(id)
 	if err != nil {

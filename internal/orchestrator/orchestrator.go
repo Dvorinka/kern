@@ -29,8 +29,31 @@ type Orchestrator struct {
 	StaleRunnerTimeout time.Duration
 	// CacheMaxAge evicts cache entries untouched for this long (GitHub: 7 days).
 	// Zero disables the sweep.
-	CacheMaxAge       time.Duration
+	CacheMaxAge time.Duration
+	// PostStatus, when set, reports a run's GitHub commit status. It is called
+	// with "pending" at run creation and a terminal state on completion.
+	PostStatus        func(ctx context.Context, run store.Run, state string)
 	lastScheduleCheck time.Time
+}
+
+// reportStatus invokes PostStatus when configured; reporting failures are
+// logged by the callback's owner, not retried here.
+func (o *Orchestrator) reportStatus(ctx context.Context, run store.Run, state string) {
+	if o.PostStatus != nil {
+		o.PostStatus(ctx, run, state)
+	}
+}
+
+// conclusionState maps a run conclusion to a GitHub commit status state.
+func conclusionState(conclusion string) string {
+	switch conclusion {
+	case "success", "skipped":
+		return "success"
+	case "failure":
+		return "failure"
+	default:
+		return "error"
+	}
 }
 
 func New(st *store.Store, log *zap.Logger, compiler workflows.Compiler) *Orchestrator {
@@ -86,7 +109,12 @@ func (o *Orchestrator) StartRun(ctx context.Context, p store.CreateRunParams) (s
 		}
 		seeds = append(seeds, seed)
 	}
-	return o.Store.CreateRun(ctx, p, seeds)
+	run, err := o.Store.CreateRun(ctx, p, seeds)
+	if err != nil {
+		return store.Run{}, err
+	}
+	o.reportStatus(ctx, run, "pending")
+	return run, nil
 }
 
 // Tick advances every active run. Safe to call concurrently from one process; the
@@ -204,7 +232,15 @@ func (o *Orchestrator) AdvanceRun(ctx context.Context, runID uuid.UUID) error {
 		}
 	}
 
-	return o.Store.FinishRunIfDone(ctx, runID)
+	if err := o.Store.FinishRunIfDone(ctx, runID); err != nil {
+		return err
+	}
+	// The run may have just reached a terminal state in this call; report the
+	// commit status once, on the transition.
+	if updated, err := o.Store.Run(ctx, runID); err == nil && updated.Status == "completed" {
+		o.reportStatus(ctx, updated, conclusionState(updated.Conclusion))
+	}
+	return nil
 }
 
 // NeedsMap builds the needs.* expression context (result + outputs) from run

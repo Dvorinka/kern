@@ -12,6 +12,7 @@ import (
 
 	"github.com/dvorinka/kern/internal/blobs"
 	"github.com/dvorinka/kern/internal/config"
+	"github.com/dvorinka/kern/internal/github"
 	"github.com/dvorinka/kern/internal/orchestrator"
 	"github.com/dvorinka/kern/internal/secrets"
 	"github.com/dvorinka/kern/internal/store"
@@ -26,6 +27,7 @@ type Server struct {
 	Log     *zap.Logger
 	Started time.Time
 	Engine  *gin.Engine
+	GH      *github.Client
 	limiter *loginLimiter
 }
 
@@ -34,6 +36,7 @@ func New(cfg *config.Config, st *store.Store, orch *orchestrator.Orchestrator, b
 	s := &Server{
 		Cfg: cfg, Store: st, Orch: orch, Blobs: blobStore, Cipher: cipher,
 		Log: log, Started: time.Now(), limiter: newLoginLimiter(8, time.Minute),
+		GH: github.New(cfg.GitHub.APIBaseURL, cfg.GitHub.StatusToken),
 	}
 	s.Engine = s.buildRouter()
 	return s

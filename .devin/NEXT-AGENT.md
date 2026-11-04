@@ -52,10 +52,16 @@ in the repo. Work autonomously; the user trusts verification over claims.
   `cmd/kern/cmd_auth.go` used `unix.TCGETS/TCSETS` (Linux-only ioctls).
   Fixed with `golang.org/x/term` (`term.ReadPassword` + `IsTerminal` piped
   fallback), commit `8c36fac` on master, `v0.1.1` tagged + pushed.
+- `kern exec` SHIPPED `d88ec56` + docs `f3a29b2`: source bundle upload
+  (`PUT /projects/:p/source`), `bundle_ref` trigger field, runner-side
+  `GET /runners/jobs/:jobID/source`, checkout-by-untar replaces git clone,
+  CLI streams logs and `--pull`s artifacts. Verified live on demo run #3.
 - **In flight**: release.yml run for `v0.1.1` on the fleet — verify with
   `gh run list --repo Dvorinka/kern --workflow release.yml` then
   `gh release view v0.1.1`. Expect: 4 bin tarballs + SHA256SUMS on the GH
-  release, ghcr.io/dvorinka/kern-{api,runner}:v0.1.1 + :latest.
+  release, ghcr.io/dvorinka/kern-{api,runner}:v0.1.1 + :latest. NOTE: a
+  dependabot PR batch (checkout/setup-go/setup-node 4→7, go_modules) is
+  occupying the fleet — release jobs queue behind CI, they are not stuck.
 - User directive: work autonomously in a loop — build, monitor, improve, do not stop.
 
 ## Priority queue — pick the deepest self-contained vertical first
@@ -64,14 +70,10 @@ in the repo. Work autonomously; the user trusts verification over claims.
    on a downloaded tarball reports v0.1.1. If the matrix breaks again, fix,
    tag next patch. Also delete the stale `v0.1.0` tag/artifacts if images
    published under it look confusing — user's call if unsure, otherwise leave.
-2. **`kern exec` offload** (user's top ask — "laptop too weak, offload job to fleet,
-   see it live locally, get results back"): implemented as
-   `PUT /projects/:p/source` (session, tar.gz → blob `sources/<project>/<uuid>.tar.gz`)
-   → trigger run with `source.bundle_ref` → runner `GET /runners/jobs/:jobID/source`
-   (downloads+untars instead of git clone) → `kern exec` CLI (upload, trigger,
-   stream logs live via SSE, `--pull <dir>` fetches artifacts after). For docker
-   builds: workflow saves image tar via upload-artifact; `docker load` locally —
-   document in docs/remote-exec.md (design already written there).
+2. **`kern exec` offload — DONE** (`d88ec56`, verified live). Remaining polish:
+   content-addressed bundle dedupe, Ctrl-C → run-cancel passthrough, compose
+   wrapper. For docker builds the workflow saves an image tar via
+   upload-artifact; `docker load` locally — pattern in docs/remote-exec.md.
 3. **M4-lite GitHub integration via `gh`** — repo webhook on Dvorinka/kern via
    `gh api /repos/Dvorinka/kern/hooks` → `POST /api/v1/webhooks/github` (HMAC
    verify + delivery persistence already exist server-side); public ingress via

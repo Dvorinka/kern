@@ -95,8 +95,13 @@ func (s *Server) githubWebhook(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"duplicate": true})
 		return
 	}
-	s.Log.Info("github webhook received", zap.String("event", event), zap.String("delivery", delivery))
-	c.JSON(http.StatusAccepted, gin.H{"delivery": delivery, "event": event})
+	status, detail := s.processGithubDelivery(c, delivery, event, body)
+	if err := s.Store.MarkWebhookProcessed(c.Request.Context(), delivery, status, detail); err != nil {
+		s.Log.Error("mark webhook processed", zap.Error(err))
+	}
+	s.Log.Info("github webhook received", zap.String("event", event),
+		zap.String("delivery", delivery), zap.String("status", status), zap.String("detail", detail))
+	c.JSON(http.StatusAccepted, gin.H{"delivery": delivery, "event": event, "status": status, "detail": detail})
 }
 
 func validSignature(secret string, body []byte, header string) bool {

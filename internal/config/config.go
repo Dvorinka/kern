@@ -39,6 +39,9 @@ type GitHubConfig struct {
 	PrivateKeyPEM string
 	WebhookSecret string
 	APIBaseURL    string
+	// StatusToken is a PAT used for the token-based (M4-lite) integration:
+	// commit statuses and, for private repos, workflow discovery.
+	StatusToken string
 }
 
 // Load reads configuration and validates the required values.
@@ -59,6 +62,7 @@ func Load() (*Config, error) {
 			PrivateKeyPEM: env("KERN_GITHUB_APP_PRIVATE_KEY", ""),
 			WebhookSecret: env("KERN_GITHUB_WEBHOOK_SECRET", ""),
 			APIBaseURL:    env("KERN_GITHUB_API_URL", "https://api.github.com"),
+			StatusToken:   env("KERN_GITHUB_TOKEN", ""),
 		},
 		RunnerJoinToken: env("KERN_RUNNER_JOIN_TOKEN", "kern-runner-join"),
 		RunnerTokenTTL:  duration("KERN_RUNNER_TOKEN_TTL", 24*time.Hour),

@@ -79,8 +79,9 @@ func (s *Server) getProject(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"project": p, "workflows": wfs})
 }
 
-// syncProject discovers workflow files. Local checkouts are supported today; GitHub
-// discovery arrives with the GitHub App integration (M4) and reports a clear 501 until then.
+// syncProject discovers workflow files. Local checkouts use the filesystem;
+// projects bound to a GitHub repo are discovered through the contents API
+// (KERN_GITHUB_TOKEN for private repos).
 func (s *Server) syncProject(c *gin.Context) {
 	user, _ := currentUser(c)
 	p, err := s.Store.Project(c.Request.Context(), user.OrgID, c.Param("project"))
@@ -89,8 +90,12 @@ func (s *Server) syncProject(c *gin.Context) {
 		return
 	}
 	if p.LocalPath == "" {
+		if p.RepoFullName != "" {
+			s.syncProjectGitHub(c, user, p)
+			return
+		}
 		fail(c, http.StatusNotImplemented, "github_not_configured",
-			"GitHub workflow discovery requires a configured GitHub App (M4); set local_path for local discovery")
+			"GitHub workflow discovery requires repo_full_name on the project (or local_path for local discovery)")
 		return
 	}
 	info, err := os.Stat(p.LocalPath)
@@ -148,6 +153,58 @@ func (s *Server) syncProject(c *gin.Context) {
 		out = append(out, synced{Path: rel, Name: res.Name, Valid: res.Valid, Diagnostics: res.Diagnostics})
 	}
 	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "project.sync", p.Slug)
+	c.JSON(http.StatusOK, gin.H{"sha": sha, "workflows": out})
+}
+
+// syncProjectGitHub discovers .github/workflows via the GitHub contents API and
+// stores each file as a compiled workflow version, mirroring the local path.
+func (s *Server) syncProjectGitHub(c *gin.Context, user store.User, p store.Project) {
+	ctx := c.Request.Context()
+	ref := firstNonEmpty(p.DefaultBranch, "main")
+	sha, err := s.GH.HeadSHA(ctx, p.RepoFullName, ref)
+	if err != nil {
+		fail(c, http.StatusBadGateway, "github_fetch_failed", "could not resolve "+ref+": "+err.Error())
+		return
+	}
+	files, err := s.GH.ListWorkflowFiles(ctx, p.RepoFullName, ref)
+	if err != nil {
+		fail(c, http.StatusBadGateway, "github_fetch_failed", err.Error())
+		return
+	}
+	if len(files) == 0 {
+		fail(c, http.StatusBadRequest, "no_workflows", "no .github/workflows directory in "+p.RepoFullName)
+		return
+	}
+	type synced struct {
+		Path        string                 `json:"path"`
+		Name        string                 `json:"name"`
+		Valid       bool                   `json:"valid"`
+		Diagnostics []workflows.Diagnostic `json:"diagnostics"`
+	}
+	out := []synced{}
+	for _, f := range files {
+		content, err := s.GH.FileContent(ctx, p.RepoFullName, f.Path, sha)
+		if err != nil {
+			s.Log.Error("fetch workflow file", zap.String("path", f.Path), zap.Error(err))
+			continue
+		}
+		res, err := workflows.Compile(content, s.Orch.Compiler)
+		if err != nil {
+			s.Log.Error("compile workflow during sync", zap.Error(err))
+			continue
+		}
+		wf, err := s.Store.UpsertWorkflow(ctx, p.ID, f.Path, res.Name)
+		if err != nil {
+			s.internalError(c, err)
+			return
+		}
+		if _, err := s.Store.PutWorkflowVersion(ctx, wf.ID, sha, content, res.Plan, res.Valid, res.Diagnostics); err != nil {
+			s.internalError(c, err)
+			return
+		}
+		out = append(out, synced{Path: f.Path, Name: res.Name, Valid: res.Valid, Diagnostics: res.Diagnostics})
+	}
+	s.Store.Audit(ctx, user.OrgID, &user.ID, "project.sync", p.Slug)
 	c.JSON(http.StatusOK, gin.H{"sha": sha, "workflows": out})
 }
 
