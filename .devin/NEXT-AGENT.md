@@ -18,7 +18,11 @@ in the repo. Work autonomously; the user trusts verification over claims.
 
 ## Verified state (do not re-audit unless suspicious)
 
-- M0–M3 done; W1–W5 done (kern CLI, enrollment, fleet metrics, split, self-heal+diagnosis).
+- M0–M4 done; W1–W5 done (kern CLI, enrollment, fleet metrics, split, self-heal+diagnosis).
+- M4: GitHub App auth (JWT→installation tokens, `github.Resolver` +
+  `Server.githubClient` cascade env-app → org-apps → PAT), pull_request events
+  (head-SHA runs, fork trust), github_apps table + manifest flow, multi-secret
+  webhook HMAC. Migration 0007.
 - M5 partial: artifacts native, job container.image, concurrency cancel-in-progress,
   actions/cache (+restore/save, restore-keys, deferred save), needs.*.outputs,
   hashFiles (step level), on:schedule cron, artifact expiry sweep (90d),
@@ -117,20 +121,34 @@ in the repo. Work autonomously; the user trusts verification over claims.
 
 ## HANDOFF — path to "fully functional / real-environment ready"
 
-Verified green today: `kern exec` offload, M4-lite (push webhook→run→commit
-status via token), v0.1.2 release (4 tarballs + SHA256SUMS + GHCR images),
-KERN CI dogfood loop (kern.yml green on every push, status posted).
-GitHub App exists: kern-ci (app_id 5607782, installation 178470896, pem in
-~/Downloads, api env already carries APP_ID+PRIVATE_KEY).
+M4 — DONE (2026-11-04, commits 42b801c + a526fb9):
+- GitHub App auth live: RS256 JWT → installation access tokens (cached per
+  installation), repo → installation resolved + cached. Verified: commit
+  statuses posted by `kern-ci[bot]` on master pushes and PR heads.
+- pull_request events live: head-SHA runs, `refs/pull/N/head` ref, fork heads
+  → trust `fork` (no secrets, own cache scope, checkout from head repo),
+  same-repo PRs → `pull_request`; default action set + types/branches filters.
+  Verified: PR #9 run green, `kern/KERN CI: success` on its head sha.
+- Manifest flow shipped: github_apps table (mig 0007, pem+secret encrypted
+  bytea), GET /github-app/manifest + /github-app/callback (session-gated,
+  302→install), multi-secret webhook verification, env-app → org-apps → PAT
+  cascade. "Connect GitHub" button on the projects page. NOT yet verified
+  end-to-end in a browser (needs a human click through github.com; also needs
+  KERN_PUBLIC_URL set to a public URL or the hook URL will be localhost).
+- api env gotcha fixed: multi-line PEM doesn't survive shell exports —
+  KERN_GITHUB_APP_PRIVATE_KEY_FILE added (running api uses it); inline PEM
+  accepts literal \n.
+- Hook 707211794 now subscribes push + pull_request. The App's own webhook
+  also delivers check_run/check_suite (ignored, recorded).
+- Dogfood fix: kern.yml GOMODCACHE must be absolute — /github/workspace/.gomod.
+- New trap seen: runner concurrency 2 × go builds in Docker Desktop VM pushed
+  host load >40 → api heartbeats took 14-32s. Not a bug — KERN_RUNNER_CONCURRENCY
+  caps it. Parallel job caps belongs in the perf work.
 
 Remaining work, ordered by value:
 
-1. M4 finish — JWT sign with pem → POST /app/installations/:id/access_tokens →
-   statuses/check-runs posted as the App (drop PAT). pull_request event handling
-   in processGithubDelivery (checkout head_sha, secrets withheld on fork runs).
-   github_apps table + manifest-flow "Connect GitHub" button so every user
-   self-serves an App (form POST manifest→settings/apps/new→callback converts
-   code→id/pem/secret→install redirect).
+1. Check-runs as the App (currently commit statuses only); pull_request_target
+   strict semantics; first-time-contributor approval gate for fork PRs.
 2. Correctness gaps — pull_request/checkout ref semantics, timeout-minutes,
    step-level `if:`, concurrency-group cancel across triggers, continue-on-error.
 3. Performance (the user's next ask) — persistent runner-side caches so warm
