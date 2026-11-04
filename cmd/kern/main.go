@@ -64,7 +64,7 @@ Environments:
   deployments approve|reject <job-id>
 
 Advisory:
-  split --pattern GLOB --shards N [--root DIR]   suggest matrix shards
+  split --pattern GLOB --shards N [--root DIR]   suggest strategy.split and file buckets
 
 Globals: --server, --token, --project override config and KERN_SERVER,
 KERN_TOKEN, KERN_PROJECT env vars. --json prints raw JSON.

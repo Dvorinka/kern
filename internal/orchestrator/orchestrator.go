@@ -109,11 +109,17 @@ func (o *Orchestrator) StartRun(ctx context.Context, p store.CreateRunParams) (s
 			OutputsSpec:     jp.Outputs,
 			Environment:     jp.Environment,
 			EnvironmentURL:  jp.EnvironmentURL,
+			SplitN:          jp.SplitN,
+			SplitAuto:       jp.SplitAuto,
 		}
 		for _, sp := range jp.Steps {
 			seed.Steps = append(seed.Steps, store.StepSeed{Key: sp.ID, Name: sp.Name, Spec: sp})
 		}
 		seeds = append(seeds, seed)
+	}
+	seeds, err = o.expandRunSplits(ctx, p.ProjectID, seeds)
+	if err != nil {
+		return store.Run{}, err
 	}
 	run, err := o.Store.CreateRun(ctx, p, seeds)
 	if err != nil {

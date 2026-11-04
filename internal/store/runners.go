@@ -70,6 +70,24 @@ func (s *Store) RunnerByToken(ctx context.Context, tokenHash string) (Runner, er
 	return r, err
 }
 
+// FleetSlots sums CPUs of online, non-draining runners whose labels can run
+// runsOn. A runner with cpus < 1 counts as one. Zero matching runners returns 0.
+func (s *Store) FleetSlots(ctx context.Context, orgID uuid.UUID, runsOn []string) (int, error) {
+	if runsOn == nil {
+		runsOn = []string{}
+	}
+	var n int
+	err := s.pool.QueryRow(ctx, `
+		SELECT COALESCE(SUM(GREATEST(cpus, 1)), 0)::int
+		FROM runners
+		WHERE org_id = $1
+		  AND status = 'online'
+		  AND NOT draining
+		  AND $2::text[] <@ (labels || ARRAY['self-hosted', 'kern']::text[])`,
+		orgID, runsOn).Scan(&n)
+	return n, err
+}
+
 func (s *Store) Runners(ctx context.Context, orgID uuid.UUID) ([]Runner, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+runnerCols+` FROM runners WHERE org_id = $1 ORDER BY created_at DESC`, orgID)

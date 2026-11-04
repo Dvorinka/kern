@@ -28,6 +28,7 @@ never silently ignored.
 | `needs` DAG | done | cycle detection at compile; gating in orchestrator |
 | `strategy.matrix` incl. `include`/`exclude` | done | 256-combination cap |
 | `strategy.fail-fast` | done | cancels pending matrix siblings on failure |
+| `strategy.split` | done | opt-in integer 1–32 or `auto`. Expanded at run start into N jobs that share a job key, so fail-fast and `needs` wait for every shard. Each shard checks out on its own runner and receives `KERN_SHARD` (1-based), `KERN_SHARDS`, and `matrix.shard`. `auto` sums CPUs of online runners whose labels cover `runs-on` (a runner reporting under 1 CPU counts as 1), capped at 16; zero runners yields one shard. The product with the matrix width stays ≤ 256. Refuses `environment` and a matrix axis named `shard`. Shard outputs merge last-wins. A script that ignores `KERN_SHARD` runs the whole job N times. `kern split` prints the key and the file buckets |
 | `if:` on jobs | done | evaluated server-side with `needs.*` results; implicit `success()` when no status function is used |
 | `if:` on steps | done | evaluated on the runner with `steps.*`, status functions; implicit `success()` when none is used |
 | `env` (workflow/job/step) | done | merged; expressions interpolated |

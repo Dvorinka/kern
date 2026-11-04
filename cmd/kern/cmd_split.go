@@ -9,9 +9,9 @@ import (
 	"github.com/bmatcuk/doublestar/v4"
 )
 
-// cmdSplit is a plan-time advisory (W4): it partitions the files matching a
-// glob into N deterministic shards and prints the matrix snippet to paste into
-// a workflow. Sharding by file hash keeps shards stable as files come and go.
+// cmdSplit partitions the files matching a glob into N stable hash buckets and
+// prints strategy.split. Each shard is a full job that sees KERN_SHARD (1-based)
+// and KERN_SHARDS; the script partitions the work.
 func (c *cli) cmdSplit(args []string) error {
 	opts, _ := parseFlags(args, "pattern", "shards", "root")
 	if opts["pattern"] == "" {
@@ -44,14 +44,8 @@ func (c *cli) cmdSplit(args []string) error {
 		indices[i] = i + 1
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "strategy:\n  fail-fast: false\n  matrix:\n    shard: [")
-	for i, v := range indices {
-		if i > 0 {
-			b.WriteString(", ")
-		}
-		fmt.Fprintf(&b, "%d", v)
-	}
-	b.WriteString("]\n")
+	fmt.Fprintf(&b, "strategy:\n  split: %d\n", shards)
+	b.WriteString("# Each copy gets KERN_SHARD (1-based) and KERN_SHARDS. Partition the work on those.\n")
 	fmt.Fprintf(&b, "# %d files across %d shards:\n", len(matches), shards)
 	for i, files := range buckets {
 		sort.Strings(files)
@@ -59,6 +53,8 @@ func (c *cli) cmdSplit(args []string) error {
 	}
 	if c.json {
 		printJSON(map[string]any{
+			"split":  shards,
+			"env":    []string{"KERN_SHARD", "KERN_SHARDS"},
 			"shards": indices,
 			"buckets": func() map[string][]string {
 				m := map[string][]string{}

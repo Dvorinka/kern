@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -40,14 +41,14 @@ Flags (each has an environment fallback, listed with it):
   --config path         env file written by 'join'; loaded like environment (KERN_RUNNER_CONFIG)
   --name name           runner name, defaults to hostname (KERN_RUNNER_NAME)
   --labels a,b,c        extra matching labels (KERN_RUNNER_LABELS)
-  --concurrency n       concurrent jobs on this host (KERN_RUNNER_CONCURRENCY)
+  --concurrency n       concurrent jobs on this host (KERN_RUNNER_CONCURRENCY, default one per CPU)
   --work-root dir       scratch directory (KERN_WORK_ROOT, default /tmp/kern-runner)
   --env level           development | production (KERN_ENV)
 
 Environment only:
   KERN_RUNNER_LOAD_GATE     pause claims while loadavg1 > n * cpu count (0=off)
   KERN_RUNNER_IMAGE_MAX_AGE GC pulled job images unused this long (default 168h, 0=off)
-  KERN_JOB_CPUS / KERN_JOB_MEMORY   per-job container limits
+  KERN_JOB_CPUS / KERN_JOB_MEMORY   per-job container limits (unset CPUs share the host)
 
 join flags:
   --env-file path       credential file destination (default ~/.config/kern-runner/env)
@@ -214,14 +215,15 @@ func main() {
 }
 
 func agentConfig(o options) runner.Config {
+	workers, cpus := runner.SizeWorkers(runtime.NumCPU(), o.concurrency, os.Getenv("KERN_JOB_CPUS"))
 	cfg := runner.Config{
 		ControlURL:    o.control,
 		JoinToken:     o.joinToken,
 		Name:          o.name,
 		Labels:        o.labels,
 		WorkRoot:      o.workRoot,
-		Concurrency:   maxInt(o.concurrency, 1),
-		JobCPUs:       os.Getenv("KERN_JOB_CPUS"),
+		Concurrency:   workers,
+		JobCPUs:       cpus,
 		JobMemory:     os.Getenv("KERN_JOB_MEMORY"),
 		LeaseDuration: 90 * time.Second,
 	}
@@ -385,11 +387,4 @@ func writeUserUnit(exe, envFile string) (string, error) {
 		return "", err
 	}
 	return path, nil
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

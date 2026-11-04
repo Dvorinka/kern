@@ -47,7 +47,7 @@ Each job runs in one ephemeral container created with:
 
 - `--user 1000:1000`, `--cap-drop ALL`, `no-new-privileges`
 - read-only root filesystem; `tmpfs` for `/tmp` and `/run` (noexec, nosuid)
-- `--memory`/`--cpus` limits (`KERN_JOB_MEMORY`, `KERN_JOB_CPUS`)
+- `--memory`/`--cpus` limits (`KERN_JOB_MEMORY`, `KERN_JOB_CPUS`; unset CPUs are an equal share of the host, so concurrency 1 gives the job every CPU)
 - mounts: workspace, `/github/cmd` (file commands), `/kern/scripts` (read-only)
 - no host Docker socket
 
