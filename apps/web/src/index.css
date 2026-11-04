@@ -2,45 +2,63 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* KERN Console — the product surface.
+   Warm-black ops console: hairlines, sharp corners, dot-grid texture,
+   a gold signal accent and phosphor status hues. Dark is the brand;
+   light is a functional variant, not the identity. */
+
 :root {
-	--bg: #fafafa;
-	--bg-raised: #ffffff;
-	--bg-subtle: #f4f4f5;
-	--border: #e4e4e7;
-	--border-strong: #d4d4d8;
-	--text: #18181b;
-	--text-muted: #71717a;
-	--text-faint: #a1a1aa;
-	--accent: #2563eb;
-	--accent-soft: #eff6ff;
-	--ok: #16a34a;
-	--ok-soft: #f0fdf4;
-	--err: #dc2626;
-	--err-soft: #fef2f2;
-	--warn: #d97706;
-	--warn-soft: #fffbeb;
-	--run: #7c3aed;
-	--mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
+	--bg: #f4f3ef;
+	--bg-raised: #fbfaf7;
+	--bg-subtle: #eceae3;
+	--bg-inset: #e5e3da;
+	--border: #d9d6ca;
+	--border-strong: #bfbba9;
+	--text: #1c1b17;
+	--text-muted: #6b675c;
+	--text-faint: #a09b8b;
+	--accent: #b07c0d;
+	--accent-bright: #8f660a;
+	--accent-soft: #f3e8c8;
+	--accent-ink: #171300;
+	--ok: #188a4e;
+	--ok-soft: #d9eeda;
+	--err: #c93a2e;
+	--err-soft: #f6ddd9;
+	--warn: #c05f10;
+	--warn-soft: #f6e3cd;
+	--run: #6d5bd0;
+	--run-soft: #e2ddf5;
+	--rail: #17181a;
+	--rail-text: #d8d5cd;
+	--mono: "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
+	--sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
 .dark {
-	--bg: #0a0a0b;
-	--bg-raised: #121214;
-	--bg-subtle: #18181b;
-	--border: #27272a;
-	--border-strong: #3f3f46;
-	--text: #fafafa;
-	--text-muted: #a1a1aa;
-	--text-faint: #52525b;
-	--accent: #3b82f6;
-	--accent-soft: #172554;
-	--ok: #22c55e;
-	--ok-soft: #052e16;
-	--err: #ef4444;
-	--err-soft: #450a0a;
-	--warn: #f59e0b;
-	--warn-soft: #451a03;
-	--run: #a78bfa;
+	--bg: #0c0d0e;
+	--bg-raised: #141618;
+	--bg-subtle: #1b1e20;
+	--bg-inset: #0a0b0c;
+	--border: #26292c;
+	--border-strong: #3a3f43;
+	--text: #e8e6e1;
+	--text-muted: #98948a;
+	--text-faint: #5c5952;
+	--accent: #e8a824;
+	--accent-bright: #ffc53d;
+	--accent-soft: #33270b;
+	--accent-ink: #141000;
+	--ok: #3ecf8e;
+	--ok-soft: #0f2e20;
+	--err: #f0564a;
+	--err-soft: #381410;
+	--warn: #f08c3a;
+	--warn-soft: #36200f;
+	--run: #9d8cf5;
+	--run-soft: #241e44;
+	--rail: #0a0b0c;
+	--rail-text: #b3afa5;
 }
 
 * {
@@ -56,7 +74,7 @@ body,
 body {
 	background: var(--bg);
 	color: var(--text);
-	font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+	font-family: var(--sans);
 	font-size: 13px;
 	line-height: 1.5;
 	-webkit-font-smoothing: antialiased;
@@ -65,6 +83,79 @@ body {
 
 .font-mono {
 	font-family: var(--mono);
+}
+
+/* Dot-grid console texture, used on the app canvas and panel insets. */
+.dotgrid {
+	background-image: radial-gradient(var(--border-strong) 0.8px, transparent 0.8px);
+	background-size: 12px 12px;
+}
+.dotgrid-faint {
+	background-image: radial-gradient(var(--border) 0.8px, transparent 0.8px);
+	background-size: 12px 12px;
+}
+
+/* The card language: raised surface, hairline, 2px radius, corner tick. */
+.panel {
+	position: relative;
+	border: 1px solid var(--border);
+	background: var(--bg-raised);
+	border-radius: 2px;
+}
+.panel-inset {
+	border: 1px solid var(--border);
+	background: var(--bg-inset);
+	border-radius: 2px;
+}
+
+/* Section labels: uppercase micro-type with a leading tick. */
+.klabel {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	font-size: 10px;
+	font-weight: 600;
+	letter-spacing: 0.14em;
+	text-transform: uppercase;
+	color: var(--text-faint);
+}
+.klabel::before {
+	content: "";
+	width: 8px;
+	height: 8px;
+	border: 1.5px solid var(--accent);
+	border-radius: 1px;
+}
+
+/* Scanline sweep on live elements. */
+@keyframes kern-pulse {
+	0%, 100% { opacity: 1; }
+	50% { opacity: 0.35; }
+}
+.live-dot {
+	width: 6px;
+	height: 6px;
+	border-radius: 1px;
+	background: var(--ok);
+	animation: kern-pulse 1.6s ease-in-out infinite;
+}
+
+::selection {
+	background: var(--accent);
+	color: var(--accent-ink);
+}
+
+::-webkit-scrollbar {
+	width: 10px;
+	height: 10px;
+}
+::-webkit-scrollbar-track {
+	background: transparent;
+}
+::-webkit-scrollbar-thumb {
+	background: var(--border-strong);
+	border: 3px solid var(--bg);
+	border-radius: 6px;
 }
 
 /* Rendered GITHUB_STEP_SUMMARY markdown. */
@@ -78,83 +169,74 @@ body {
 .prose-kern h2,
 .prose-kern h3,
 .prose-kern h4 {
-	margin: 0.75em 0 0.35em;
 	font-weight: 600;
+	margin: 0.9em 0 0.45em;
+	letter-spacing: -0.01em;
 }
 .prose-kern h1 {
-	font-size: 1.15em;
+	font-size: 1.3em;
 }
 .prose-kern h2 {
-	font-size: 1.05em;
+	font-size: 1.15em;
 }
-.prose-kern p,
+.prose-kern h3,
+.prose-kern h4 {
+	font-size: 1em;
+}
+.prose-kern p {
+	margin: 0.45em 0;
+}
 .prose-kern ul,
 .prose-kern ol {
-	margin: 0.35em 0;
-}
-.prose-kern ul,
-.prose-kern ol {
-	padding-left: 1.4em;
+	margin: 0.45em 0 0.45em 1.3em;
 }
 .prose-kern ul {
-	list-style: disc;
+	list-style: square;
 }
 .prose-kern ol {
 	list-style: decimal;
 }
 .prose-kern code {
 	font-family: var(--mono);
-	font-size: 0.9em;
+	font-size: 0.88em;
 	background: var(--bg-subtle);
-	border-radius: 3px;
-	padding: 0.1em 0.3em;
+	border: 1px solid var(--border);
+	border-radius: 2px;
+	padding: 0.1em 0.35em;
 }
 .prose-kern pre {
-	background: var(--bg);
+	background: var(--bg-inset);
 	border: 1px solid var(--border);
-	border-radius: 6px;
-	padding: 0.6em 0.8em;
+	border-radius: 2px;
+	padding: 0.8em 1em;
 	overflow-x: auto;
-	margin: 0.5em 0;
+	margin: 0.6em 0;
 }
 .prose-kern pre code {
 	background: none;
+	border: none;
 	padding: 0;
-}
-.prose-kern table {
-	border-collapse: collapse;
-	margin: 0.5em 0;
-}
-.prose-kern th,
-.prose-kern td {
-	border: 1px solid var(--border);
-	padding: 0.25em 0.6em;
-	text-align: left;
 }
 .prose-kern a {
 	color: var(--accent);
 }
+.prose-kern table {
+	border-collapse: collapse;
+	margin: 0.6em 0;
+	font-size: 0.92em;
+}
+.prose-kern th,
+.prose-kern td {
+	border: 1px solid var(--border);
+	padding: 0.3em 0.7em;
+	text-align: left;
+}
+.prose-kern th {
+	background: var(--bg-subtle);
+}
 .prose-kern blockquote {
-	border-left: 3px solid var(--border-strong);
+	border-left: 2px solid var(--accent);
 	padding-left: 0.8em;
 	color: var(--text-muted);
-	margin: 0.5em 0;
-}
-
-::selection {
-	background: var(--accent);
-	color: white;
-}
-
-*::-webkit-scrollbar {
-	width: 10px;
-	height: 10px;
-}
-*::-webkit-scrollbar-thumb {
-	background: var(--border-strong);
-	border-radius: 5px;
-	border: 2px solid var(--bg);
-}
-*::-webkit-scrollbar-track {
-	background: transparent;
+	margin: 0.6em 0;
 }

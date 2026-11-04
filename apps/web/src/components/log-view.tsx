@@ -65,7 +65,7 @@ export function LogView({ stepId, active }: { stepId: string; active: boolean })
 	}, [text]);
 
 	return (
-		<pre className="font-mono max-h-96 overflow-auto rounded-md bg-[var(--bg)] p-3 text-xs leading-5 whitespace-pre-wrap break-all">
+		<pre className="font-mono max-h-96 overflow-auto rounded-[3px] bg-[var(--bg)] p-3 text-xs leading-5 whitespace-pre-wrap break-all">
 			{text.replace(ANSI, "") || <span className="text-[var(--text-faint)]">No log output yet.</span>}
 			{err && <span className="text-[var(--err)]">{err}</span>}
 			<div ref={endRef} />

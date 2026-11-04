@@ -3,7 +3,6 @@ import {
 	Activity,
 	Database,
 	FolderGit2,
-	HardDrive,
 	KeyRound,
 	LayoutDashboard,
 	LogOut,
@@ -46,12 +45,21 @@ export function Layout() {
 
 	return (
 		<div className="flex h-full">
-			<aside className="flex w-52 shrink-0 flex-col border-r border-[var(--border)] bg-[var(--bg-raised)]">
-				<div className="flex h-12 items-center gap-2.5 border-b border-[var(--border)] px-4">
-					<img src="/favicon.svg" alt="" className="size-5 rounded-[5px]" />
-					<span className="text-sm font-semibold tracking-tight">KERN</span>
+			{/* Console rail: always the dark brand surface, in both themes. */}
+			<aside className="flex w-56 shrink-0 flex-col border-r border-black/40 bg-[var(--rail)]">
+				<div className="flex h-14 items-center gap-2.5 border-b border-white/10 px-4">
+					<img src="/favicon.svg" alt="" className="size-6 rounded-[3px]" />
+					<div className="leading-none">
+						<div className="text-[15px] font-bold tracking-[0.22em] text-white">KERN</div>
+						<div className="mt-1 text-[9px] font-medium uppercase tracking-[0.18em] text-white/40">
+							ci / cd control plane
+						</div>
+					</div>
 				</div>
-				<nav className="flex-1 space-y-0.5 p-2">
+				<nav className="flex-1 space-y-px overflow-y-auto p-2 pt-3">
+					<div className="px-2.5 pb-1.5 text-[9px] font-semibold uppercase tracking-[0.18em] text-white/30">
+						Console
+					</div>
 					{NAV.map((n) => (
 						<NavLink
 							key={n.to}
@@ -59,10 +67,10 @@ export function Layout() {
 							end={n.end}
 							className={({ isActive }) =>
 								cn(
-									"flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors",
+									"group relative flex items-center gap-2.5 rounded-[3px] px-2.5 py-[7px] text-[12.5px] font-medium transition-colors",
 									isActive
-										? "bg-[var(--bg-subtle)] text-[var(--text)]"
-										: "text-[var(--text-muted)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text)]",
+										? "bg-white/8 text-white before:absolute before:inset-y-0 before:left-0 before:w-[2.5px] before:bg-[var(--accent-bright)]"
+										: "text-[var(--rail-text)]/60 hover:bg-white/5 hover:text-[var(--rail-text)]",
 								)
 							}
 						>
@@ -71,15 +79,15 @@ export function Layout() {
 						</NavLink>
 					))}
 				</nav>
-				<div className="border-t border-[var(--border)] p-2">
-					<div className="flex items-center gap-2 rounded-md px-2 py-1.5">
-						<HardDrive size={14} className="text-[var(--text-faint)]" />
-						<span className="min-w-0 flex-1 truncate text-xs text-[var(--text-muted)]" title={user.email}>
+				<div className="border-t border-white/10 p-2">
+					<div className="flex items-center gap-2 rounded-[3px] px-2 py-1.5">
+						<span className="live-dot shrink-0" />
+						<span className="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--rail-text)]/60" title={user.email}>
 							{user.email}
 						</span>
 						<button
 							onClick={() => setDark((d) => !d)}
-							className="cursor-pointer rounded p-1 text-[var(--text-muted)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text)]"
+							className="cursor-pointer rounded-[3px] p-1 text-[var(--rail-text)]/50 hover:bg-white/10 hover:text-[var(--rail-text)]"
 							title="Toggle theme"
 						>
 							{dark ? <Sun size={14} /> : <Moon size={14} />}
@@ -89,7 +97,7 @@ export function Layout() {
 								await logout();
 								nav("/login");
 							}}
-							className="cursor-pointer rounded p-1 text-[var(--text-muted)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text)]"
+							className="cursor-pointer rounded-[3px] p-1 text-[var(--rail-text)]/50 hover:bg-white/10 hover:text-[var(--rail-text)]"
 							title="Sign out"
 						>
 							<LogOut size={14} />
@@ -97,8 +105,8 @@ export function Layout() {
 					</div>
 				</div>
 			</aside>
-			<main className="min-w-0 flex-1 overflow-y-auto">
-				<div className="mx-auto max-w-6xl px-6 py-6">
+			<main className="dotgrid-faint min-w-0 flex-1 overflow-y-auto">
+				<div className="mx-auto max-w-7xl px-7 py-6">
 					<Outlet />
 				</div>
 			</main>

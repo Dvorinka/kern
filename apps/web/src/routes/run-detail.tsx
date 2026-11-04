@@ -141,7 +141,7 @@ function StepSummary({ stepId }: { stepId: string }) {
 	});
 	if (!data?.text) return null;
 	return (
-		<div className="rounded-md border border-[var(--border)] bg-[var(--bg-raised)] p-3">
+		<div className="rounded-[3px] border border-[var(--border)] bg-[var(--bg-raised)] p-3">
 			<div className="mb-2 text-[10px] font-medium uppercase tracking-wide text-[var(--text-faint)]">
 				Step summary
 			</div>

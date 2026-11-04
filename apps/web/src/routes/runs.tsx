@@ -28,7 +28,7 @@ export function RunsPage() {
 						key={f || "all"}
 						onClick={() => setParams(f ? { status: f } : {})}
 						className={cn(
-							"cursor-pointer rounded-md px-2.5 py-1 text-xs font-medium",
+							"cursor-pointer rounded-[3px] px-2.5 py-1 text-xs font-medium",
 							status === f
 								? "bg-[var(--bg-subtle)] text-[var(--text)]"
 								: "text-[var(--text-muted)] hover:text-[var(--text)]",

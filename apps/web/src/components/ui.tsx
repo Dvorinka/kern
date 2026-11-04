@@ -18,12 +18,13 @@ export function Button({
 	return (
 		<button
 			className={cn(
-				"inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-md font-medium transition-colors",
+				"inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-[3px] font-medium tracking-[0.01em] transition-colors",
 				"disabled:cursor-not-allowed disabled:opacity-50",
-				size === "sm" ? "h-7 px-2.5 text-xs" : "h-8 px-3 text-[13px]",
+				size === "sm" ? "h-7 px-2.5 text-xs" : "h-8 px-3 text-[12.5px]",
 				variant === "default" &&
-					"border border-[var(--border)] bg-[var(--bg-raised)] text-[var(--text)] hover:bg-[var(--bg-subtle)]",
-				variant === "primary" && "bg-[var(--accent)] text-white hover:opacity-90",
+					"border border-[var(--border-strong)] bg-[var(--bg-raised)] text-[var(--text)] hover:border-[var(--text-faint)] hover:bg-[var(--bg-subtle)]",
+				variant === "primary" &&
+					"bg-[var(--accent)] font-semibold text-[var(--accent-ink)] hover:bg-[var(--accent-bright)]",
 				variant === "danger" && "bg-[var(--err)] text-white hover:opacity-90",
 				variant === "ghost" && "text-[var(--text-muted)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text)]",
 				className,
@@ -37,9 +38,9 @@ export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElem
 	return (
 		<input
 			className={cn(
-				"h-8 w-full rounded-md border border-[var(--border)] bg-[var(--bg-raised)] px-2.5 text-[13px]",
-				"text-[var(--text)] placeholder:text-[var(--text-faint)] outline-none",
-				"focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent)]/20",
+				"h-8 w-full rounded-[3px] border border-[var(--border-strong)] bg-[var(--bg-inset)] px-2.5 font-mono text-[12.5px]",
+				"text-[var(--text)] placeholder:font-sans placeholder:text-[var(--text-faint)] outline-none",
+				"focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]/30",
 				className,
 			)}
 			{...props}
@@ -48,9 +49,15 @@ export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElem
 }
 
 export function Card({ className, children }: { className?: string; children: ReactNode }) {
+	return <div className={cn("panel", className)}>{children}</div>;
+}
+
+export function CardHeader({ title, sub, actions }: { title: string; sub?: string; actions?: ReactNode }) {
 	return (
-		<div className={cn("rounded-lg border border-[var(--border)] bg-[var(--bg-raised)]", className)}>
-			{children}
+		<div className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-2.5">
+			<div className="klabel">{title}</div>
+			{sub && <span className="text-xs text-[var(--text-faint)]">{sub}</span>}
+			{actions && <div className="flex items-center gap-2">{actions}</div>}
 		</div>
 	);
 }
@@ -65,10 +72,10 @@ export function PageHeader({
 	actions?: ReactNode;
 }) {
 	return (
-		<div className="mb-5 flex items-start justify-between gap-4">
+		<div className="mb-6 flex items-end justify-between gap-4 border-b border-[var(--border)] pb-4">
 			<div>
-				<h1 className="text-lg font-semibold tracking-tight">{title}</h1>
-				{sub && <p className="mt-0.5 text-[13px] text-[var(--text-muted)]">{sub}</p>}
+				<h1 className="text-[19px] font-semibold tracking-tight">{title}</h1>
+				{sub && <p className="mt-1 text-[12.5px] text-[var(--text-muted)]">{sub}</p>}
 			</div>
 			{actions && <div className="flex items-center gap-2">{actions}</div>}
 		</div>
@@ -104,7 +111,9 @@ export function Spinner() {
 export function KV({ k, v, mono }: { k: string; v: ReactNode; mono?: boolean }) {
 	return (
 		<div className="flex min-w-0 items-baseline gap-3 py-1">
-			<span className="w-36 shrink-0 truncate text-xs text-[var(--text-faint)]">{k}</span>
+			<span className="w-36 shrink-0 truncate text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--text-faint)]">
+				{k}
+			</span>
 			<span className={cn("min-w-0 truncate text-[13px]", mono && "font-mono text-xs")}>{v}</span>
 		</div>
 	);

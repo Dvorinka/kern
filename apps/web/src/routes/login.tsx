@@ -26,15 +26,15 @@ export function LoginPage() {
 	};
 
 	return (
-		<div className="flex h-full items-center justify-center bg-[var(--bg)]">
+		<div className="dotgrid-faint flex h-full items-center justify-center bg-[var(--bg)]">
 			<form
 				onSubmit={submit}
-				className="w-80 rounded-lg border border-[var(--border)] bg-[var(--bg-raised)] p-6"
+				className="w-80 rounded-[3px] border border-[var(--border)] bg-[var(--bg-raised)] p-6 shadow-[0_0_0_1px_var(--border),0_20px_60px_-20px_rgba(0,0,0,0.5)]"
 			>
 				<div className="mb-5 flex items-center gap-2.5">
-					<img src="/favicon.svg" alt="" className="size-6 rounded-md" />
+					<img src="/favicon.svg" alt="" className="size-6 rounded-[3px]" />
 					<div>
-						<div className="text-base font-semibold tracking-tight">KERN</div>
+						<div className="text-base font-bold tracking-[0.22em]">KERN</div>
 						<div className="text-[11px] text-[var(--text-faint)]">Distributed CI/CD control plane</div>
 					</div>
 				</div>
