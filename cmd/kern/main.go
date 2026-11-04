@@ -42,7 +42,9 @@ Remote offload:
                         bundle the working tree, run on the fleet, stream logs
 
 Settings:
-  settings get|set self_heal off|auto|approve [--project S]
+  settings get
+  settings set self_heal off|auto|approve [--project S]
+  settings set public_ci on|off
 
 Runners:
   runners list

@@ -10,10 +10,46 @@ import { relTime } from "../lib/format";
 export function SettingsPage() {
 	return (
 		<>
-			<PageHeader title="Settings" sub="Access tokens and instance information" />
+			<PageHeader title="Settings" sub="Access tokens, public run links, and instance information" />
+			<PublicCICard />
 			<TokensCard />
 			<InstanceCard />
 		</>
+	);
+}
+
+function PublicCICard() {
+	const qc = useQueryClient();
+	const { data } = useQuery({
+		queryKey: ["settings"],
+		queryFn: () => api.get<{ self_heal: string; public_ci: string }>("/settings"),
+	});
+	const setPublic = useMutation({
+		mutationFn: (v: string) => api.put("/settings", { public_ci: v }),
+		onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
+	});
+	return (
+		<Card className="mb-4">
+			<CardHeader title="Public runs" />
+			<Row>
+				<span className="min-w-0 flex-1 text-xs text-[var(--dim)]">
+					GitHub check links open without a login. Status, jobs, and step names only. Logs stay private.
+				</span>
+				<select
+					className="fsel"
+					aria-label="Public runs"
+					value={data?.public_ci ?? "off"}
+					disabled={setPublic.isPending}
+					onChange={(e) => setPublic.mutate(e.target.value)}
+				>
+					<option value="off">off</option>
+					<option value="on">on</option>
+				</select>
+			</Row>
+			{setPublic.error && (
+				<div className="px-4 py-2 text-xs text-[var(--err)]">{setPublic.error.message}</div>
+			)}
+		</Card>
 	);
 }
 

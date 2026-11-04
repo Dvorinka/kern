@@ -1,6 +1,6 @@
-// Package github is a thin api.github.com client for the token-based
-// (M4-lite) integration: commit statuses and workflow file discovery.
-// The GitHub App flow (installation tokens, private keys) is a separate path.
+// Package github is a thin api.github.com client: commit statuses, check
+// runs, and workflow file discovery. The GitHub App flow (installation
+// tokens, private keys) is a separate path.
 package github
 
 import (
@@ -45,6 +45,9 @@ func (c *Client) do(ctx context.Context, method, path, accept string, body any, 
 		accept = "application/vnd.github+json"
 	}
 	req.Header.Set("Accept", accept)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)

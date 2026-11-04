@@ -65,9 +65,10 @@ func New(cfg *config.Config, st *store.Store, orch *orchestrator.Orchestrator, b
 	return s
 }
 
-// wireCommitStatus reports each run's state back to GitHub as a commit status,
-// posted as the App installation when configured, else the PAT. Runs without a
-// repo binding no-op before any client work, so this is always safe to wire.
+// wireCommitStatus reports each run's state back to GitHub as a commit status
+// and a check run, posted as the App installation when configured, else the
+// PAT. A check-run failure is logged and does not undo the status. Runs
+// without a repo binding no-op before any client work.
 func (s *Server) wireCommitStatus() {
 	s.Orch.PostStatus = func(ctx context.Context, run store.Run, state string) {
 		var src map[string]any
@@ -81,10 +82,24 @@ func (s *Server) wireCommitStatus() {
 			s.Log.Warn("github client", zap.String("repo", repo), zap.Error(err))
 			return
 		}
-		target := s.Cfg.PublicBaseURL + "/runs/" + run.ID.String()
+		jobs, jerr := s.Store.JobsForRun(ctx, run.ID)
+		if jerr != nil {
+			s.Log.Warn("jobs for github status", zap.Error(jerr))
+			jobs = nil
+		}
+		target := s.runPageURL(ctx, run)
 		if err := cl.PostCommitStatus(ctx, repo, run.SHA, state,
-			"kern/"+run.WorkflowName, target, "KERN "+run.WorkflowName+": "+state); err != nil {
+			"kern/"+run.WorkflowName, target, statusDescription(run, state, jobs)); err != nil {
 			s.Log.Warn("commit status failed", zap.String("repo", repo), zap.Error(err))
+		}
+		status, conclusion := githubCheck(state, run)
+		if err := cl.UpsertCheckRun(ctx, repo, github.CheckRun{
+			Name: "kern/" + run.WorkflowName, HeadSHA: run.SHA,
+			Status: status, Conclusion: conclusion, DetailsURL: target,
+			ExternalID: run.ID.String(), Title: checkTitle(run, state),
+			Summary: checkSummary(run, jobs),
+		}); err != nil {
+			s.Log.Warn("check run failed", zap.String("repo", repo), zap.Error(err))
 		}
 	}
 }
@@ -104,6 +119,7 @@ func (s *Server) buildRouter() *gin.Engine {
 	r.POST("/api/v1/auth/login", s.login)
 	r.POST("/api/v1/auth/token", s.cliToken)
 	r.POST("/api/v1/webhooks/github", s.githubWebhook)
+	r.GET("/api/v1/public/runs/:id", s.getPublicRun)
 
 	api := r.Group("/api/v1")
 	auth := api.Group("", s.requireAuth())

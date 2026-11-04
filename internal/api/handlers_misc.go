@@ -189,26 +189,64 @@ func (s *Server) getOrgSettings(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"settings": raw, "self_heal": settingsValue(raw, "self_heal", "off")})
+	c.JSON(http.StatusOK, gin.H{
+		"settings":  raw,
+		"self_heal": settingsValue(raw, "self_heal", "off"),
+		"public_ci": settingsValue(raw, "public_ci", "off"),
+	})
 }
 
 type settingsRequest struct {
 	SelfHeal string `json:"self_heal"`
 }
 
+// orgSettingsRequest accepts either key. A self_heal-only body, which the
+// runners page sends, must keep working.
+type orgSettingsRequest struct {
+	SelfHeal *string `json:"self_heal"`
+	PublicCI *string `json:"public_ci"`
+}
+
+func orgSettingWrites(selfHeal, publicCI *string) (map[string]string, string) {
+	if selfHeal == nil && publicCI == nil {
+		return nil, "self_heal or public_ci is required"
+	}
+	out := map[string]string{}
+	if selfHeal != nil {
+		if !validSelfHeal(*selfHeal, false) {
+			return nil, "self_heal must be off, auto or approve"
+		}
+		out["self_heal"] = *selfHeal
+	}
+	if publicCI != nil {
+		if *publicCI != "on" && *publicCI != "off" {
+			return nil, "public_ci must be on or off"
+		}
+		out["public_ci"] = *publicCI
+	}
+	return out, ""
+}
+
 func (s *Server) putOrgSettings(c *gin.Context) {
 	user, _ := currentUser(c)
-	var req settingsRequest
-	if err := c.ShouldBindJSON(&req); err != nil || !validSelfHeal(req.SelfHeal, false) {
-		fail(c, http.StatusBadRequest, "invalid_body", "self_heal must be off, auto or approve")
+	var req orgSettingsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "invalid_body", "self_heal or public_ci is required")
 		return
 	}
-	if err := s.Store.PutOrgSetting(c.Request.Context(), user.OrgID, "self_heal", req.SelfHeal); err != nil {
-		s.internalError(c, err)
+	writes, msg := orgSettingWrites(req.SelfHeal, req.PublicCI)
+	if msg != "" {
+		fail(c, http.StatusBadRequest, "invalid_body", msg)
 		return
 	}
-	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "settings.self_heal", req.SelfHeal)
-	c.JSON(http.StatusOK, gin.H{"self_heal": req.SelfHeal})
+	for k, v := range writes {
+		if err := s.Store.PutOrgSetting(c.Request.Context(), user.OrgID, k, v); err != nil {
+			s.internalError(c, err)
+			return
+		}
+		s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "settings."+k, v)
+	}
+	c.JSON(http.StatusOK, writes)
 }
 
 func (s *Server) getProjectSettings(c *gin.Context) {
