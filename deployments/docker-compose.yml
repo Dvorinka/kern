@@ -62,6 +62,15 @@ services:
       KERN_RUNNER_IMAGE_MAX_AGE: ${KERN_RUNNER_IMAGE_MAX_AGE:-168h}
       KERN_JOB_CPUS: ${KERN_JOB_CPUS:-}
       KERN_JOB_MEMORY: ${KERN_JOB_MEMORY:-}
+    command:
+      - --control
+      - http://api:8080
+      - --join-token
+      - ${KERN_RUNNER_JOIN_TOKEN}
+      - --work-root
+      - /opt/kern/work
+      - --name
+      - ${KERN_RUNNER_NAME:-compose-runner}
     depends_on:
       - api
     restart: unless-stopped
