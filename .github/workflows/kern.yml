@@ -21,6 +21,9 @@ jobs:
       GOPATH: /kern/cache/gopath
       GOTMPDIR: /github/cmd/gotmp
     steps:
+      # KERN performs checkout natively and treats this step as a no-op; GitHub
+      # Actions needs it to materialise the workspace.
+      - uses: actions/checkout@v4
       - name: prep Go dirs
         run: mkdir -p "$GOTMPDIR" "$GOCACHE" "$GOMODCACHE" "$GOPATH"
       - name: build
