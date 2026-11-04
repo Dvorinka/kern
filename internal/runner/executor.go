@@ -185,6 +185,11 @@ func (e *executor) startContainer(ctx context.Context) error {
 		"-e", "GITHUB_RUN_NUMBER=" + itoa(e.claim.Run.Number),
 		"-e", "GITHUB_JOB=" + e.claim.Job.Key,
 		"-e", "KERN=true", "-e", "CI=true",
+		// The workspace is cloned by the runner (uid 0) but steps run as
+		// jobUID — tell git the tree is safe so VCS stamping works.
+		"-e", "GIT_CONFIG_COUNT=1",
+		"-e", "GIT_CONFIG_KEY_0=safe.directory",
+		"-e", "GIT_CONFIG_VALUE_0=*",
 		"--entrypoint", "/bin/sh",
 		e.claim.Job.Image, "-c", "while true; do sleep 30; done",
 	}
