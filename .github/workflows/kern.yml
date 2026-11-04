@@ -12,10 +12,10 @@ jobs:
       image: golang:1.26
     env:
       # job containers are read-only and /tmp is a small tmpfs; Go dirs live on
-      # the /github/cmd bind mount. GOMODCACHE stays workspace-relative so
-      # actions/cache can persist it between runs.
+      # the /github/cmd bind mount. GOMODCACHE must be absolute for Go but
+      # inside the workspace so actions/cache can persist it between runs.
       GOCACHE: /github/cmd/gocache
-      GOMODCACHE: .gomod
+      GOMODCACHE: /github/workspace/.gomod
       GOPATH: /github/cmd/gopath
       GOTMPDIR: /github/cmd/gotmp
     steps:
