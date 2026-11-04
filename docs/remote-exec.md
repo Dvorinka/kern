@@ -39,7 +39,15 @@ isolation. Bundle upload is session-authed; runner fetch is job-scoped token.
 
 ## Status
 
-Endpoint + runner side implemented per plan; see `.devin/NEXT-AGENT.md` for the
-implementation checklist. Not yet: dedupe of unchanged trees (content-addressed
-bundle keys), in-flight cancel passthrough, compose wrapper (`kern compose up`
-that loads pulled images then invokes docker compose).
+Implemented and verified end to end: `PUT /api/v1/projects/:p/source` (session
+auth, tar.gz → `sources/<slug>/<uuid>.tar.gz`), `bundle_ref` on the run trigger,
+`GET /api/v1/runners/jobs/:jobID/source` for the leasing runner, and `kern exec
+<workflow> [--dir D] [--pull DIR]` which bundles via `git ls-files` (tracked +
+untracked, honoured .gitignore, no `.git`), uploads, streams step logs live to
+stdout, and downloads run artifacts after completion. Exit code follows the run
+conclusion.
+
+Not yet: dedupe of unchanged trees (content-addressed bundle keys), in-flight
+cancel passthrough (Ctrl-C detaches but does not cancel the run), compose
+wrapper (`kern compose up` that loads pulled images then invokes docker
+compose).
