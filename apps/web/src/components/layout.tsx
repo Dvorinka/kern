@@ -9,7 +9,9 @@ import {
 	Moon,
 	Package,
 	Server,
+	Settings2,
 	Sun,
+	Webhook,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { useAuth } from "../lib/auth";
@@ -23,6 +25,8 @@ const NAV = [
 	{ to: "/secrets", label: "Secrets", icon: KeyRound },
 	{ to: "/artifacts", label: "Artifacts", icon: Package },
 	{ to: "/cache", label: "Cache", icon: Database },
+	{ to: "/deliveries", label: "Webhooks", icon: Webhook },
+	{ to: "/settings", label: "Settings", icon: Settings2 },
 ];
 
 export function Layout() {

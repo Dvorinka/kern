@@ -1,14 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Pause, Trash2 } from "lucide-react";
+import { useState, type FormEvent } from "react";
+import { Pause, Plus, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import type { Runner } from "../lib/types";
-import { Button, Card, EmptyState, PageHeader, Spinner } from "../components/ui";
+import { Button, Card, EmptyState, Input, PageHeader, Spinner } from "../components/ui";
 import { StatusPill } from "../components/status";
+import { CopyButton } from "./settings";
 import { Row } from "../components/layout";
 import { bytes, relTime } from "../lib/format";
 
 export function RunnersPage() {
 	const qc = useQueryClient();
+	const [enrolling, setEnrolling] = useState(false);
 	const { data, isLoading } = useQuery({
 		queryKey: ["runners"],
 		queryFn: () => api.get<{ runners: Runner[] }>("/runners"),
@@ -33,7 +36,16 @@ export function RunnersPage() {
 
 	return (
 		<>
-			<PageHeader title="Runners" sub="Registered execution agents" />
+			<PageHeader
+				title="Runners"
+				sub="Registered execution agents"
+				actions={
+					<Button size="sm" variant="primary" onClick={() => setEnrolling((e) => !e)}>
+						<Plus size={13} /> Enroll runner
+					</Button>
+				}
+			/>
+			{enrolling && <EnrollCard onDone={() => setEnrolling(false)} />}
 			<Row>
 				<span className="text-xs text-[var(--text-muted)]">Self-heal (org):</span>
 				<select
@@ -128,6 +140,56 @@ export function RunnersPage() {
 				</Card>
 			)}
 		</>
+	);
+}
+
+// EnrollCard mints a one-time enrollment token and prints the join command —
+// the plaintext token is shown once, only its hash is stored.
+function EnrollCard({ onDone }: { onDone: () => void }) {
+	const [minted, setMinted] = useState<{ token: string; name: string } | null>(null);
+	const mint = useMutation({
+		mutationFn: (body: { name: string; ttl_minutes: number }) =>
+			api.post<{ token: string }>("/enroll-tokens", body),
+		onSuccess: (res, body) => setMinted({ token: res.token, name: body.name }),
+	});
+
+	const submit = (e: FormEvent<HTMLFormElement>) => {
+		e.preventDefault();
+		const fd = new FormData(e.currentTarget);
+		mint.mutate({
+			name: String(fd.get("name")).trim() || "runner",
+			ttl_minutes: parseInt(String(fd.get("ttl")), 10) || 60,
+		});
+	};
+
+	const joinCmd = minted
+		? `kern-runner join --control ${window.location.origin} --name ${minted.name} --token ${minted.token}`
+		: "";
+
+	return (
+		<Card className="mb-4 p-4">
+			{minted ? (
+				<div>
+					<div className="mb-2 text-xs text-[var(--ok)]">
+						Enroll token minted — run this on the runner host before it expires:
+					</div>
+					<div className="flex items-center gap-2 rounded-[3px] border border-[var(--border)] bg-[var(--bg-inset)] px-3 py-2">
+						<code className="min-w-0 flex-1 truncate font-mono text-xs">{joinCmd}</code>
+						<CopyButton text={joinCmd} />
+						<Button size="sm" variant="ghost" onClick={onDone}>Done</Button>
+					</div>
+				</div>
+			) : (
+				<form onSubmit={submit} className="flex flex-wrap items-center gap-3">
+					<Input name="name" placeholder="runner name" required className="w-48" />
+					<Input name="ttl" type="number" min={1} max={1440} placeholder="ttl minutes (60)" className="w-40" />
+					<Button type="submit" variant="primary" size="sm" disabled={mint.isPending}>
+						Mint token
+					</Button>
+					{mint.error && <span className="text-xs text-[var(--err)]">{mint.error.message}</span>}
+				</form>
+			)}
+		</Card>
 	);
 }
 

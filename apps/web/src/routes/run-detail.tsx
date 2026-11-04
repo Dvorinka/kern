@@ -3,14 +3,15 @@ import { useParams } from "react-router-dom";
 import { useState } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import { Ban, ChevronDown, ChevronRight, RotateCw } from "lucide-react";
+import { Ban, ChevronDown, ChevronRight, Download, RotateCw, Wrench } from "lucide-react";
 import { api } from "../lib/api";
-import type { Job, RunDetail, Step } from "../lib/types";
+import type { Artifact, Job, RunDetail, Step } from "../lib/types";
 import { Button, Card, KV, PageHeader, Spinner, cn } from "../components/ui";
 import { StatusPill } from "../components/status";
 import { LogView } from "../components/log-view";
 import { JobDAG } from "../components/dag";
-import { duration, relTime, refName, shortSha } from "../lib/format";
+import { Row } from "../components/layout";
+import { bytes, duration, relTime, refName, shortSha } from "../lib/format";
 
 export function RunDetailPage() {
 	const { id } = useParams<{ id: string }>();
@@ -73,7 +74,37 @@ export function RunDetailPage() {
 					<JobCard key={j.id} job={j} />
 				))}
 			</div>
+			<RunArtifacts runId={run.id} />
 		</>
+	);
+}
+
+function RunArtifacts({ runId }: { runId: string }) {
+	const { data } = useQuery({
+		queryKey: ["artifacts", runId],
+		queryFn: () => api.get<{ artifacts: Artifact[] }>(`/artifacts?run_id=${runId}`),
+	});
+	if (!data || data.artifacts.length === 0) return null;
+	return (
+		<Card className="mt-4">
+			<div className="border-b border-[var(--border)] px-4 py-2.5">
+				<span className="klabel">Artifacts</span>
+			</div>
+			{data.artifacts.map((a) => (
+				<Row key={a.id}>
+					<span className="min-w-0 flex-1 truncate font-mono text-[13px]">{a.name}</span>
+					<span className="w-16 shrink-0 text-right text-xs text-[var(--text-faint)]">{bytes(a.size_bytes)}</span>
+					<a
+						href={`/api/v1/artifacts/${a.id}/download`}
+						download
+						className="shrink-0 rounded p-1.5 text-[var(--text-muted)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text)]"
+						title={`Download ${a.name}.tar.gz`}
+					>
+						<Download size={14} />
+					</a>
+				</Row>
+			))}
+		</Card>
 	);
 }
 
@@ -96,14 +127,24 @@ function JobCard({ job }: { job: Job }) {
 			</div>
 			{job.error && <div className="border-t border-[var(--border)] px-4 py-2 text-xs text-[var(--err)]">{job.error}</div>}
 			{(job.steps ?? []).map((s) => (
-				<StepRow key={s.id} step={s} open={!!open[s.number]} onToggle={() => setOpen((o) => ({ ...o, [s.number]: !o[s.number] }))} />
+				<StepRow key={s.id} jobId={job.id} step={s} open={!!open[s.number]} onToggle={() => setOpen((o) => ({ ...o, [s.number]: !o[s.number] }))} />
 			))}
 		</Card>
 	);
 }
 
-function StepRow({ step, open, onToggle }: { step: Step; open: boolean; onToggle: () => void }) {
+function StepRow({ jobId, step, open, onToggle }: { jobId: string; step: Step; open: boolean; onToggle: () => void }) {
+	const qc = useQueryClient();
 	const live = step.status === "running";
+	const approve = useMutation({
+		mutationFn: () => api.post(`/jobs/${jobId}/remediate`, { step: step.number }),
+		onSuccess: () => qc.invalidateQueries({ queryKey: ["run"] }),
+	});
+	const fixPending =
+		!!step.diagnosis?.fixable &&
+		!!step.diagnosis?.remediation &&
+		!step.diagnosis.remediation.approved &&
+		!step.diagnosis.remediation.applied;
 	return (
 		<div className={cn("border-t border-[var(--border)]", open && "bg-[var(--bg-subtle)]/50")}>
 			<button
@@ -117,9 +158,17 @@ function StepRow({ step, open, onToggle }: { step: Step; open: boolean; onToggle
 				<span className="w-16 text-right text-xs text-[var(--text-muted)]">{duration(step.started_at, step.completed_at)}</span>
 			</button>
 			{step.diagnosis && (
-				<div className="border-t border-[var(--border)] bg-[var(--err)]/5 px-4 py-2 text-[11px] text-[var(--err)]">
-					{step.diagnosis.kind}: {step.diagnosis.summary} — {step.diagnosis.suggestion}
-					{step.diagnosis.remediation && ` (${step.diagnosis.remediation.result || "proposed"})`}
+				<div className="flex items-center gap-2 border-t border-[var(--border)] bg-[var(--err)]/5 px-4 py-2 text-[11px] text-[var(--err)]">
+					<span className="min-w-0 flex-1">
+						{step.diagnosis.kind}: {step.diagnosis.summary} — {step.diagnosis.suggestion}
+						{step.diagnosis.remediation && ` (${step.diagnosis.remediation.result || "proposed"})`}
+					</span>
+					{fixPending && (
+						<Button size="sm" disabled={approve.isPending} onClick={() => approve.mutate()}>
+							<Wrench size={12} /> Approve fix
+						</Button>
+					)}
+					{approve.error && <span className="text-[var(--err)]">{approve.error.message}</span>}
 				</div>
 			)}
 			{open && (

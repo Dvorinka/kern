@@ -216,3 +216,15 @@ export interface APIToken {
 	expires_at: string | null;
 	created_at: string;
 }
+
+export interface WebhookDelivery {
+	id: string;
+	provider: string;
+	delivery_id: string;
+	event: string;
+	payload?: Record<string, unknown>;
+	status: "received" | "processed" | "ignored" | "failed";
+	error: string;
+	received_at: string;
+	processed_at: string | null;
+}
