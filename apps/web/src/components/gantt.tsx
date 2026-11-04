@@ -113,7 +113,7 @@ export function RunGantt({
 						))}
 					</div>
 					<div
-						className="grid"
+						className="ggrid"
 						style={{
 							background: `repeating-linear-gradient(to right, transparent 0 calc(${100 / count}% - 1px), var(--line) calc(${100 / count}% - 1px) ${100 / count}%)`,
 						}}
