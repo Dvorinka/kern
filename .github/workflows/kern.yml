@@ -13,20 +13,14 @@ jobs:
       image: golang:1.26
     env:
       # job containers are read-only and /tmp is a small tmpfs; Go dirs live on
-      # the /github/cmd bind mount. GOMODCACHE must be absolute for Go but
-      # inside the workspace so actions/cache can persist it between runs.
-      GOCACHE: /github/cmd/gocache
-      GOMODCACHE: /github/workspace/.gomod
-      GOPATH: /github/cmd/gopath
+      # the /github/cmd bind mount. GOMODCACHE/GOCACHE/GOPATH point at the
+      # runner's persistent /kern/cache mount, so warm runs reuse downloaded
+      # modules and build output with zero network fetches.
+      GOCACHE: /kern/cache/gocache
+      GOMODCACHE: /kern/cache/gomod
+      GOPATH: /kern/cache/gopath
       GOTMPDIR: /github/cmd/gotmp
     steps:
-      - uses: actions/cache@v4
-        id: modcache
-        with:
-          key: kern-go-mod-${{ hashFiles('go.sum') }}
-          path: .gomod
-          restore-keys: |
-            kern-go-mod-
       - name: prep Go dirs
         run: mkdir -p "$GOTMPDIR" "$GOCACHE" "$GOMODCACHE" "$GOPATH"
       - name: build

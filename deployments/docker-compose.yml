@@ -57,15 +57,11 @@ services:
     image: kern-runner:local
     environment:
       KERN_RUNNER_JOIN_TOKEN: ${KERN_RUNNER_JOIN_TOKEN:?set KERN_RUNNER_JOIN_TOKEN}
-    command:
-      - --control
-      - http://api:8080
-      - --join-token
-      - ${KERN_RUNNER_JOIN_TOKEN}
-      - --work-root
-      - /opt/kern/work
-      - --name
-      - ${KERN_RUNNER_NAME:-compose-runner}
+      KERN_RUNNER_CONCURRENCY: ${KERN_RUNNER_CONCURRENCY:-1}
+      KERN_RUNNER_LOAD_GATE: ${KERN_RUNNER_LOAD_GATE:-0}
+      KERN_RUNNER_IMAGE_MAX_AGE: ${KERN_RUNNER_IMAGE_MAX_AGE:-168h}
+      KERN_JOB_CPUS: ${KERN_JOB_CPUS:-}
+      KERN_JOB_MEMORY: ${KERN_JOB_MEMORY:-}
     depends_on:
       - api
     restart: unless-stopped

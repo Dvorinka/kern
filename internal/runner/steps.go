@@ -202,7 +202,7 @@ func (e *executor) runStepBody(ctx context.Context, step StepSpec) (string, int,
 	}
 
 	e.harvestEnv()
-	e.lastTail = string(pump.tail)
+	e.lastTail = pump.tailCopy()
 	code := exitValue(cmd)
 	if code == 0 {
 		return "success", 0, nil
@@ -402,38 +402,72 @@ func (e *executor) jobStatusSoFar() string {
 	return status
 }
 
-// logPump streams captured output to the control plane in line chunks.
-// Masking happens server-side at ingestion (secrets.Masker).
+// logPump streams captured output to the control plane in batches. A flush
+// goes out on whichever comes first — 256 KiB buffered or the flush interval
+// elapsing — so a quiet step costs one POST and a loud one stays live without
+// hammering appendLog. Masking happens server-side (secrets.Masker).
+//
+// stdout and stderr stream on separate goroutines; mu guards buf and tail.
 type logPump struct {
 	c     *client
 	jobID string
 	step  int
-	buf   []byte
-	tail  []byte // last bytes seen, for failure diagnosis
+
+	mu     sync.Mutex
+	buf    []byte
+	tail   []byte // last bytes seen, for failure diagnosis
+	stop   chan struct{}
+	closed sync.WaitGroup
 }
 
+const (
+	logFlushBytes    = 256 << 10
+	logFlushInterval = time.Second
+)
+
 func newLogPump(c *client, jobID string, step int) *logPump {
-	return &logPump{c: c, jobID: jobID, step: step}
+	p := &logPump{c: c, jobID: jobID, step: step, stop: make(chan struct{})}
+	p.closed.Add(1)
+	go func() {
+		defer p.closed.Done()
+		t := time.NewTicker(logFlushInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-p.stop:
+				return
+			case <-t.C:
+				p.flush()
+			}
+		}
+	}()
+	return p
 }
 
 // write buffers a chunk (a full line); a masker would run before render on the server.
 func (p *logPump) write(line []byte) {
+	p.mu.Lock()
 	p.buf = append(p.buf, line...)
 	p.tail = append(p.tail, line...)
 	if len(p.tail) > 8<<10 {
 		p.tail = p.tail[len(p.tail)-8<<10:]
 	}
-	if len(p.buf) >= 64<<10 {
-		p.flush()
+	full := len(p.buf) >= logFlushBytes
+	p.mu.Unlock()
+	if full {
+		p.flush() // applies backpressure on very loud steps
 	}
 }
 
 func (p *logPump) flush() {
+	p.mu.Lock()
 	if len(p.buf) == 0 {
+		p.mu.Unlock()
 		return
 	}
 	data := p.buf
 	p.buf = nil
+	p.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := p.c.appendLog(ctx, p.jobID, p.step, data); err != nil {
@@ -448,7 +482,18 @@ func (p *logPump) flush() {
 	}
 }
 
-func (p *logPump) close() { p.flush() }
+// tailCopy returns the trailing log bytes collected so far.
+func (p *logPump) tailCopy() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return string(p.tail)
+}
+
+func (p *logPump) close() {
+	close(p.stop)
+	p.closed.Wait()
+	p.flush()
+}
 
 // streamInto copies a reader into the pump line by line.
 func streamInto(r io.Reader, p *logPump) {

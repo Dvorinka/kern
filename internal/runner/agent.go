@@ -29,6 +29,12 @@ type Config struct {
 	JobCPUs       string
 	JobMemory     string
 	LeaseDuration time.Duration
+	// MaxLoadPerCPU pauses claiming while loadavg1 exceeds this multiple of
+	// the host's CPU count (KERN_RUNNER_LOAD_GATE). Zero disables the gate.
+	MaxLoadPerCPU float64
+	// ImageMaxAge is how long a pulled job image may sit unused before the
+	// GC removes it (KERN_RUNNER_IMAGE_MAX_AGE). Zero disables collection.
+	ImageMaxAge time.Duration
 }
 
 type Agent struct {
@@ -131,6 +137,13 @@ func (a *Agent) Run(ctx context.Context) error {
 		defer wg.Done()
 		a.heartbeatLoop(ctx)
 	}()
+	if a.cfg.ImageMaxAge > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			a.imageGCLoop(ctx)
+		}()
+	}
 
 	workers := a.cfg.Concurrency
 	a.log.Info("runner ready", zap.Int("concurrency", workers), zap.Strings("labels", a.labels()))
@@ -170,21 +183,30 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 }
 
 func (a *Agent) workerLoop(ctx context.Context, n int) {
+	backoff := time.Second
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
 		}
+		if a.overLoaded() {
+			sleepCtx(ctx, 5*time.Second)
+			continue
+		}
 		claim, err := a.c.claim(ctx, 25)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
-			a.log.Warn("claim failed", zap.Int("worker", n), zap.Error(err))
-			sleepCtx(ctx, 2*time.Second)
+			a.log.Warn("claim failed", zap.Int("worker", n), zap.Error(err), zap.Duration("retry_in", backoff))
+			sleepCtx(ctx, backoff)
+			if backoff < 30*time.Second {
+				backoff *= 2
+			}
 			continue
 		}
+		backoff = time.Second
 		if claim == nil {
 			continue
 		}
@@ -192,6 +214,25 @@ func (a *Agent) workerLoop(ctx context.Context, n int) {
 		a.executeJob(ctx, claim)
 		a.active.Add(-1)
 	}
+}
+
+// overLoaded reports whether the claim gate is engaged: loadavg1 above
+// MaxLoadPerCPU per CPU means the host is saturated and new work would only
+// slow the jobs already running.
+func (a *Agent) overLoaded() bool {
+	if a.cfg.MaxLoadPerCPU <= 0 {
+		return false
+	}
+	load, ok := loadAvg1()
+	if !ok {
+		return false
+	}
+	if load <= a.cfg.MaxLoadPerCPU*float64(runtime.NumCPU()) {
+		return false
+	}
+	a.log.Warn("load gate: host saturated, pausing claims",
+		zap.Float64("loadavg1", load), zap.Float64("gate", a.cfg.MaxLoadPerCPU*float64(runtime.NumCPU())))
+	return true
 }
 
 func (a *Agent) executeJob(ctx context.Context, claim *Claim) {

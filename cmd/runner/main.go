@@ -44,6 +44,11 @@ Flags (each has an environment fallback, listed with it):
   --work-root dir       scratch directory (KERN_WORK_ROOT, default /tmp/kern-runner)
   --env level           development | production (KERN_ENV)
 
+Environment only:
+  KERN_RUNNER_LOAD_GATE     pause claims while loadavg1 > n * cpu count (0=off)
+  KERN_RUNNER_IMAGE_MAX_AGE GC pulled job images unused this long (default 168h, 0=off)
+  KERN_JOB_CPUS / KERN_JOB_MEMORY   per-job container limits
+
 join flags:
   --env-file path       credential file destination (default ~/.config/kern-runner/env)
   --no-unit             skip writing the systemd user unit
@@ -209,7 +214,7 @@ func main() {
 }
 
 func agentConfig(o options) runner.Config {
-	return runner.Config{
+	cfg := runner.Config{
 		ControlURL:    o.control,
 		JoinToken:     o.joinToken,
 		Name:          o.name,
@@ -220,6 +225,15 @@ func agentConfig(o options) runner.Config {
 		JobMemory:     os.Getenv("KERN_JOB_MEMORY"),
 		LeaseDuration: 90 * time.Second,
 	}
+	if v := os.Getenv("KERN_RUNNER_LOAD_GATE"); v != "" {
+		cfg.MaxLoadPerCPU, _ = strconv.ParseFloat(v, 64)
+	}
+	if v := os.Getenv("KERN_RUNNER_IMAGE_MAX_AGE"); v != "" {
+		cfg.ImageMaxAge, _ = time.ParseDuration(v)
+	} else {
+		cfg.ImageMaxAge = 7 * 24 * time.Hour
+	}
+	return cfg
 }
 
 func run(o options) int {

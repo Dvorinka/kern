@@ -72,6 +72,16 @@ func cpuCounters() (busy, total uint64, ok bool) {
 	return 0, 0, false
 }
 
+// loadAvg1 reads the 1-minute load average, used by the optional claim gate.
+func loadAvg1() (float64, bool) {
+	data, err := os.ReadFile("/proc/loadavg")
+	if err != nil {
+		return 0, false
+	}
+	v, err := strconv.ParseFloat(strings.Fields(string(data))[0], 64)
+	return v, err == nil
+}
+
 // memUsed reports total minus available from /proc/meminfo.
 func memUsed() (int64, bool) {
 	data, err := os.ReadFile("/proc/meminfo")

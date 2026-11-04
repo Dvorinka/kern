@@ -27,8 +27,15 @@ const (
 	containerWorkspace = "/github/workspace"
 	containerCmdDir    = "/github/cmd"
 	containerScriptDir = "/kern/scripts"
+	containerCacheDir  = "/kern/cache"
 	jobUID             = 1000 // container process runs unprivileged
 )
+
+// cacheDir is the runner-level persistent cache root on the host: it lives
+// beside the per-job dirs under WorkRoot but is never removed by cleanup().
+func cacheDir(workRoot string) string {
+	return filepath.Join(workRoot, "_cache")
+}
 
 var (
 	imageRe     = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/:@-]*$`)
@@ -90,6 +97,12 @@ func newJobExecutor(cfg Config, c *client, claim *Claim, secrets map[string]stri
 			return nil, fmt.Errorf("chmod %s dir: %w", dir, err)
 		}
 	}
+	// The persistent runner cache survives cleanup(); tool caches pointed at
+	// it (GOMODCACHE, npm, pip) make warm runs skip network fetches entirely.
+	if err := os.MkdirAll(cacheDir(cfg.WorkRoot), 0o777); err != nil {
+		return nil, fmt.Errorf("create runner cache dir: %w", err)
+	}
+	_ = os.Chmod(cacheDir(cfg.WorkRoot), 0o777) // umask may have narrowed MkdirAll
 	return &executor{
 		cfg: cfg, c: c, claim: claim, secrets: secrets, log: log,
 		jobID:       claim.Job.ID,
@@ -156,7 +169,11 @@ func (e *executor) pull(ctx context.Context) error {
 	if _, err := exec.LookPath("docker"); err != nil {
 		return fmt.Errorf("docker binary not found on runner host")
 	}
-	return e.docker(ctx, "pull", "-q", e.claim.Job.Image)
+	if err := e.docker(ctx, "pull", "-q", e.claim.Job.Image); err != nil {
+		return err
+	}
+	recordImageUse(e.cfg.WorkRoot, e.claim.Job.Image)
+	return nil
 }
 
 // startContainer creates and starts the idle job container.
@@ -177,6 +194,8 @@ func (e *executor) startContainer(ctx context.Context) error {
 		"-v", filepath.Join(workRoot, "workspace") + ":" + containerWorkspace,
 		"-v", cmdHome + ":" + containerCmdDir,
 		"-v", scriptDir + ":" + containerScriptDir + ":ro",
+		"-v", cacheDir(e.cfg.WorkRoot) + ":" + containerCacheDir,
+		"-e", "KERN_CACHE_DIR=" + containerCacheDir,
 		"-e", "GITHUB_WORKSPACE=" + containerWorkspace,
 		"-e", "GITHUB_REPOSITORY=" + defaultStr(e.claim.Run.RepoFullName, e.claim.Run.Project),
 		"-e", "GITHUB_SHA=" + e.claim.Run.SHA,
