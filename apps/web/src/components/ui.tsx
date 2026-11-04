@@ -18,7 +18,7 @@ export function Button({
 	return (
 		<button
 			className={cn(
-				"inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-lg font-medium transition-colors",
+				"inline-flex cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-lg font-medium transition-colors",
 				"disabled:cursor-not-allowed disabled:opacity-50",
 				size === "sm" ? "h-7 px-3 text-xs" : "h-8 px-3.5 text-xs",
 				variant === "default" &&
@@ -84,9 +84,9 @@ export function PageHeader({
 }) {
 	return (
 		<div className="mb-5">
-			<div className="flex items-baseline gap-3">
+			<div className="flex flex-wrap items-center gap-x-3 gap-y-2">
 				<h1 className="text-xl font-semibold tracking-[-0.02em]">{title}</h1>
-				{actions && <div className="ml-auto flex items-center gap-3">{actions}</div>}
+				{actions && <div className="ml-auto flex shrink-0 items-center gap-2">{actions}</div>}
 			</div>
 			{sub && <div className="mt-1.5 text-xs text-[var(--dim)]">{sub}</div>}
 		</div>

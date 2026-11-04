@@ -166,6 +166,8 @@ type Job struct {
 	Error           string          `json:"error"`
 	Outputs         json.RawMessage `json:"outputs"`
 	OutputsSpec     json.RawMessage `json:"outputs_spec"`
+	Environment     string          `json:"environment"`
+	EnvironmentURL  string          `json:"environment_url"`
 	Steps           []Step          `json:"steps,omitempty"`
 }
 
@@ -232,14 +234,15 @@ type HostMetrics struct {
 }
 
 type Secret struct {
-	ID         uuid.UUID  `json:"id"`
-	OrgID      uuid.UUID  `json:"org_id"`
-	ProjectID  *uuid.UUID `json:"project_id"`
-	Name       string     `json:"name"`
-	Ciphertext []byte     `json:"-"`
-	Nonce      []byte     `json:"-"`
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
+	ID            uuid.UUID  `json:"id"`
+	OrgID         uuid.UUID  `json:"org_id"`
+	ProjectID     *uuid.UUID `json:"project_id"`
+	EnvironmentID *uuid.UUID `json:"environment_id"`
+	Name          string     `json:"name"`
+	Ciphertext    []byte     `json:"-"`
+	Nonce         []byte     `json:"-"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
 }
 
 type Overview struct {

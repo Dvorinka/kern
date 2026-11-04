@@ -104,7 +104,14 @@ export interface Job {
 	job_key: string;
 	key: string;
 	name: string;
-	status: "queued" | "waiting" | "in_progress" | "completed" | "cancelled" | "skipped";
+	status:
+		| "queued"
+		| "waiting"
+		| "waiting_approval"
+		| "in_progress"
+		| "completed"
+		| "cancelled"
+		| "skipped";
 	conclusion: Conclusion;
 	needs: string[];
 	runs_on: string[];
@@ -120,13 +127,58 @@ export interface Job {
 	completed_at: string | null;
 	error: string;
 	outputs: Record<string, string> | null;
+	environment: string;
+	environment_url: string;
 	steps?: Step[];
+}
+
+export interface Approval {
+	user_id: string;
+	email: string;
+	at: string;
+}
+
+export interface Environment {
+	id: string;
+	project_id: string;
+	name: string;
+	protected: boolean;
+	required_approvals: number;
+	reviewers: string[];
+	reviewer_emails: string[];
+	wait_minutes: number;
+	branch_policy: "all" | "selected";
+	branch_patterns: string[];
+	created_at: string;
+}
+
+export interface Deployment {
+	id: string;
+	project_id: string;
+	environment_id: string;
+	environment_name: string;
+	run_id: string;
+	job_id: string;
+	ref: string;
+	sha: string;
+	status: "queued" | "in_progress" | "success" | "failure" | "rolled_back";
+	url: string;
+	approvals: Approval[];
+	required_approvals: number;
+	reviewer_emails: string[];
+	wait_until: string | null;
+	run_number: number;
+	project_slug: string;
+	job_name: string;
+	created_at: string;
+	completed_at: string | null;
 }
 
 export interface RunDetail {
 	run: Run;
 	jobs: Job[];
 	plan: unknown;
+	deployments: Deployment[];
 	workflow: { id: string; path: string; name: string; commit_sha: string };
 }
 
@@ -178,6 +230,7 @@ export interface SecretSummary {
 	id: string;
 	name: string;
 	project_id: string | null;
+	environment_id: string | null;
 	created_at: string;
 	updated_at: string;
 }

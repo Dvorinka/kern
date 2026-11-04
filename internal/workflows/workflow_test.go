@@ -183,3 +183,57 @@ func diagnosticText(res Result) string {
 	}
 	return b.String()
 }
+
+func TestEnvironment(t *testing.T) {
+	src := `on: push
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: prod-${{ matrix.tier }}
+      url: https://example.com/${{ matrix.tier }}
+    strategy:
+      matrix:
+        tier: [web, api]
+    steps:
+      - run: echo ship
+`
+	res, err := Compile(src, testCompiler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Valid {
+		t.Fatalf("expected valid, diagnostics: %+v", res.Diagnostics)
+	}
+	if len(res.Plan.Jobs) != 2 {
+		t.Fatalf("jobs = %d, want 2 matrix members", len(res.Plan.Jobs))
+	}
+	for _, j := range res.Plan.Jobs {
+		tier := j.Matrix["tier"]
+		want := "prod-" + asString(tier)
+		if j.Environment != want {
+			t.Errorf("job %s environment = %q, want %q", j.Key, j.Environment, want)
+		}
+		if j.EnvironmentURL != "https://example.com/"+asString(tier) {
+			t.Errorf("job %s environment url = %q", j.Key, j.EnvironmentURL)
+		}
+	}
+
+	// Bare string form.
+	res, err = Compile("on: push\njobs:\n  d:\n    runs-on: ubuntu-latest\n    environment: staging\n    steps:\n      - run: echo\n", testCompiler)
+	if err != nil || !res.Valid {
+		t.Fatalf("string environment should compile: %v %+v", err, res.Diagnostics)
+	}
+	if res.Plan.Jobs[0].Environment != "staging" {
+		t.Errorf("environment = %q", res.Plan.Jobs[0].Environment)
+	}
+
+	// Empty name is a compile error.
+	res, _ = Compile("on: push\njobs:\n  d:\n    runs-on: ubuntu-latest\n    environment: {}\n    steps:\n      - run: echo\n", testCompiler)
+	if res.Valid {
+		t.Fatal("environment without name should be invalid")
+	}
+	if !strings.Contains(diagnosticText(res), "environment") {
+		t.Errorf("diagnostics: %s", diagnosticText(res))
+	}
+}

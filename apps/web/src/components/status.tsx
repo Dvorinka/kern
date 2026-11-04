@@ -12,6 +12,7 @@ const CONF: Record<string, { label: string; cls: string }> = {
 	skipped: { label: "skipped", cls: "dim" },
 	queued: { label: "queued", cls: "dim" },
 	waiting: { label: "waiting", cls: "dim" },
+	waiting_approval: { label: "approval", cls: "warn" },
 	in_progress: { label: "running", cls: "live" },
 	running: { label: "running", cls: "live" },
 	offline: { label: "offline", cls: "dim" },

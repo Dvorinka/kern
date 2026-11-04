@@ -78,6 +78,12 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 	if err != nil {
 		return nil, fmt.Errorf("claim job: %w", err)
 	}
+	// A claimed deployment job is now actually deploying.
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE deployments SET status = 'in_progress'
+		WHERE job_id = $1 AND status = 'queued'`, jobID); err != nil {
+		return nil, fmt.Errorf("claim deployment: %w", err)
+	}
 
 	var out ClaimedJob
 	var runID, versionID uuid.UUID
@@ -85,7 +91,7 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 		SELECT j.id, j.run_id, j.job_key, j.key, j.name, j.status, j.conclusion, j.needs, j.runs_on,
 		       j.image, j.matrix, j.env, j.if_condition, j.timeout_seconds, j.continue_on_error,
 		       j.fail_fast, j.priority, j.attempt, j.runner_id, j.queued_at, j.started_at, j.completed_at,
-		       j.lease_expires_at, j.error, j.outputs, j.outputs_spec,
+		       j.lease_expires_at, j.error, j.outputs, j.outputs_spec, j.environment, j.environment_url,
 		       r.id, r.project_id, r.workflow_id, r.workflow_version_id, r.run_number, r.event,
 		       r.ref, r.sha, r.commit_message, r.actor, r.status, r.conclusion, r.trust_level,
 		       r.source, r.concurrency_group, r.started_at, r.completed_at, r.created_at,
@@ -102,7 +108,7 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 			&out.Job.Env, &out.Job.IfCondition, &out.Job.TimeoutSeconds, &out.Job.ContinueOnError,
 			&out.Job.FailFast, &out.Job.Priority, &out.Job.Attempt, &out.Job.RunnerID, &out.Job.QueuedAt,
 			&out.Job.StartedAt, &out.Job.CompletedAt, &out.Job.LeaseExpiresAt, &out.Job.Error,
-			&out.Job.Outputs, &out.Job.OutputsSpec,
+			&out.Job.Outputs, &out.Job.OutputsSpec, &out.Job.Environment, &out.Job.EnvironmentURL,
 			&out.Run.ID, &out.Run.ProjectID, &runID, &versionID, &out.Run.RunNumber, &out.Run.Event,
 			&out.Run.Ref, &out.Run.SHA, &out.Run.CommitMessage, &out.Run.Actor, &out.Run.Status,
 			&out.Run.Conclusion, &out.Run.TrustLevel, &out.Run.Source, &out.Run.ConcurrencyGroup,
@@ -249,6 +255,15 @@ func (s *Store) FinishJob(ctx context.Context, runnerID, jobID uuid.UUID, conclu
 		UPDATE job_leases SET released_at = now() WHERE job_id = $1 AND released_at IS NULL`, jobID); err != nil {
 		return false, err
 	}
+	depStatus := "failure"
+	if conclusion == "success" || conclusion == "skipped" {
+		depStatus = "success"
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE deployments SET status = $2, completed_at = now()
+		WHERE job_id = $1 AND status IN ('queued', 'in_progress')`, jobID, depStatus); err != nil {
+		return false, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return false, err
 	}
@@ -303,6 +318,14 @@ func (s *Store) ReapExpiredLeases(ctx context.Context, maxAttempts int) ([]uuid.
 			UPDATE steps SET status = 'queued', conclusion = '', started_at = NULL,
 				completed_at = NULL, exit_code = NULL
 			WHERE job_id = $1 AND status <> 'completed'`, jobID)
+		// Requeued jobs return their deployment to queued; jobs that exhausted
+		// attempts fail it.
+		_, _ = s.pool.Exec(ctx, `
+			UPDATE deployments d SET
+				status = CASE WHEN j.status = 'completed' THEN 'failure' ELSE 'queued' END,
+				completed_at = CASE WHEN j.status = 'completed' THEN now() ELSE NULL END
+			FROM jobs j
+			WHERE j.id = $1 AND d.job_id = j.id AND d.status IN ('queued', 'in_progress')`, jobID)
 	}
 	out := make([]uuid.UUID, 0, len(runSet))
 	for id := range runSet {
@@ -316,17 +339,32 @@ func (s *Store) ReapExpiredLeases(ctx context.Context, maxAttempts int) ([]uuid.
 // enforces the same timeout via context, so this only fires when a runner
 // keeps renewing the lease without enforcing it.
 func (s *Store) TimeoutOverdueJobs(ctx context.Context) (int64, error) {
-	tag, err := s.pool.Exec(ctx, `
+	rows, err := s.pool.Query(ctx, `
 		UPDATE jobs SET status = 'completed', conclusion = 'failure',
 			error = 'job exceeded timeout-minutes', completed_at = now(),
 			lease_expires_at = NULL
 		WHERE status = 'in_progress'
 		  AND started_at IS NOT NULL
-		  AND started_at + make_interval(secs => timeout_seconds) < now()`)
+		  AND started_at + make_interval(secs => timeout_seconds) < now()
+		RETURNING id`)
 	if err != nil {
 		return 0, err
 	}
-	return tag.RowsAffected(), nil
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	s.failDeploymentsForJobs(ctx, ids)
+	return int64(len(ids)), nil
 }
 
 // PruneStepBlobs clears log and summary references on steps of runs completed

@@ -145,6 +145,13 @@ func (s *Server) buildRouter() *gin.Engine {
 		auth.GET("/webhooks/deliveries", s.listWebhookDeliveries)
 		auth.GET("/webhooks/deliveries/:id", s.getWebhookDelivery)
 
+		auth.GET("/projects/:project/environments", s.listEnvironments)
+		auth.PUT("/projects/:project/environments/:name", s.putEnvironment)
+		auth.DELETE("/projects/:project/environments/:name", s.deleteEnvironment)
+		auth.GET("/deployments", s.listDeployments)
+		auth.POST("/jobs/:id/approve", s.approveDeployment)
+		auth.POST("/jobs/:id/reject", s.rejectDeployment)
+
 		auth.GET("/settings", s.getOrgSettings)
 		auth.PUT("/settings", s.putOrgSettings)
 		auth.GET("/projects/:project/settings", s.getProjectSettings)

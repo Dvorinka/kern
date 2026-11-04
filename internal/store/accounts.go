@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -64,6 +65,57 @@ func (s *Store) UserByEmail(ctx context.Context, email string) (User, error) {
 		return User{}, ErrNotFound
 	}
 	return u, err
+}
+
+// OrgUserIDsByEmail resolves org members by email. Missing emails are an error.
+// Returned ids are lowercase uuid strings, matching environments.reviewers.
+func (s *Store) OrgUserIDsByEmail(ctx context.Context, orgID uuid.UUID, emails []string) ([]string, error) {
+	if len(emails) == 0 {
+		return []string{}, nil
+	}
+	want := make([]string, len(emails))
+	for i, e := range emails {
+		want[i] = strings.ToLower(strings.TrimSpace(e))
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT lower(u.email), u.id::text
+		FROM users u
+		JOIN org_members m ON m.user_id = u.id
+		WHERE m.org_id = $1 AND lower(u.email) = ANY($2)`, orgID, want)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	found := map[string]string{}
+	for rows.Next() {
+		var email, id string
+		if err := rows.Scan(&email, &id); err != nil {
+			return nil, err
+		}
+		found[email] = id
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(want))
+	var missing []string
+	seen := map[string]bool{}
+	for _, email := range want {
+		if seen[email] {
+			continue
+		}
+		seen[email] = true
+		id, ok := found[email]
+		if !ok {
+			missing = append(missing, email)
+			continue
+		}
+		ids = append(ids, id)
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("unknown org member: %s", strings.Join(missing, ", "))
+	}
+	return ids, nil
 }
 
 func (s *Store) UserByID(ctx context.Context, id uuid.UUID) (User, error) {
