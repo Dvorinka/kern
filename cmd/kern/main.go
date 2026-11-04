@@ -9,6 +9,8 @@ import (
 	"os/signal"
 	"strings"
 	"time"
+
+	"github.com/dvorinka/kern/internal/version"
 )
 
 const usage = `kern — KERN control plane CLI
@@ -126,6 +128,8 @@ func dispatch(c *cli, args []string) int {
 	name, rest := args[0], args[1:]
 	var err error
 	switch name {
+	case "version", "--version", "-v":
+		fmt.Println("kern " + version.Version)
 	case "login":
 		err = c.cmdLogin(ctx, rest)
 	case "logout":

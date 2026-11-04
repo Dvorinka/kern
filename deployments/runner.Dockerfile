@@ -1,6 +1,6 @@
 # kern-runner image. The agent shells out to `docker`, so the image carries the
 # Docker CLI only — mount the host socket (-v /var/run/docker.sock:...) at run.
-FROM golang:1.24-bookworm AS build
+FROM golang:1.26-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
