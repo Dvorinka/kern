@@ -34,20 +34,20 @@ export function ArtifactsPage() {
 								<span className="font-mono min-w-0 flex-1 truncate text-[13px]">{a.name}</span>
 								<Link
 									to={`/runs/${a.run_id}`}
-									className="shrink-0 text-xs text-[var(--text-muted)] hover:text-[var(--text)]"
+									className="shrink-0 text-xs text-[var(--dim)] hover:text-[var(--ink)]"
 								>
 									{a.project_slug}#{a.run_number}
 								</Link>
-								<span className="w-16 shrink-0 text-right text-xs text-[var(--text-faint)]">
+								<span className="w-16 shrink-0 text-right text-xs text-[var(--faint)]">
 									{bytes(a.size_bytes)}
 								</span>
-								<span className="w-20 shrink-0 text-right text-xs text-[var(--text-faint)]">
+								<span className="w-20 shrink-0 text-right text-xs text-[var(--faint)]">
 									{relTime(a.created_at)}
 								</span>
 								<a
 									href={`/api/v1/artifacts/${a.id}/download`}
 									download
-									className="shrink-0 rounded p-1.5 text-[var(--text-muted)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text)]"
+									className="shrink-0 rounded p-1.5 text-[var(--dim)] hover:bg-[var(--raise2)] hover:text-[var(--ink)]"
 									title={`Download ${a.name}.tar.gz`}
 								>
 									<Download size={14} />

@@ -21,26 +21,6 @@
 	--build: #f0b23f;
 	--web: #34c9b0;
 
-	/* legacy aliases — older components keep resolving while surfaces migrate */
-	--bg-raised: var(--raise);
-	--bg-subtle: var(--raise2);
-	--bg-inset: var(--bg);
-	--border: var(--line);
-	--border-strong: var(--ctl);
-	--text: var(--ink);
-	--text-muted: var(--dim);
-	--text-faint: var(--faint);
-	--accent: var(--ink);
-	--accent-bright: #fff;
-	--accent-soft: rgba(242, 242, 242, 0.1);
-	--accent-ink: #000;
-	--ok-soft: rgba(63, 192, 122, 0.13);
-	--err-soft: rgba(229, 86, 111, 0.13);
-	--warn-soft: rgba(240, 178, 63, 0.13);
-	--run: var(--ink);
-	--run-soft: rgba(242, 242, 242, 0.13);
-	--rail: var(--bg);
-	--rail-text: var(--dim);
 	--mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
 	--sans: "Geist", system-ui, -apple-system, sans-serif;
 }

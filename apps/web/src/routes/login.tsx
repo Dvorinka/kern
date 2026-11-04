@@ -37,7 +37,7 @@ export function LoginPage() {
 					</div>
 				</div>
 				<label className="mb-3 block">
-					<span className="mb-1 block text-xs text-[var(--text-muted)]">Email</span>
+					<span className="mb-1 block text-xs text-[var(--dim)]">Email</span>
 					<Input
 						type="email"
 						required
@@ -48,7 +48,7 @@ export function LoginPage() {
 					/>
 				</label>
 				<label className="mb-4 block">
-					<span className="mb-1 block text-xs text-[var(--text-muted)]">Password</span>
+					<span className="mb-1 block text-xs text-[var(--dim)]">Password</span>
 					<Input
 						type="password"
 						required

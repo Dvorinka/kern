@@ -78,8 +78,8 @@ export function ProjectsPage() {
 						data.projects.map((p) => (
 							<Row key={p.id} onClick={() => nav(`/projects/${p.slug}`)}>
 								<span className="min-w-0 flex-1 truncate font-medium">{p.name}</span>
-								<span className="text-xs text-[var(--text-muted)]">{p.slug}</span>
-								<span className="font-mono w-64 truncate text-xs text-[var(--text-faint)]">
+								<span className="text-xs text-[var(--dim)]">{p.slug}</span>
+								<span className="font-mono w-64 truncate text-xs text-[var(--faint)]">
 									{p.repo_full_name || p.local_path || p.repo_url}
 								</span>
 							</Row>
@@ -184,7 +184,7 @@ export function ProjectDetailPage() {
 						k="Self-heal"
 						v={
 							<select
-								className="rounded border border-[var(--border)] bg-transparent px-2 py-0.5 text-xs"
+								className="rounded border border-[var(--line)] bg-transparent px-2 py-0.5 text-xs"
 								value={psettings?.self_heal ?? "inherit"}
 								disabled={setHeal.isPending}
 								onChange={(e) => setHeal.mutate(e.target.value)}
@@ -210,7 +210,7 @@ export function ProjectDetailPage() {
 					workflows.map((w) => (
 						<Row key={w.id}>
 							<span className="min-w-0 flex-1 truncate font-medium">{w.name}</span>
-							<span className="font-mono flex-1 truncate text-xs text-[var(--text-faint)]">{w.path}</span>
+							<span className="font-mono flex-1 truncate text-xs text-[var(--faint)]">{w.path}</span>
 							<Button
 								size="sm"
 								onClick={() => trigger.mutate(w.id)}
@@ -233,13 +233,13 @@ function SyncResult({
 }) {
 	return (
 		<Card className="mb-4 p-4">
-			<div className="mb-2 text-xs text-[var(--text-faint)]">
+			<div className="mb-2 text-xs text-[var(--faint)]">
 				Synced at <span className="font-mono">{result.sha.slice(0, 8)}</span>
 			</div>
 			{result.workflows.map((w) => (
 				<div key={w.path} className="text-xs">
 					<span className={w.valid ? "text-[var(--ok)]" : "text-[var(--err)]"}>{w.valid ? "valid" : "invalid"}</span>
-					<span className="font-mono ml-2 text-[var(--text-muted)]">{w.path}</span>
+					<span className="font-mono ml-2 text-[var(--dim)]">{w.path}</span>
 					{(w.diagnostics ?? []).map((d, i) => (
 						<div key={i} className="ml-4 text-[var(--warn)]">
 							{d.level}: {d.message}
