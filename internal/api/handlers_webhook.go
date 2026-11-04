@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
 	"github.com/dvorinka/kern/internal/store"
 	"github.com/dvorinka/kern/internal/workflows"
@@ -60,11 +61,12 @@ func (s *Server) processGithubDelivery(c *gin.Context, delivery, event string, b
 			return "failed", err.Error()
 		}
 		for _, wf := range wfs {
-			_, version, err := s.Store.LatestWorkflowVersion(c.Request.Context(), proj.ID, wf.Path)
-			if err != nil || !version.Valid {
+			version, plan, err := s.workflowAtSHA(c, p.Repository.FullName, proj.ID, wf, p.After)
+			if err != nil {
+				skipped = append(skipped, wf.Name+" ("+err.Error()+")")
 				continue
 			}
-			triggered, why := pushMatches(version.Parsed, p.Ref)
+			triggered, why := pushMatchesPlan(plan, p.Ref)
 			if !triggered {
 				if why != "" {
 					skipped = append(skipped, wf.Name+" ("+why+")")
@@ -107,15 +109,42 @@ func (s *Server) processGithubDelivery(c *gin.Context, delivery, event string, b
 		strings.Join(started, ", "), strings.Join(skipped, ", "))
 }
 
-// pushMatches reports whether a stored workflow plan subscribes to a push on
-// ref. It honours branches/branches-ignore filters; any other non-empty filter
-// (tags, paths, types…) is a declared gap and the workflow does not trigger,
-// with the reason returned for the delivery record.
-func pushMatches(parsed json.RawMessage, ref string) (bool, string) {
-	var plan workflows.Plan
-	if json.Unmarshal(parsed, &plan) != nil {
-		return false, ""
+// workflowAtSHA compiles the workflow as it exists at the pushed commit and
+// stores it as a new version, so the run executes what was pushed — not what
+// was last synced. Falls back to the latest stored version when the repo is
+// unreachable.
+func (s *Server) workflowAtSHA(c *gin.Context, fullName string, projectID uuid.UUID,
+	wf store.Workflow, sha string) (store.WorkflowVersion, *workflows.Plan, error) {
+	ctx := c.Request.Context()
+	content, err := s.GH.FileContent(ctx, fullName, wf.Path, sha)
+	if err != nil {
+		_, version, lerr := s.Store.LatestWorkflowVersion(ctx, projectID, wf.Path)
+		if lerr != nil {
+			return store.WorkflowVersion{}, nil, fmt.Errorf("no workflow version available")
+		}
+		var plan workflows.Plan
+		_ = json.Unmarshal(version.Parsed, &plan)
+		if !version.Valid {
+			return store.WorkflowVersion{}, nil, fmt.Errorf("stored version invalid")
+		}
+		return version, &plan, nil
 	}
+	res, err := workflows.Compile(content, s.Orch.Compiler)
+	if err != nil || !res.Valid || res.Plan == nil {
+		return store.WorkflowVersion{}, nil, fmt.Errorf("workflow does not compile at %s", sha[:8])
+	}
+	version, err := s.Store.PutWorkflowVersion(ctx, wf.ID, sha, content, res.Plan, res.Valid, res.Diagnostics)
+	if err != nil {
+		return store.WorkflowVersion{}, nil, err
+	}
+	return version, res.Plan, nil
+}
+
+// pushMatchesPlan reports whether a compiled workflow plan subscribes to a push
+// on ref. It honours branches/branches-ignore filters; any other non-empty
+// filter (tags, paths, types…) is a declared gap and the workflow does not
+// trigger, with the reason returned for the delivery record.
+func pushMatchesPlan(plan *workflows.Plan, ref string) (bool, string) {
 	subscribed := false
 	for _, e := range plan.Events {
 		if e == "push" {
