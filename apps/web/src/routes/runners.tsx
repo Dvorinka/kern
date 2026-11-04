@@ -90,7 +90,11 @@ export function RunnersPage() {
 									<Meter
 										label="cpu"
 										pct={r.cpu_percent ?? null}
-										sub={r.active_jobs != null ? `${r.active_jobs} job${r.active_jobs === 1 ? "" : "s"}` : ""}
+										sub={
+											r.active_jobs != null
+												? `${r.active_jobs} job${r.active_jobs === 1 ? "" : "s"}`
+												: ""
+										}
 									/>
 									<Meter
 										label="mem"
@@ -176,13 +180,22 @@ function EnrollCard({ onDone }: { onDone: () => void }) {
 					<div className="flex items-center gap-2 rounded-[3px] border border-[var(--border)] bg-[var(--bg-inset)] px-3 py-2">
 						<code className="min-w-0 flex-1 truncate font-mono text-xs">{joinCmd}</code>
 						<CopyButton text={joinCmd} />
-						<Button size="sm" variant="ghost" onClick={onDone}>Done</Button>
+						<Button size="sm" variant="ghost" onClick={onDone}>
+							Done
+						</Button>
 					</div>
 				</div>
 			) : (
 				<form onSubmit={submit} className="flex flex-wrap items-center gap-3">
 					<Input name="name" placeholder="runner name" required className="w-48" />
-					<Input name="ttl" type="number" min={1} max={1440} placeholder="ttl minutes (60)" className="w-40" />
+					<Input
+						name="ttl"
+						type="number"
+						min={1}
+						max={1440}
+						placeholder="ttl minutes (60)"
+						className="w-40"
+					/>
 					<Button type="submit" variant="primary" size="sm" disabled={mint.isPending}>
 						Mint token
 					</Button>
@@ -194,23 +207,26 @@ function EnrollCard({ onDone }: { onDone: () => void }) {
 }
 
 // Meter is a 3-line utilization readout: label, thin bar, secondary detail.
-// null pct means the runner has not reported metrics yet.
+// null pct means the runner has not reported metrics yet. Grey until hot —
+// colour is data, not decoration.
 function Meter({ label, pct, sub }: { label: string; pct: number | null; sub: string }) {
 	return (
-		<span className="flex items-center gap-2 text-[10px] leading-4 text-[var(--text-faint)]">
+		<span className="flex items-center gap-2 text-[10px] leading-4 text-[var(--faint)]">
 			<span className="w-7">{label}</span>
-			<span className="h-1 w-16 rounded bg-[var(--border)]">
+			<span className="h-1.5 w-16 rounded-[3px] bg-[var(--raise2)]">
 				{pct != null && (
 					<span
-						className="block h-1 rounded"
+						className="block h-1.5 rounded-[3px]"
 						style={{
 							width: `${Math.min(100, Math.max(2, pct))}%`,
-							background: pct > 85 ? "var(--err)" : "var(--accent)",
+							background: pct > 85 ? "var(--err)" : "#3a3a3a",
 						}}
 					/>
 				)}
 			</span>
-			<span className="w-16 truncate">{pct != null ? `${Math.round(pct)}%` : "-"} {sub}</span>
+			<span className="w-16 truncate font-mono">
+				{pct != null ? `${Math.round(pct)}%` : "-"} {sub}
+			</span>
 		</span>
 	);
 }

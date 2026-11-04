@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { Button, Input } from "../components/ui";
+import { KernelMark } from "../components/layout";
 
 export function LoginPage() {
 	const { login } = useAuth();
@@ -27,15 +28,12 @@ export function LoginPage() {
 
 	return (
 		<div className="console-bg flex h-full items-center justify-center">
-			<form
-				onSubmit={submit}
-				className="w-80 rounded-[3px] border border-[var(--border)] bg-[var(--bg-raised)] p-6 shadow-[0_0_0_1px_var(--border),0_20px_60px_-20px_rgba(0,0,0,0.5)]"
-			>
+			<form onSubmit={submit} className="panel w-80 rounded-xl p-6">
 				<div className="mb-5 flex items-center gap-2.5">
-					<img src="/favicon.svg" alt="" className="size-6 rounded-[3px]" />
+					<KernelMark size={16} />
 					<div>
-						<div className="text-base font-bold tracking-[0.22em]">KERN</div>
-						<div className="text-[11px] text-[var(--text-faint)]">Distributed CI/CD control plane</div>
+						<div className="text-[13px] font-semibold tracking-[0.22em]">KERN</div>
+						<div className="text-[11px] text-[var(--faint)]">Distributed CI/CD control plane</div>
 					</div>
 				</div>
 				<label className="mb-3 block">
