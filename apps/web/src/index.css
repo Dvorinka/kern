@@ -1068,6 +1068,50 @@ button:focus-visible {
 	border-radius: 4px;
 }
 
+/* motion only where it means something — and never when asked not to */
+@media (prefers-reduced-motion: reduce) {
+	.sq.live::after,
+	.pb.r,
+	.cursor,
+	.seg.live {
+		animation: none;
+	}
+}
+
+@media (max-width: 760px) {
+	.rail {
+		display: none;
+	}
+	.sbody {
+		grid-template-columns: 1fr;
+	}
+	.slist {
+		border-right: 0;
+		border-bottom: 1px solid var(--line);
+	}
+	.kpis {
+		grid-template-columns: 1fr 1fr;
+	}
+	.kpi:nth-child(2n) {
+		border-right: 0;
+	}
+	.kpi:nth-child(-n + 3) {
+		border-bottom: 1px solid var(--line);
+	}
+	.cells {
+		grid-template-columns: 1fr 1fr !important;
+	}
+	.cell:nth-child(2n) {
+		border-right: 0;
+	}
+	.cell:nth-child(-n + 2) {
+		border-bottom: 1px solid var(--line);
+	}
+	.axis-col {
+		width: 56px;
+	}
+}
+
 /* ── rendered GITHUB_STEP_SUMMARY markdown ── */
 .prose-kern > *:first-child {
 	margin-top: 0;

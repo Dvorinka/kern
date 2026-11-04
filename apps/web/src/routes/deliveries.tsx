@@ -4,14 +4,8 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import { api } from "../lib/api";
 import type { WebhookDelivery } from "../lib/types";
 import { Card, EmptyState, PageHeader, Spinner, cn } from "../components/ui";
+import { StatusSq } from "../components/status";
 import { relTime } from "../lib/format";
-
-const STATUS_COLOR: Record<string, string> = {
-	processed: "var(--ok)",
-	received: "var(--warn)",
-	ignored: "var(--text-faint)",
-	failed: "var(--err)",
-};
 
 export function DeliveriesPage() {
 	const { data, isLoading } = useQuery({
@@ -59,7 +53,8 @@ function DeliveryRow({ d }: { d: WebhookDelivery }) {
 				) : (
 					<ChevronRight size={13} className="shrink-0 text-[var(--text-faint)]" />
 				)}
-				<span className="w-20 shrink-0 font-mono text-xs" style={{ color: STATUS_COLOR[d.status] }}>
+				<span className="flex w-24 shrink-0 items-center gap-2 font-mono text-xs text-[var(--dim)]">
+					<StatusSq status={d.status} />
 					{d.status}
 				</span>
 				<span className="w-28 shrink-0 text-[13px] font-medium">{d.event}</span>
@@ -69,7 +64,7 @@ function DeliveryRow({ d }: { d: WebhookDelivery }) {
 				{d.error && (
 					<span
 						className="max-w-64 truncate text-xs"
-						style={{ color: d.status === "failed" ? "var(--err)" : "var(--text-faint)" }}
+						style={{ color: d.status === "failed" ? "var(--err)" : "var(--faint)" }}
 					>
 						{d.error}
 					</span>

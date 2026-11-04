@@ -32,13 +32,19 @@ export function OverviewPage() {
 	});
 
 	const runs = useMemo(() => runsData?.runs ?? [], [runsData]);
-	const recent = runs.slice(0, 6);
-	const details = useRunDetails(recent);
-
 	const liveRun = runs.find((r) => r.status === "in_progress" || r.status === "queued");
+	// the live run earns its own slot in the detail fan-out — it is not
+	// necessarily inside the recent-six window
+	const detailRuns = useMemo(
+		() => (liveRun && !runs.slice(0, 6).includes(liveRun) ? [liveRun, ...runs.slice(0, 5)] : runs.slice(0, 6)),
+		[runs, liveRun],
+	);
+	const recent = detailRuns.slice(0, 6);
+	const details = useRunDetails(detailRuns);
+
 	const liveDetail = useMemo(
-		() => (liveRun ? details[recent.indexOf(liveRun)]?.data : undefined),
-		[liveRun, details, recent],
+		() => (liveRun ? details[detailRuns.indexOf(liveRun)]?.data : undefined),
+		[liveRun, details, detailRuns],
 	);
 
 	// runner_id → hue of the job it's currently running, for the fleet tint

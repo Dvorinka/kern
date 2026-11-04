@@ -30,9 +30,10 @@ export function RunsPage() {
 	const [params, setParams] = useSearchParams();
 	const tab = (params.get("tab") ?? "") as Tab;
 	const [branch, setBranch] = useState("");
+	const [older, setOlder] = useState(0);
 	const { data, isLoading } = useQuery({
-		queryKey: ["runs", "all"],
-		queryFn: () => api.get<{ runs: Run[]; total: number }>("/runs?limit=60"),
+		queryKey: ["runs", "all", older],
+		queryFn: () => api.get<{ runs: Run[]; total: number }>(`/runs?limit=60&offset=${older * 60}`),
 		refetchInterval: 4000,
 	});
 	const { data: overview } = useQuery({
@@ -147,6 +148,21 @@ export function RunsPage() {
 									<span>6m</span>
 									<span>8m</span>
 								</div>
+							</div>
+							<div className="flex items-baseline gap-3.5 py-[11px] text-[11px] text-[var(--faint)]">
+								<span>
+									{visible.length} of {data?.total ?? visible.length} runs
+								</span>
+								{older > 0 && (
+									<button className="lnk" onClick={() => setOlder((o) => o - 1)}>
+										← Newer
+									</button>
+								)}
+								{(data?.total ?? 0) > (older + 1) * 60 && (
+									<button className="lnk ml-auto" onClick={() => setOlder((o) => o + 1)}>
+										Older →
+									</button>
+								)}
 							</div>
 						</>
 					)}
