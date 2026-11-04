@@ -56,20 +56,27 @@ in the repo. Work autonomously; the user trusts verification over claims.
   (`PUT /projects/:p/source`), `bundle_ref` trigger field, runner-side
   `GET /runners/jobs/:jobID/source`, checkout-by-untar replaces git clone,
   CLI streams logs and `--pull`s artifacts. Verified live on demo run #3.
-- **In flight**: release.yml run for `v0.1.1` on the fleet — verify with
-  `gh run list --repo Dvorinka/kern --workflow release.yml` then
-  `gh release view v0.1.1`. Expect: 4 bin tarballs + SHA256SUMS on the GH
-  release, ghcr.io/dvorinka/kern-{api,runner}:v0.1.1 + :latest. NOTE: a
-  dependabot PR batch (checkout/setup-go/setup-node 4→7, go_modules) is
-  occupying the fleet — release jobs queue behind CI, they are not stuck.
+- M4-lite SHIPPED `3f0cf29`+`06fa4a2`: push webhook → run compiled AT the
+  pushed SHA → commit status back. Live: hook 707211794, cloudflared tunnel,
+  `kern` project synced from GitHub, dogfood `kern.yml` green (run #5),
+  `kern/KERN CI: success` status posted on commit f06b590.
+- `v0.1.1` release: binaries ×4 + SHA256SUMS shipped and checksum-verified;
+  `images` job FAILED — both Dockerfiles pinned golang:1.24 vs go.mod ≥1.26
+  (toolchain switcher can't help inside buildkit). Also `kern --version`
+  was unwired. Fixed `e526eb4` (Dockerfiles + release.yml → 1.26, version
+  command), tagged `v0.1.2` → release refiring, queued behind fleet CI.
+- Gotcha: `kern.yml` fires on BOTH GitHub Actions (fleet CTs) and KERN —
+  the GHA copies fail fast (no docker on those runners). Harmless but noisy
+  commit checks; consider runs-on gating or deleting if it annoys.
 - User directive: work autonomously in a loop — build, monitor, improve, do not stop.
 
 ## Priority queue — pick the deepest self-contained vertical first
 
-1. **Verify v0.1.1 release** — GH release assets, GHCR images, `kern --version`
-   on a downloaded tarball reports v0.1.1. If the matrix breaks again, fix,
-   tag next patch. Also delete the stale `v0.1.0` tag/artifacts if images
-   published under it look confusing — user's call if unsure, otherwise leave.
+1. **Release — DONE: `v0.1.2` fully verified.** All 5 legs green; GH release
+   carries 4 tarballs + SHA256SUMS (checksum verified), `kern --version` on the
+   downloaded linux-amd64 binary prints `kern v0.1.2`, ghcr.io/dvorinka/kern-
+   {api,runner}:v0.1.2 + :latest pushed (runner digest e30ebd7b… confirmed in
+   job log). Stale `v0.1.0` tag left in place — user's call.
 2. **`kern exec` offload — DONE** (`d88ec56`, verified live). Remaining polish:
    content-addressed bundle dedupe, Ctrl-C → run-cancel passthrough, compose
    wrapper. For docker builds the workflow saves an image tar via
