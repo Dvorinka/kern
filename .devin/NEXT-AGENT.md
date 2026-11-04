@@ -74,12 +74,14 @@ in the repo. Work autonomously; the user trusts verification over claims.
    content-addressed bundle dedupe, Ctrl-C → run-cancel passthrough, compose
    wrapper. For docker builds the workflow saves an image tar via
    upload-artifact; `docker load` locally — pattern in docs/remote-exec.md.
-3. **M4-lite GitHub integration via `gh`** — repo webhook on Dvorinka/kern via
-   `gh api /repos/Dvorinka/kern/hooks` → `POST /api/v1/webhooks/github` (HMAC
-   verify + delivery persistence already exist server-side); public ingress via
-   vendored `cloudflared` quick tunnel or a deployed KERN instance; commit
-   statuses/check-runs back to GitHub via token. Full GitHub App (private key,
-   installation tokens) still needs operator credentials — do not invent secrets.
+3. **M4-lite — DONE (live)**: push webhooks → runs + commit statuses via token.
+   Ops state: repo hook id 707211794 on Dvorinka/kern → cloudflared quick tunnel
+   (`~/.t3/tools/cloudflared/2026.10.4/linux-x64/cloudflared tunnel --url
+   http://localhost:8080`, ephemeral trycloudflare URL — re-register hook when
+   it dies). api env: KERN_GITHUB_WEBHOOK_SECRET (in .data, ephemeral) +
+   KERN_GITHUB_TOKEN=`gh auth token`. kern.yml dogfood workflow runs on:push in
+   golang:1.26. Gap: pull_request events + check-runs need a GitHub App — do NOT
+   invent secrets.
 4. Cache paths outside workspace; GITHUB_STEP_SUMMARY at job level aggregation;
    testcontainers store tests; `::error::` annotation parsing; composite/JS/
    Docker actions, reusable workflows, services, environments, OIDC.

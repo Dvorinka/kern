@@ -65,6 +65,15 @@ never silently ignored.
 | String/object functions (`contains`, `startsWith`, `format`, `toJSON`, `hashFiles`…) | partial | core set implemented; `hashFiles` works in step-level expressions on the runner and errors with a diagnostic at job level |
 | Arithmetic, object filters `a.*` | no | parse error at compile time |
 
+## Provider integration (M4-lite)
+
+| Feature | Status | Notes |
+| --- | --- | --- |
+| Inbound `push` webhooks | done | HMAC-verified deliveries persisted + processed; matching projects trigger runs compiled at the pushed SHA; `branches`/`branches-ignore` honoured, other filters are declared skips |
+| Workflow discovery from GitHub | done | contents/tree API via `repo_full_name`; `KERN_GITHUB_TOKEN` for private repos |
+| Commit statuses | done | `pending` at run creation, terminal state on completion; context `kern/<workflow>` |
+| `pull_request` events, check-runs | no | needs GitHub App installation tokens (M4) |
+
 ## Secrets and trust
 
 | Feature | Status | Notes |
