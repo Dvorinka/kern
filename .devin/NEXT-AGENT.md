@@ -114,3 +114,38 @@ in the repo. Work autonomously; the user trusts verification over claims.
 - Update `docs/compatibility.md` when a feature lands; keep it honest.
 - Commit style: `Authored By: TDvorak <info@tdvorak.dev>` trailer.
 - Report in J.A.R.V.I.S. voice: what shipped, what verified (with evidence), what deferred and why.
+
+## HANDOFF — path to "fully functional / real-environment ready"
+
+Verified green today: `kern exec` offload, M4-lite (push webhook→run→commit
+status via token), v0.1.2 release (4 tarballs + SHA256SUMS + GHCR images),
+KERN CI dogfood loop (kern.yml green on every push, status posted).
+GitHub App exists: kern-ci (app_id 5607782, installation 178470896, pem in
+~/Downloads, api env already carries APP_ID+PRIVATE_KEY).
+
+Remaining work, ordered by value:
+
+1. M4 finish — JWT sign with pem → POST /app/installations/:id/access_tokens →
+   statuses/check-runs posted as the App (drop PAT). pull_request event handling
+   in processGithubDelivery (checkout head_sha, secrets withheld on fork runs).
+   github_apps table + manifest-flow "Connect GitHub" button so every user
+   self-serves an App (form POST manifest→settings/apps/new→callback converts
+   code→id/pem/secret→install redirect).
+2. Correctness gaps — pull_request/checkout ref semantics, timeout-minutes,
+   step-level `if:`, concurrency-group cancel across triggers, continue-on-error.
+3. Performance (the user's next ask) — persistent runner-side caches so warm
+   runs skip module/image downloads entirely; container image GC; bundle
+   content-addressed dedupe; log flush batching; parallel job caps.
+4. Reliability — runner claim retry/backoff, stale-lease job reaper check,
+   run timeout watchdog, api graceful shutdown.
+5. Security — fork-PR isolation policy, secret masking breadth test, webhook
+   replay window.
+6. Ops — production deploy doc (compose + TLS), retention for logs/artifacts,
+   /metrics endpoint, backup story.
+7. Frontend — artifact browsing, webhook delivery viewer, run cancel coverage.
+8. Tests — webhook processing integration tests, testcontainers e2e, compiler
+   fuzz.
+
+Traps unchanged: pkill -f kills your shell; /tmp tmpfs 512m in job containers;
+docker bind-mounts only under $HOME; rebuild .data/kern-* before trusting
+runtime; store tests truncate dev DB.
