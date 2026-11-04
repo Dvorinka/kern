@@ -129,6 +129,11 @@ func (o *Orchestrator) Tick(ctx context.Context) {
 	if _, err := o.Store.PromoteQueuedRuns(ctx); err != nil {
 		o.Log.Error("promote queued runs", zap.Error(err))
 	}
+	if n, err := o.Store.ReleaseDueDeployments(ctx); err != nil {
+		o.Log.Error("release due deployments", zap.Error(err))
+	} else if n > 0 {
+		o.Log.Info("released deployments whose wait elapsed", zap.Int64("jobs", n))
+	}
 	// Reclaim jobs whose runner lost its lease before advancing anything downstream.
 	reaped, err := o.Store.ReapExpiredLeases(ctx, o.MaxAttempts)
 	if err != nil {
@@ -239,17 +244,30 @@ func (o *Orchestrator) AdvanceRun(ctx context.Context, runID uuid.UUID) error {
 			continue
 		}
 		// Environment gate: every environment-named job leaves a deployment
-		// record; protected environments park the job until approved.
+		// record. A protected environment can refuse the ref, then park the
+		// job until its approvals are in and its wait has elapsed.
 		if job.Environment != "" {
 			env, err := o.Store.EnsureEnvironment(ctx, run.ProjectID, job.Environment)
 			if err != nil {
 				return err
 			}
+			var waitUntil *time.Time
+			if env.Protected && env.WaitMinutes > 0 {
+				t := time.Now().Add(time.Duration(env.WaitMinutes) * time.Minute)
+				waitUntil = &t
+			}
 			if _, err := o.Store.CreateDeployment(ctx, run.ProjectID, env.ID, run.ID, job.ID,
-				run.Ref, run.SHA, job.EnvironmentURL); err != nil {
+				run.Ref, run.SHA, job.EnvironmentURL, waitUntil); err != nil {
 				return err
 			}
-			if env.Protected && env.RequiredApprovals > 0 {
+			if env.Protected && !store.BranchAllowed(env.BranchPolicy, env.BranchPatterns, run.Ref) {
+				reason := fmt.Sprintf("branch %s is not allowed to deploy to %s", store.RefBranch(run.Ref), env.Name)
+				if err := o.Store.FailDeployment(ctx, job.ID, reason); err != nil {
+					return err
+				}
+				continue
+			}
+			if env.Holds() {
 				if err := o.Store.SetJobWaitingApproval(ctx, job.ID); err != nil {
 					return err
 				}

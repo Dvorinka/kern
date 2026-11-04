@@ -348,16 +348,21 @@ function ApprovalGate({
 				<span className="r">{pending.length} waiting</span>
 			</div>
 			{pending.map((d) => (
-				<ApprovalRow key={d.id} d={d} email={user?.email ?? ""} onDone={onDone} />
+				<ApprovalRow key={d.id} d={d} email={user?.email ?? ""} role={user?.role ?? ""} onDone={onDone} />
 			))}
 		</div>
 	);
 }
 
-function ApprovalRow({ d, email, onDone }: { d: Deployment; email: string; onDone: () => void }) {
+function ApprovalRow({ d, email, role, onDone }: { d: Deployment; email: string; role: string; onDone: () => void }) {
 	const qc = useQueryClient();
 	const approvals = d.approvals ?? [];
 	const mine = approvals.some((a) => a.email === email);
+	const list = d.reviewer_emails ?? [];
+	const allowed = role === "owner" || role === "admin" || list.length === 0 || list.includes(email);
+	const timer = d.wait_until && new Date(d.wait_until).getTime() > Date.now()
+		? `wait ${Math.max(1, Math.round((new Date(d.wait_until).getTime() - Date.now()) / 60000))}m`
+		: "";
 	const act = useMutation({
 		mutationFn: (op: "approve" | "reject") => api.post(`/jobs/${d.job_id}/${op}`),
 		onSuccess: () => {
@@ -371,20 +376,27 @@ function ApprovalRow({ d, email, onDone }: { d: Deployment; email: string; onDon
 			<span className="text-xs text-[var(--dim)]">{d.job_name}</span>
 			<span className="font-mono text-xs text-[var(--faint)]">
 				{approvals.length}/{d.required_approvals}
+				{timer ? ` · ${timer}` : ""}
 				{approvals.length > 0 ? ` · ${approvals.map((a) => a.email).join(", ")}` : ""}
 			</span>
 			<span className="ml-auto flex items-center gap-2">
-				<Button
-					size="sm"
-					variant="primary"
-					disabled={act.isPending || mine}
-					onClick={() => act.mutate("approve")}
-				>
-					{mine ? "Approved" : "Approve"}
-				</Button>
-				<Button size="sm" variant="danger" disabled={act.isPending} onClick={() => act.mutate("reject")}>
-					Reject
-				</Button>
+				{allowed ? (
+					<>
+						<Button
+							size="sm"
+							variant="primary"
+							disabled={act.isPending || mine}
+							onClick={() => act.mutate("approve")}
+						>
+							{mine ? "Approved" : "Approve"}
+						</Button>
+						<Button size="sm" variant="danger" disabled={act.isPending} onClick={() => act.mutate("reject")}>
+							Reject
+						</Button>
+					</>
+				) : (
+					<span className="text-xs text-[var(--faint)]">reviewers only</span>
+				)}
 			</span>
 			{act.error && <span className="w-full text-xs text-[var(--err)]">{act.error.message}</span>}
 		</div>

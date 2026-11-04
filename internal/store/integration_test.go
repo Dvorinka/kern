@@ -7,6 +7,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"sync"
@@ -239,7 +240,7 @@ func TestCancelInProgressNoGroup(t *testing.T) {
 func TestEnvironmentApprovalGate(t *testing.T) {
 	s, ctx := testStore(t)
 	pid, wid, vid := fixture(t, ctx, s)
-	env, err := s.PutEnvironment(ctx, pid, "prod", true, 1)
+	env, err := s.PutEnvironment(ctx, pid, "prod", EnvironmentInput{Protected: true, RequiredApprovals: 1})
 	if err != nil {
 		t.Fatalf("put environment: %v", err)
 	}
@@ -265,7 +266,7 @@ func TestEnvironmentApprovalGate(t *testing.T) {
 	if _, err := s.PromoteQueuedRuns(ctx); err != nil {
 		t.Fatalf("promote: %v", err)
 	}
-	dep, err := s.CreateDeployment(ctx, pid, env.ID, run.ID, job.ID, run.Ref, run.SHA, job.EnvironmentURL)
+	dep, err := s.CreateDeployment(ctx, pid, env.ID, run.ID, job.ID, run.Ref, run.SHA, job.EnvironmentURL, nil)
 	if err != nil {
 		t.Fatalf("create deployment: %v", err)
 	}
@@ -284,7 +285,7 @@ func TestEnvironmentApprovalGate(t *testing.T) {
 	if err := s.pool.QueryRow(ctx, `SELECT id FROM users LIMIT 1`).Scan(&userID); err != nil {
 		t.Fatalf("user: %v", err)
 	}
-	dep, released, err := s.ApproveDeployment(ctx, job.ID, userID, "it@kern.local")
+	dep, released, err := s.ApproveDeployment(ctx, job.ID, userID, "it@kern.local", "member")
 	if err != nil {
 		t.Fatalf("approve: %v", err)
 	}
@@ -298,7 +299,7 @@ func TestEnvironmentApprovalGate(t *testing.T) {
 	if j.Status != "queued" {
 		t.Fatalf("job = %s, want queued", j.Status)
 	}
-	if _, _, err := s.ApproveDeployment(ctx, job.ID, userID, "it@kern.local"); err == nil {
+	if _, _, err := s.ApproveDeployment(ctx, job.ID, userID, "it@kern.local", "member"); err == nil {
 		t.Fatal("double approval should fail")
 	}
 	claimed, err := s.ClaimJob(ctx, r.ID, time.Minute)
@@ -313,7 +314,7 @@ func TestEnvironmentApprovalGate(t *testing.T) {
 func TestDeploymentReject(t *testing.T) {
 	s, ctx := testStore(t)
 	pid, wid, vid := fixture(t, ctx, s)
-	env, err := s.PutEnvironment(ctx, pid, "prod", true, 1)
+	env, err := s.PutEnvironment(ctx, pid, "prod", EnvironmentInput{Protected: true, RequiredApprovals: 1})
 	if err != nil {
 		t.Fatalf("put environment: %v", err)
 	}
@@ -330,13 +331,17 @@ func TestDeploymentReject(t *testing.T) {
 	}
 	jobs, _ := s.JobsForRun(ctx, run.ID)
 	job := jobs[0]
-	if _, err := s.CreateDeployment(ctx, pid, env.ID, run.ID, job.ID, run.Ref, run.SHA, ""); err != nil {
+	if _, err := s.CreateDeployment(ctx, pid, env.ID, run.ID, job.ID, run.Ref, run.SHA, "", nil); err != nil {
 		t.Fatalf("create deployment: %v", err)
 	}
 	if err := s.SetJobWaitingApproval(ctx, job.ID); err != nil {
 		t.Fatalf("park: %v", err)
 	}
-	dep, err := s.RejectDeployment(ctx, job.ID)
+	var userID uuid.UUID
+	if err := s.pool.QueryRow(ctx, `SELECT id FROM users LIMIT 1`).Scan(&userID); err != nil {
+		t.Fatalf("user: %v", err)
+	}
+	dep, err := s.RejectDeployment(ctx, job.ID, userID, "member")
 	if err != nil {
 		t.Fatalf("reject: %v", err)
 	}
@@ -346,5 +351,109 @@ func TestDeploymentReject(t *testing.T) {
 	j, _ := s.Job(ctx, job.ID)
 	if j.Status != "cancelled" || j.Conclusion != "cancelled" {
 		t.Fatalf("job = %s/%s, want cancelled", j.Status, j.Conclusion)
+	}
+}
+
+func TestEnvironmentRules(t *testing.T) {
+	s, ctx := testStore(t)
+	pid, wid, vid := fixture(t, ctx, s)
+	var userID uuid.UUID
+	if err := s.pool.QueryRow(ctx, `SELECT id FROM users WHERE email = 'it@kern.local'`).Scan(&userID); err != nil {
+		t.Fatalf("user: %v", err)
+	}
+	other := uuid.New()
+	if _, err := s.pool.Exec(ctx, `
+		INSERT INTO users (id, email, name, password_hash) VALUES ($1, $2, 'other', 'x')`,
+		other, "other-"+other.String()[:8]+"@kern.local"); err != nil {
+		t.Fatalf("other user: %v", err)
+	}
+
+	env, err := s.PutEnvironment(ctx, pid, "prod", EnvironmentInput{
+		Protected: true, RequiredApprovals: 1, Reviewers: []string{userID.String()},
+		WaitMinutes: 30, BranchPolicy: "selected", BranchPatterns: []string{"main", "release/*"},
+	})
+	if err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if len(env.ReviewerEmails) != 1 || env.ReviewerEmails[0] != "it@kern.local" {
+		t.Fatalf("reviewer emails = %v", env.ReviewerEmails)
+	}
+	if !BranchAllowed(env.BranchPolicy, env.BranchPatterns, "refs/heads/main") {
+		t.Fatal("main should be allowed")
+	}
+	if BranchAllowed(env.BranchPolicy, env.BranchPatterns, "refs/heads/feature") {
+		t.Fatal("feature should be refused")
+	}
+	if !BranchAllowed(env.BranchPolicy, env.BranchPatterns, "refs/heads/release/1") {
+		t.Fatal("release/1 should be allowed")
+	}
+
+	run, err := s.CreateRun(ctx, CreateRunParams{
+		ProjectID: pid, WorkflowID: wid, WorkflowVersionID: vid,
+		Event: "push", Ref: "refs/heads/feature", SHA: "abc", TrustLevel: "trusted",
+	}, []JobSeed{{
+		Key: "deploy", JobKey: "deploy", RunsOn: []string{"ubuntu-latest"},
+		Needs: []string{}, Image: "ubuntu:24.04", TimeoutSeconds: 3600, Environment: "prod",
+	}})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	jobs, _ := s.JobsForRun(ctx, run.ID)
+	job := jobs[0]
+	if _, err := s.CreateDeployment(ctx, pid, env.ID, run.ID, job.ID, run.Ref, run.SHA, "", nil); err != nil {
+		t.Fatalf("deployment: %v", err)
+	}
+	if err := s.FailDeployment(ctx, job.ID, "branch feature is not allowed to deploy to prod"); err != nil {
+		t.Fatalf("fail: %v", err)
+	}
+	j, _ := s.Job(ctx, job.ID)
+	if j.Status != "completed" || j.Conclusion != "failure" {
+		t.Fatalf("denied job = %s/%s", j.Status, j.Conclusion)
+	}
+
+	future := time.Now().Add(time.Hour)
+	run2, err := s.CreateRun(ctx, CreateRunParams{
+		ProjectID: pid, WorkflowID: wid, WorkflowVersionID: vid,
+		Event: "push", Ref: "refs/heads/main", SHA: "def", TrustLevel: "trusted",
+	}, []JobSeed{{
+		Key: "ship", JobKey: "ship", RunsOn: []string{"ubuntu-latest"},
+		Needs: []string{}, Image: "ubuntu:24.04", TimeoutSeconds: 3600, Environment: "prod",
+	}})
+	if err != nil {
+		t.Fatalf("run2: %v", err)
+	}
+	jobs, _ = s.JobsForRun(ctx, run2.ID)
+	job = jobs[0]
+	if _, err := s.CreateDeployment(ctx, pid, env.ID, run2.ID, job.ID, run2.Ref, run2.SHA, "", &future); err != nil {
+		t.Fatalf("deployment2: %v", err)
+	}
+	if err := s.SetJobWaitingApproval(ctx, job.ID); err != nil {
+		t.Fatalf("park: %v", err)
+	}
+	if _, _, err := s.ApproveDeployment(ctx, job.ID, other, "other@kern.local", "member"); !errors.Is(err, ErrNotReviewer) {
+		t.Fatalf("outsider approve = %v, want ErrNotReviewer", err)
+	}
+	if _, released, err := s.ApproveDeployment(ctx, job.ID, userID, "it@kern.local", "member"); err != nil || released {
+		t.Fatalf("approve during wait: released=%v err=%v", released, err)
+	}
+	if n, err := s.ReleaseDueDeployments(ctx); err != nil || n != 0 {
+		t.Fatalf("release during wait: n=%d err=%v", n, err)
+	}
+	j, _ = s.Job(ctx, job.ID)
+	if j.Status != "waiting_approval" {
+		t.Fatalf("job during wait = %s", j.Status)
+	}
+
+	past := time.Now().Add(-time.Minute)
+	if _, err := s.pool.Exec(ctx, `UPDATE deployments SET wait_until = $2 WHERE job_id = $1`, job.ID, past); err != nil {
+		t.Fatalf("rewind wait: %v", err)
+	}
+	n, err := s.ReleaseDueDeployments(ctx)
+	if err != nil || n != 1 {
+		t.Fatalf("release after wait: n=%d err=%v", n, err)
+	}
+	j, _ = s.Job(ctx, job.ID)
+	if j.Status != "queued" {
+		t.Fatalf("job after wait = %s, want queued", j.Status)
 	}
 }

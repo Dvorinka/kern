@@ -38,7 +38,7 @@ never silently ignored.
 | `concurrency.cancel-in-progress` | done | newer queued run cancels the older in-group run |
 | `container` (job image) | partial | `image` only, string or `container.image`; other options warn and are ignored |
 | `services` | no | compile error `services` |
-| `environment` / approvals | partial | `environment: name` or `{name, url}` compiles and is created on first use. A protected environment parks the job in `waiting_approval` until `required_approvals` distinct org members approve. No reviewer allow-list, wait timer, or branch policy |
+| `environment` / approvals | partial | `environment: name` or `{name, url}` compiles and is created on first use. A protected environment can require N distinct approvals, a named reviewer list (empty = any org member; owners and admins bypass the list), a wait of up to 43200 minutes, and a branch policy of `all` or selected name patterns (`*` does not match `/`). The job parks in `waiting_approval` until the approvals are in and the wait has elapsed. A ref outside the pattern fails the job. No GitHub-style "protected branches only" mode, because KERN has no branch-protection source |
 | `permissions` | partial | recorded, not enforced |
 
 ## Steps
@@ -97,5 +97,5 @@ never silently ignored.
 - Reusable workflows `jobs.<id>.uses` (M5)
 - Service containers; job `container` options beyond `image` (M5)
 - Cache paths outside the workspace; cache size quotas; `upload-chunk-size` and other action tuning inputs
-- OIDC; environment reviewer allow-lists, wait timers, and deployment branch policies (M5+)
+- OIDC; deployment branch policy "protected branches only" (no branch-protection source)
 - Some string functions, arithmetic operators, object filters `a.*`

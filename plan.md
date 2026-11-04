@@ -81,7 +81,7 @@ later, step and job outputs, file commands (`GITHUB_ENV`, `GITHUB_OUTPUT`, `GITH
 `GITHUB_STEP_SUMMARY`), annotations, masking.
 
 Not yet: composite/JS/Docker actions, reusable workflows, services, OIDC.
-Environment protection and approvals are implemented (see `docs/compatibility.md`);
+Environment protection is implemented: approvals, a reviewer list, a wait, and selected branch patterns (see `docs/compatibility.md`);
 artifact and cache actions are partial. Each unsupported construct produces an explicit
 diagnostic; it is never silently ignored.
 
