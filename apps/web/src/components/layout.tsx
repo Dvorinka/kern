@@ -105,7 +105,7 @@ export function Layout() {
 					</div>
 				</div>
 			</aside>
-			<main className="dotgrid-faint min-w-0 flex-1 overflow-y-auto">
+			<main className="console-bg min-w-0 flex-1 overflow-y-auto">
 				<div className="mx-auto max-w-7xl px-7 py-6">
 					<Outlet />
 				</div>

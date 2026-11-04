@@ -85,14 +85,17 @@ body {
 	font-family: var(--mono);
 }
 
-/* Dot-grid console texture, used on the app canvas and panel insets. */
-.dotgrid {
-	background-image: radial-gradient(var(--border-strong) 0.8px, transparent 0.8px);
-	background-size: 12px 12px;
+/* App canvas: flat surface with a faint accent glow bleeding down from the
+   top edge — depth without texture noise. */
+.console-bg {
+	background:
+		radial-gradient(120% 420px at 50% -180px, var(--accent-soft) 0%, transparent 70%),
+		var(--bg);
 }
-.dotgrid-faint {
-	background-image: radial-gradient(var(--border) 0.8px, transparent 0.8px);
-	background-size: 12px 12px;
+.dark .console-bg {
+	background:
+		radial-gradient(120% 480px at 50% -220px, rgba(232, 168, 36, 0.07) 0%, transparent 65%),
+		var(--bg);
 }
 
 /* The card language: raised surface, hairline, 2px radius, corner tick. */

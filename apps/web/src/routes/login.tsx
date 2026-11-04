@@ -26,7 +26,7 @@ export function LoginPage() {
 	};
 
 	return (
-		<div className="dotgrid-faint flex h-full items-center justify-center bg-[var(--bg)]">
+		<div className="console-bg flex h-full items-center justify-center">
 			<form
 				onSubmit={submit}
 				className="w-80 rounded-[3px] border border-[var(--border)] bg-[var(--bg-raised)] p-6 shadow-[0_0_0_1px_var(--border),0_20px_60px_-20px_rgba(0,0,0,0.5)]"
