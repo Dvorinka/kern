@@ -145,6 +145,22 @@ M4 — DONE (2026-11-04, commits 42b801c + a526fb9):
   host load >40 → api heartbeats took 14-32s. Not a bug — KERN_RUNNER_CONCURRENCY
   caps it. Parallel job caps belongs in the perf work.
 
+PRODUCTION DEPLOY (2026-11-04): CT 908 `kern` on nab9 — unprivileged LXC,
+nesting+keyctl, 4c/8G/60G, DHCP (.65). postgres + api + runner via
+deployments/docker-compose.yml + /opt/kern/.env on the CT; source at
+/opt/kern/src (redeploy: git pull + compose up -d --build). cloudflared
+tunnel `kern` (f66c9aed…) on the CT serves kern.tdvorak.dev; api serves the
+SPA from KERN_WEB_DIR=/app/web. Admin info@tdvorak.dev. The App webhook is
+now THE event source (url=kern.tdvorak.dev, secret shared with the old repo
+hook — repo hook 707211794 deleted to prevent double delivery; local dev api
+gets no deliveries now). Verified: run 7 all-green on kern-908 runner,
+kern-ci[bot] posts kern/KERN CI:success.
+Traps fixed en route: docker.io bookworm CLI API 1.41 < dockerd-25+ floor
+1.44 (static docker 27.5 CLI in runner image); job uid 1000 needs 0777 work
+dirs via explicit chmod (umask eats MkdirAll mode; Docker Desktop hides it);
+git safe.directory=* env for uid-mismatch clones; /opt/kern/app.pem must be
+0644 (api runs as non-root `kern`); pct exec PATH lacks /usr/local/bin.
+
 Remaining work, ordered by value:
 
 1. Check-runs as the App (currently commit statuses only); pull_request_target
