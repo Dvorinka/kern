@@ -23,6 +23,7 @@ import (
 	"github.com/dvorinka/kern/internal/secrets"
 	"github.com/dvorinka/kern/internal/store"
 	"github.com/dvorinka/kern/internal/telemetry"
+	"github.com/dvorinka/kern/internal/version"
 	"github.com/dvorinka/kern/internal/workflows"
 )
 
@@ -100,7 +101,7 @@ func run() int {
 	httpServer := &http.Server{Addr: cfg.HTTPAddr, Handler: srv.Engine, ReadHeaderTimeout: 10 * time.Second}
 	errCh := make(chan error, 1)
 	go func() {
-		log.Info("kern api listening", zap.String("addr", cfg.HTTPAddr), zap.String("env", cfg.Env))
+		log.Info("kern api listening", zap.String("addr", cfg.HTTPAddr), zap.String("env", cfg.Env), zap.String("version", version.Version))
 		if serveErr := httpServer.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			errCh <- serveErr
 		}

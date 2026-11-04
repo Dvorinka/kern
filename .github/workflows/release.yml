@@ -1,0 +1,79 @@
+name: Release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+  packages: write
+jobs:
+  binaries:
+    runs-on: [self-hosted, linux, x64]
+    strategy:
+      matrix:
+        goos: [linux, darwin]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -e
+          mkdir -p dist
+          for cmd in kern kern-api kern-runner kern-migrate; do
+            CGO_ENABLED=0 go build -trimpath \
+              -ldflags "-s -w -X github.com/dvorinka/kern/internal/version.Version=$TAG" \
+              -o dist/$cmd ./cmd/${cmd#kern-}
+          done
+          tar czf kern-$TAG-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz -C dist .
+          mv kern-*.tar.gz dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bins-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*.tar.gz
+  release:
+    needs: binaries
+    runs-on: [self-hosted, linux, x64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bins-*
+          merge-multiple: true
+          path: dist
+      - run: cd dist && sha256sum *.tar.gz > SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+  images:
+    runs-on: [self-hosted, linux, x64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deployments/api.Dockerfile
+          push: true
+          tags: |
+            ghcr.io/dvorinka/kern-api:${{ github.ref_name }}
+            ghcr.io/dvorinka/kern-api:latest
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deployments/runner.Dockerfile
+          push: true
+          tags: |
+            ghcr.io/dvorinka/kern-runner:${{ github.ref_name }}
+            ghcr.io/dvorinka/kern-runner:latest
