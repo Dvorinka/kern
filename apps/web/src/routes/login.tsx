@@ -1,6 +1,5 @@
 import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { ListChecks } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import { Button, Input } from "../components/ui";
 
@@ -32,9 +31,12 @@ export function LoginPage() {
 				onSubmit={submit}
 				className="w-80 rounded-lg border border-[var(--border)] bg-[var(--bg-raised)] p-6"
 			>
-				<div className="mb-5 flex items-center gap-2">
-					<ListChecks size={18} className="text-[var(--accent)]" />
-					<span className="text-base font-semibold tracking-tight">KERN</span>
+				<div className="mb-5 flex items-center gap-2.5">
+					<img src="/favicon.svg" alt="" className="size-6 rounded-md" />
+					<div>
+						<div className="text-base font-semibold tracking-tight">KERN</div>
+						<div className="text-[11px] text-[var(--text-faint)]">Distributed CI/CD control plane</div>
+					</div>
 				</div>
 				<label className="mb-3 block">
 					<span className="mb-1 block text-xs text-[var(--text-muted)]">Email</span>

@@ -6,7 +6,6 @@ import {
 	HardDrive,
 	KeyRound,
 	LayoutDashboard,
-	ListChecks,
 	LogOut,
 	Moon,
 	Package,
@@ -48,8 +47,8 @@ export function Layout() {
 	return (
 		<div className="flex h-full">
 			<aside className="flex w-52 shrink-0 flex-col border-r border-[var(--border)] bg-[var(--bg-raised)]">
-				<div className="flex h-12 items-center gap-2 border-b border-[var(--border)] px-4">
-					<ListChecks size={16} className="text-[var(--accent)]" />
+				<div className="flex h-12 items-center gap-2.5 border-b border-[var(--border)] px-4">
+					<img src="/favicon.svg" alt="" className="size-5 rounded-[5px]" />
 					<span className="text-sm font-semibold tracking-tight">KERN</span>
 				</div>
 				<nav className="flex-1 space-y-0.5 p-2">
