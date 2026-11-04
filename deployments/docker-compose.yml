@@ -34,7 +34,11 @@ services:
       KERN_BOOTSTRAP_ORG: ${KERN_BOOTSTRAP_ORG:-kern}
       KERN_RUNNER_JOIN_TOKEN: ${KERN_RUNNER_JOIN_TOKEN:?set KERN_RUNNER_JOIN_TOKEN}
       KERN_PUBLIC_URL: ${KERN_PUBLIC_URL:-http://localhost:8080}
-      KERN_ALLOWED_ORIGINS: ${KERN_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:8081}
+      KERN_ALLOWED_ORIGINS: ${KERN_ALLOWED_ORIGINS:-}
+      KERN_GITHUB_APP_ID: ${KERN_GITHUB_APP_ID:-}
+      KERN_GITHUB_APP_PRIVATE_KEY_FILE: ${KERN_GITHUB_APP_PRIVATE_KEY_FILE:-}
+      KERN_GITHUB_WEBHOOK_SECRET: ${KERN_GITHUB_WEBHOOK_SECRET:-}
+      KERN_GITHUB_TOKEN: ${KERN_GITHUB_TOKEN:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -42,6 +46,32 @@ services:
       - "8080:8080"
     volumes:
       - kern-blobs:/data/blobs
+      # The App pem mounts read-only; the env default /dev/null is a no-op.
+      - ${KERN_GITHUB_APP_KEY_FILE:-/dev/null}:/run/kern-app.pem:ro
+
+  runner:
+    build:
+      context: ..
+      dockerfile: deployments/runner.Dockerfile
+    image: kern-runner:local
+    environment:
+      KERN_RUNNER_JOIN_TOKEN: ${KERN_RUNNER_JOIN_TOKEN:?set KERN_RUNNER_JOIN_TOKEN}
+    command:
+      - --control
+      - http://api:8080
+      - --join-token
+      - ${KERN_RUNNER_JOIN_TOKEN}
+      - --work-root
+      - /opt/kern/work
+      - --name
+      - ${KERN_RUNNER_NAME:-compose-runner}
+    depends_on:
+      - api
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Job bind mounts are resolved by the host docker daemon, so the work
+      # root must be the same path inside and outside this container.
+      - ${KERN_RUNNER_WORK:-/opt/kern/work}:/opt/kern/work
 
 volumes:
   kern-db:

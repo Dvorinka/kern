@@ -32,6 +32,7 @@ type Config struct {
 	CacheMaxAge     time.Duration
 	AllowedOrigins  []string
 	DefaultImage    string
+	WebDir          string
 }
 
 type GitHubConfig struct {
@@ -74,6 +75,7 @@ func Load() (*Config, error) {
 		CacheMaxAge:     duration("KERN_CACHE_MAX_AGE", 7*24*time.Hour),
 		AllowedOrigins:  splitList(env("KERN_ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:8081")),
 		DefaultImage:    env("KERN_DEFAULT_IMAGE", "ubuntu:24.04"),
+		WebDir:          env("KERN_WEB_DIR", ""),
 	}
 
 	if f := env("KERN_GITHUB_APP_PRIVATE_KEY_FILE", ""); f != "" {

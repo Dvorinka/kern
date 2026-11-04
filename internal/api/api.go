@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -174,7 +176,34 @@ func (s *Server) buildRouter() *gin.Engine {
 	auth.GET("/artifacts", s.listArtifacts)
 	auth.GET("/artifacts/:id/download", s.getArtifact)
 	auth.DELETE("/artifacts/:id", s.deleteArtifact)
+	if s.Cfg.WebDir != "" {
+		r.NoRoute(spaHandler(s.Cfg.WebDir))
+	}
 	return r
+}
+
+// spaHandler serves a built single-page app: real files verbatim, everything
+// else falls back to index.html so client-side routes survive reloads.
+func spaHandler(root string) gin.HandlerFunc {
+	fs := http.Dir(root)
+	index := filepath.Join(root, "index.html")
+	return func(c *gin.Context) {
+		p := path.Clean("/" + c.Request.URL.Path)
+		if strings.HasPrefix(p, "/api/") {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		if f, err := fs.Open(p); err == nil {
+			st, serr := f.Stat()
+			if serr == nil && !st.IsDir() {
+				defer f.Close()
+				http.ServeContent(c.Writer, c.Request, st.Name(), st.ModTime(), f)
+				return
+			}
+			f.Close()
+		}
+		c.File(index)
+	}
 }
 
 func (s *Server) requestLogger() gin.HandlerFunc {
