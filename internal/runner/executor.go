@@ -77,12 +77,17 @@ func newJobExecutor(cfg Config, c *client, claim *Claim, secrets map[string]stri
 	}
 	workRoot := filepath.Join(cfg.WorkRoot, id)
 	for _, dir := range []string{"workspace", "cmd", "scripts"} {
-		mode := 0o755
-		if dir == "cmd" {
-			mode = 0o777 // written from inside the container as well
-		}
-		if err := os.MkdirAll(filepath.Join(workRoot, dir), os.FileMode(mode)); err != nil {
+		p := filepath.Join(workRoot, dir)
+		if err := os.MkdirAll(p, 0o755); err != nil {
 			return nil, fmt.Errorf("create %s dir: %w", dir, err)
+		}
+		if dir == "scripts" {
+			continue // mounted read-only
+		}
+		// Job containers run as uid 1000; MkdirAll honours umask, so chmod
+		// explicitly. Docker Desktop's uid mapping hid this on dev machines.
+		if err := os.Chmod(p, 0o777); err != nil {
+			return nil, fmt.Errorf("chmod %s dir: %w", dir, err)
 		}
 	}
 	return &executor{
