@@ -207,6 +207,10 @@ func untarGz(archive, dest string) error {
 		return err
 	}
 	defer gz.Close()
+	root, err := filepath.Abs(dest)
+	if err != nil {
+		return err
+	}
 	tr := tar.NewReader(gz)
 	for {
 		hdr, err := tr.Next()
@@ -217,10 +221,10 @@ func untarGz(archive, dest string) error {
 			return err
 		}
 		name := filepath.Clean(hdr.Name)
-		if strings.HasPrefix(name, "..") || filepath.IsAbs(name) {
+		if name == "." || strings.HasPrefix(name, "..") || filepath.IsAbs(name) {
 			continue // path traversal guard
 		}
-		path := filepath.Join(dest, name)
+		path := filepath.Join(root, name)
 		switch hdr.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(path, 0o755); err != nil {
@@ -230,7 +234,7 @@ func untarGz(archive, dest string) error {
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 				return err
 			}
-			out, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(hdr.Mode))
+			out, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(hdr.Mode)&0o777)
 			if err != nil {
 				return err
 			}
@@ -239,6 +243,21 @@ func untarGz(archive, dest string) error {
 				return err
 			}
 			out.Close()
+		case tar.TypeSymlink:
+			// Source bundles (kern exec) carry repo symlinks; keep only ones
+			// whose target resolves inside the destination.
+			resolved := filepath.Clean(filepath.Join(filepath.Dir(path), hdr.Linkname))
+			if filepath.IsAbs(hdr.Linkname) ||
+				resolved != root && !strings.HasPrefix(resolved, root+string(os.PathSeparator)) {
+				continue
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				return err
+			}
+			_ = os.Remove(path)
+			if err := os.Symlink(hdr.Linkname, path); err != nil {
+				return err
+			}
 		}
 	}
 }

@@ -54,6 +54,7 @@ type Claim struct {
 		RepoFullName  string `json:"repo_full_name"`
 		DefaultBranch string `json:"default_branch"`
 		LocalPath     string `json:"local_path"`
+		BundleRef     string `json:"bundle_ref"`
 	} `json:"run"`
 	Steps        []StepSpec          `json:"steps"`
 	Secrets      []string            `json:"secrets"`
@@ -276,6 +277,32 @@ func (c *client) uploadArtifact(ctx context.Context, jobID, name, path string) e
 func (c *client) downloadArtifact(ctx context.Context, jobID, name, path string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		c.base+"/api/v1/runners/jobs/"+url.PathEscape(jobID)+"/artifacts/"+url.PathEscape(name), nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		return &APIError{Status: resp.StatusCode, Body: strings.TrimSpace(string(data))}
+	}
+	fh, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer fh.Close()
+	_, err = io.Copy(fh, resp.Body)
+	return err
+}
+
+// downloadSource fetches the run's uploaded workspace bundle (kern exec) to path.
+func (c *client) downloadSource(ctx context.Context, jobID, path string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		c.base+"/api/v1/runners/jobs/"+url.PathEscape(jobID)+"/source", nil)
 	if err != nil {
 		return err
 	}

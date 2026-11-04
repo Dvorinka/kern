@@ -98,6 +98,39 @@ func (c *client) del(ctx context.Context, path string) error {
 	return c.do(ctx, http.MethodDelete, path, nil, nil, nil)
 }
 
+// putFile streams r as an octet-stream body and decodes the JSON reply. It
+// uses an unbounded client — bundle uploads outsize the 30s API timeout.
+func (c *client) putFile(ctx context.Context, path string, r io.Reader, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.base+path, r)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/octet-stream")
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		return fmt.Errorf("%s: %w", c.base+path, err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	if resp.StatusCode >= 300 {
+		var e struct {
+			Error struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if json.Unmarshal(data, &e) == nil && e.Error.Code != "" {
+			return &apiError{resp.StatusCode, e.Error.Code, e.Error.Message}
+		}
+		return &apiError{resp.StatusCode, "http_error", strings.TrimSpace(string(data))}
+	}
+	if out != nil && len(data) > 0 {
+		return json.Unmarshal(data, out)
+	}
+	return nil
+}
+
 // download streams an artifact to w.
 func (c *client) download(ctx context.Context, path string, w io.Writer) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+path, nil)
@@ -105,7 +138,7 @@ func (c *client) download(ctx context.Context, path string, w io.Writer) error {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
-	resp, err := c.http.Do(req)
+	resp, err := (&http.Client{}).Do(req)
 	if err != nil {
 		return err
 	}

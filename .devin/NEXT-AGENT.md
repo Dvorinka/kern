@@ -47,30 +47,40 @@ in the repo. Work autonomously; the user trusts verification over claims.
 
 ## This session's branch state
 
-- On `feat/session-2`: CI pnpm fix. Work in flight (uncommitted or branch-pushed):
-  branding, `kern exec`, release pipeline.
-- User directive: work autonomously → PR → wait green on fleet → merge → tag v0.1.0 →
-  release workflow builds binaries + Docker images (GHCR) + kern CLI tarballs.
+- `feat/session-2` merged via PR #7 (squash → master `1a06683`).
+- `v0.1.0` tag pushed → release.yml run FAILED at `binaries (darwin, arm64)`:
+  `cmd/kern/cmd_auth.go` used `unix.TCGETS/TCSETS` (Linux-only ioctls).
+  Fixed with `golang.org/x/term` (`term.ReadPassword` + `IsTerminal` piped
+  fallback), commit `8c36fac` on master, `v0.1.1` tagged + pushed.
+- **In flight**: release.yml run for `v0.1.1` on the fleet — verify with
+  `gh run list --repo Dvorinka/kern --workflow release.yml` then
+  `gh release view v0.1.1`. Expect: 4 bin tarballs + SHA256SUMS on the GH
+  release, ghcr.io/dvorinka/kern-{api,runner}:v0.1.1 + :latest.
+- User directive: work autonomously in a loop — build, monitor, improve, do not stop.
 
 ## Priority queue — pick the deepest self-contained vertical first
 
-1. **`kern exec` offload** (user's top ask — "laptop too weak, offload job to fleet,
+1. **Verify v0.1.1 release** — GH release assets, GHCR images, `kern --version`
+   on a downloaded tarball reports v0.1.1. If the matrix breaks again, fix,
+   tag next patch. Also delete the stale `v0.1.0` tag/artifacts if images
+   published under it look confusing — user's call if unsure, otherwise leave.
+2. **`kern exec` offload** (user's top ask — "laptop too weak, offload job to fleet,
    see it live locally, get results back"): implemented as
    `PUT /projects/:p/source` (session, tar.gz → blob `sources/<project>/<uuid>.tar.gz`)
    → trigger run with `source.bundle_ref` → runner `GET /runners/jobs/:jobID/source`
    (downloads+untars instead of git clone) → `kern exec` CLI (upload, trigger,
    stream logs live via SSE, `--pull <dir>` fetches artifacts after). For docker
    builds: workflow saves image tar via upload-artifact; `docker load` locally —
-   document in docs/remote-exec.md.
-2. **Release pipeline**: `.github/workflows/release.yml` on `v*` tags — matrix go build
-   (kern/kern-api/kern-runner linux+arm64), tarballs+checksums, gh release, docker
-   build+push ghcr.io/dvorinka/kern-{api,runner} (needs deployments/runner.Dockerfile —
-   docker-cli only inside, socket mounted; document). `version` ldflags on cmds.
-3. **Branding**: done — `docs/brand/*.svg` → apps/web/public/favicon.svg, inline SVG
-   Logo component in layout + login (replace ListChecks stand-in).
-4. M4 GitHub App — still blocked on operator credentials.
-5. Cache paths outside workspace; GITHUB_STEP_SUMMARY at job level aggregation;
-   testcontainers store tests; `::error::` annotation parsing.
+   document in docs/remote-exec.md (design already written there).
+3. **M4-lite GitHub integration via `gh`** — repo webhook on Dvorinka/kern via
+   `gh api /repos/Dvorinka/kern/hooks` → `POST /api/v1/webhooks/github` (HMAC
+   verify + delivery persistence already exist server-side); public ingress via
+   vendored `cloudflared` quick tunnel or a deployed KERN instance; commit
+   statuses/check-runs back to GitHub via token. Full GitHub App (private key,
+   installation tokens) still needs operator credentials — do not invent secrets.
+4. Cache paths outside workspace; GITHUB_STEP_SUMMARY at job level aggregation;
+   testcontainers store tests; `::error::` annotation parsing; composite/JS/
+   Docker actions, reusable workflows, services, environments, OIDC.
 
 ## Known traps (already bitten — do not repeat)
 

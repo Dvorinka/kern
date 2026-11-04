@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
 	"time"
 )
@@ -33,6 +34,10 @@ Runs:
   runs cancel|rerun <run-id>
   runs logs <run-id> [--job KEY] [--step N] [--follow]
   runs remediate <job-id> --step N        approve a remediation proposal
+
+Remote offload:
+  exec <workflow> [--dir DIR] [--pull DIR] [--ref R] [--sha S]
+                        bundle the working tree, run on the fleet, stream logs
 
 Settings:
   settings get|set self_heal off|auto|approve [--project S]
@@ -145,6 +150,12 @@ func dispatch(c *cli, args []string) int {
 		err = c.cmdSecrets(ctx, rest)
 	case "settings":
 		err = c.cmdSettings(ctx, rest)
+	case "exec":
+		// Runs can take far longer than the default request budget; give exec
+		// its own context bounded only by Ctrl-C.
+		ectx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		err = c.cmdExec(ectx, rest)
 	case "split":
 		err = c.cmdSplit(rest)
 	default:

@@ -173,6 +173,7 @@ type triggerRequest struct {
 	Actor         string `json:"actor"`
 	CommitMessage string `json:"commit_message"`
 	TrustLevel    string `json:"trust_level"`
+	BundleRef     string `json:"bundle_ref"`
 }
 
 func (s *Server) triggerRun(c *gin.Context) {
@@ -226,6 +227,24 @@ func (s *Server) triggerRun(c *gin.Context) {
 			"the stored workflow version is invalid; fix the diagnostics and sync again")
 		return
 	}
+	source := map[string]any{
+		"repo_url":       p.RepoURL,
+		"repo_full_name": p.RepoFullName,
+		"local_path":     p.LocalPath,
+		"default_branch": p.DefaultBranch,
+	}
+	if req.BundleRef != "" {
+		// Bundle refs are minted by PUT /projects/:project/source; only refs
+		// under this project's prefix are honoured.
+		prefix := "sources/" + p.Slug + "/"
+		size, sizeErr := s.Blobs.Size(req.BundleRef)
+		if !strings.HasPrefix(req.BundleRef, prefix) || sizeErr != nil || size == 0 {
+			fail(c, http.StatusBadRequest, "invalid_bundle_ref",
+				"bundle_ref does not reference an uploaded source bundle for this project")
+			return
+		}
+		source["bundle_ref"] = req.BundleRef
+	}
 	run, err := s.Orch.StartRun(c.Request.Context(), store.CreateRunParams{
 		ProjectID:         p.ID,
 		WorkflowID:        wf.ID,
@@ -236,12 +255,7 @@ func (s *Server) triggerRun(c *gin.Context) {
 		CommitMessage:     req.CommitMessage,
 		Actor:             req.Actor,
 		TrustLevel:        req.TrustLevel,
-		Source: map[string]any{
-			"repo_url":       p.RepoURL,
-			"repo_full_name": p.RepoFullName,
-			"local_path":     p.LocalPath,
-			"default_branch": p.DefaultBranch,
-		},
+		Source:            source,
 	})
 	if err != nil {
 		s.internalError(c, err)

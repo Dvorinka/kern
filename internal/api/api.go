@@ -69,6 +69,7 @@ func (s *Server) buildRouter() *gin.Engine {
 		auth.POST("/projects", s.createProject)
 		auth.GET("/projects/:project", s.getProject)
 		auth.POST("/projects/:project/sync", s.syncProject)
+		auth.PUT("/projects/:project/source", s.uploadSource)
 		auth.GET("/projects/:project/workflows", s.listWorkflows)
 		auth.POST("/projects/:project/workflows/:workflowID/runs", s.triggerRun)
 
@@ -112,6 +113,7 @@ func (s *Server) buildRouter() *gin.Engine {
 		runner.POST("/runners/jobs/:jobID/finish", s.finishJob)
 		runner.GET("/runners/jobs/:jobID/cancel-check", s.cancelCheck)
 		runner.GET("/runners/jobs/:jobID/secrets", s.jobSecrets)
+		runner.GET("/runners/jobs/:jobID/source", s.jobSource)
 		runner.GET("/runners/jobs/:jobID/artifacts", s.jobArtifacts)
 		runner.PUT("/runners/jobs/:jobID/artifacts/:name", s.uploadArtifact)
 		runner.GET("/runners/jobs/:jobID/artifacts/:name", s.downloadArtifact)

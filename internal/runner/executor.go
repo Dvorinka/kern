@@ -199,10 +199,18 @@ func (e *executor) startContainer(ctx context.Context) error {
 	return nil
 }
 
-// checkout materialises the repository inside the workspace directory.
+// checkout materialises the repository inside the workspace directory. An
+// uploaded bundle (kern exec) replaces the git clone entirely.
 func (e *executor) checkout(ctx context.Context) error {
 	ws := filepath.Join(e.workRoot(), "workspace")
 	run := e.claim.Run
+	if run.BundleRef != "" {
+		bundle := filepath.Join(e.workRoot(), "source.tar.gz")
+		if err := e.c.downloadSource(ctx, e.jobID, bundle); err != nil {
+			return fmt.Errorf("download source bundle: %w", err)
+		}
+		return untarGz(bundle, ws)
+	}
 	if run.LocalPath != "" {
 		// Local runs copy the host tree; the source repo stays untouched.
 		if out, err := exec.CommandContext(ctx, "git", "clone", "--quiet", "--", run.LocalPath, ws).CombinedOutput(); err != nil {
