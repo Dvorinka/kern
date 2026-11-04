@@ -11,10 +11,12 @@ jobs:
     container:
       image: golang:1.26
     env:
-      # job containers are read-only; keep Go's caches on the /tmp tmpfs
-      GOCACHE: /tmp/go-build
-      GOMODCACHE: /tmp/go-mod
-      GOPATH: /tmp/go
+      # job containers are read-only and /tmp is a small tmpfs; keep Go's
+      # caches and build dir on the /github/cmd bind mount (host disk)
+      GOCACHE: /github/cmd/gocache
+      GOMODCACHE: /github/cmd/gomod
+      GOPATH: /github/cmd/gopath
+      GOTMPDIR: /github/cmd/gotmp
     steps:
       - name: build
         run: go build ./...
