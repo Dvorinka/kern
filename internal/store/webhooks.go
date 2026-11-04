@@ -3,6 +3,11 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // SaveWebhookDelivery persists a provider delivery exactly once. It reports whether the
@@ -27,6 +32,54 @@ func (s *Store) MarkWebhookProcessed(ctx context.Context, deliveryID, status, er
 		UPDATE webhook_deliveries SET status = $2, error = $3, processed_at = now()
 		WHERE provider = 'github' AND delivery_id = $1`, deliveryID, status, errMsg)
 	return err
+}
+
+type WebhookDelivery struct {
+	ID          uuid.UUID       `json:"id"`
+	Provider    string          `json:"provider"`
+	DeliveryID  string          `json:"delivery_id"`
+	Event       string          `json:"event"`
+	Payload     json.RawMessage `json:"payload,omitempty"`
+	Status      string          `json:"status"`
+	Error       string          `json:"error"`
+	ReceivedAt  time.Time       `json:"received_at"`
+	ProcessedAt *time.Time      `json:"processed_at"`
+}
+
+// WebhookDeliveries lists recent deliveries newest-first, payload excluded —
+// fetch it per-row with WebhookDelivery when the UI expands one.
+func (s *Store) WebhookDeliveries(ctx context.Context, limit int) ([]WebhookDelivery, error) {
+	limit, _ = page(limit, 0)
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, provider, delivery_id, event, status, error, received_at, processed_at
+		FROM webhook_deliveries ORDER BY received_at DESC LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []WebhookDelivery{}
+	for rows.Next() {
+		var d WebhookDelivery
+		if err := rows.Scan(&d.ID, &d.Provider, &d.DeliveryID, &d.Event,
+			&d.Status, &d.Error, &d.ReceivedAt, &d.ProcessedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) WebhookDelivery(ctx context.Context, id uuid.UUID) (WebhookDelivery, error) {
+	var d WebhookDelivery
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, provider, delivery_id, event, payload, status, error, received_at, processed_at
+		FROM webhook_deliveries WHERE id = $1`, id).
+		Scan(&d.ID, &d.Provider, &d.DeliveryID, &d.Event, &d.Payload,
+			&d.Status, &d.Error, &d.ReceivedAt, &d.ProcessedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return WebhookDelivery{}, ErrNotFound
+	}
+	return d, err
 }
 
 type invalidJSONError struct{}

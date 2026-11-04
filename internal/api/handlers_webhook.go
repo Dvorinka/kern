@@ -2,7 +2,9 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"regexp"
 	"strings"
 
@@ -374,4 +376,33 @@ func globMatch(pattern, name string) bool {
 	re = strings.ReplaceAll(re, `\?`, ".")
 	ok, _ := regexp.MatchString("^"+re+"$", name)
 	return ok
+}
+
+// listWebhookDeliveries feeds the deliveries viewer — metadata only, no
+// payloads; the UI fetches one via getWebhookDelivery when a row expands.
+func (s *Server) listWebhookDeliveries(c *gin.Context) {
+	rows, err := s.Store.WebhookDeliveries(c.Request.Context(), parseInt(c.DefaultQuery("limit", "100"), 100))
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"deliveries": rows})
+}
+
+func (s *Server) getWebhookDelivery(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		fail(c, http.StatusBadRequest, "invalid_id", "delivery id must be a uuid")
+		return
+	}
+	d, err := s.Store.WebhookDelivery(c.Request.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		fail(c, http.StatusNotFound, "not_found", "delivery not found")
+		return
+	}
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"delivery": d})
 }

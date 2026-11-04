@@ -79,23 +79,30 @@ func (s *Server) jobArtifacts(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
-	rows, err := s.Store.Artifacts(c.Request.Context(), project.OrgID, 500)
+	rows, err := s.Store.Artifacts(c.Request.Context(), project.OrgID, &job.RunID, 500)
 	if err != nil {
 		s.internalError(c, err)
 		return
 	}
 	names := []string{}
 	for _, a := range rows {
-		if a.RunID == job.RunID {
-			names = append(names, a.Name)
-		}
+		names = append(names, a.Name)
 	}
 	c.JSON(http.StatusOK, gin.H{"artifacts": names})
 }
 
 func (s *Server) listArtifacts(c *gin.Context) {
 	user, _ := currentUser(c)
-	rows, err := s.Store.Artifacts(c.Request.Context(), user.OrgID, parseInt(c.DefaultQuery("limit", "200"), 200))
+	var runID *uuid.UUID
+	if v := c.Query("run_id"); v != "" {
+		id, err := uuid.Parse(v)
+		if err != nil {
+			fail(c, http.StatusBadRequest, "invalid_run_id", "run_id must be a uuid")
+			return
+		}
+		runID = &id
+	}
+	rows, err := s.Store.Artifacts(c.Request.Context(), user.OrgID, runID, parseInt(c.DefaultQuery("limit", "200"), 200))
 	if err != nil {
 		s.internalError(c, err)
 		return

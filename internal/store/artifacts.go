@@ -98,7 +98,7 @@ func (s *Store) DeleteArtifact(ctx context.Context, orgID, id uuid.UUID) (string
 	return ref, err
 }
 
-func (s *Store) Artifacts(ctx context.Context, orgID uuid.UUID, limit int) ([]Artifact, error) {
+func (s *Store) Artifacts(ctx context.Context, orgID uuid.UUID, runID *uuid.UUID, limit int) ([]Artifact, error) {
 	limit, _ = page(limit, 0)
 	rows, err := s.pool.Query(ctx, `
 		SELECT a.id, a.run_id, a.job_id, a.name, a.size_bytes, a.sha256, a.blob_ref,
@@ -106,8 +106,8 @@ func (s *Store) Artifacts(ctx context.Context, orgID uuid.UUID, limit int) ([]Ar
 		FROM artifacts a
 		JOIN workflow_runs r ON r.id = a.run_id
 		JOIN projects p ON p.id = r.project_id
-		WHERE p.org_id = $1
-		ORDER BY a.created_at DESC LIMIT $2`, orgID, limit)
+		WHERE p.org_id = $1 AND ($2::uuid IS NULL OR a.run_id = $2)
+		ORDER BY a.created_at DESC LIMIT $3`, orgID, runID, limit)
 	if err != nil {
 		return nil, err
 	}

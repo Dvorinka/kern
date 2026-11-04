@@ -136,6 +136,14 @@ export function ProjectDetailPage() {
 		queryKey: ["project", slug],
 		queryFn: () => api.get<{ project: Project; workflows: Workflow[] }>(`/projects/${slug}`),
 	});
+	const { data: psettings } = useQuery({
+		queryKey: ["project-settings", slug],
+		queryFn: () => api.get<{ self_heal: string }>(`/projects/${slug}/settings`),
+	});
+	const setHeal = useMutation({
+		mutationFn: (v: string) => api.put(`/projects/${slug}/settings`, { self_heal: v }),
+		onSuccess: () => qc.invalidateQueries({ queryKey: ["project-settings", slug] }),
+	});
 	const sync = useMutation({
 		mutationFn: () => api.post(`/projects/${slug}/sync`),
 		onSuccess: () => {
@@ -172,6 +180,22 @@ export function ProjectDetailPage() {
 					<KV k="Repo" v={project.repo_url || "—"} mono />
 					<KV k="Local path" v={project.local_path || "—"} mono />
 					<KV k="Created" v={relTime(project.created_at)} />
+					<KV
+						k="Self-heal"
+						v={
+							<select
+								className="rounded border border-[var(--border)] bg-transparent px-2 py-0.5 text-xs"
+								value={psettings?.self_heal ?? "inherit"}
+								disabled={setHeal.isPending}
+								onChange={(e) => setHeal.mutate(e.target.value)}
+							>
+								<option value="inherit">inherit</option>
+								<option value="off">off</option>
+								<option value="auto">auto</option>
+								<option value="approve">approve</option>
+							</select>
+						}
+					/>
 				</div>
 			</Card>
 			{sync.data != null && (
