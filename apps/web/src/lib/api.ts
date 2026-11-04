@@ -18,7 +18,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 	});
 	if (res.status === 204) return undefined as T;
 	const text = await res.text();
-	const data = text ? JSON.parse(text) : undefined;
+	let data: { error?: { code?: string; message?: string } } | undefined;
+	try {
+		data = text ? JSON.parse(text) : undefined;
+	} catch {
+		// non-JSON body (proxy error page, truncated response) — surface as an
+		// API error instead of an unhandled SyntaxError
+		throw new ApiError(res.status, "bad_response", res.statusText || "malformed response");
+	}
 	if (!res.ok) {
 		const err = data?.error;
 		throw new ApiError(res.status, err?.code ?? "error", err?.message ?? res.statusText);

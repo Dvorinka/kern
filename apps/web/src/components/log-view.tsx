@@ -12,8 +12,10 @@ interface LogChunk {
 	message?: string;
 }
 
+// Strip CSI, OSC (hyperlinks, clipboard writes), charset/single escapes and
+// stray C0 controls — runner logs are attacker-adjacent text, not a terminal.
 // oxlint-disable-next-line no-control-regex -- stripping ANSI escapes is the point
-const ANSI = /\x1b\[[0-9;]*[A-Za-z]/g;
+const ANSI = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][0-2]?|\x1b[=>M78DHc]|[\x00-\x08\x0b-\x1f\x7f]/g;
 
 export function LogView({
 	stepId,
@@ -47,18 +49,25 @@ export function LogView({
 				return;
 			}
 			es = new EventSource(`/api/v1/steps/${stepId}/logs/stream`);
+			const chunk = (ev: MessageEvent): LogChunk | null => {
+				try {
+					return JSON.parse(ev.data);
+				} catch {
+					return null;
+				}
+			};
 			es.addEventListener("log", (ev) => {
 				if (cancelled) return;
-				const chunk: LogChunk = JSON.parse((ev as MessageEvent).data);
-				setText((t) => t + (chunk.text ?? ""));
+				const c = chunk(ev as MessageEvent);
+				if (c) setText((t) => t + (c.text ?? ""));
 			});
 			es.addEventListener("end", () => {
 				es?.close();
 			});
 			es.addEventListener("error", (ev) => {
 				if (ev instanceof MessageEvent) {
-					const chunk: LogChunk = JSON.parse(ev.data);
-					setErr(chunk.message ?? "log read failed");
+					const c = chunk(ev);
+					setErr(c?.message ?? "log read failed");
 				}
 			});
 			es.onerror = () => {

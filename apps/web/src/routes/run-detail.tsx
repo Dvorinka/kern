@@ -301,7 +301,9 @@ function StepSummary({ stepId }: { stepId: string }) {
 			<div
 				className="prose-kern text-[13px]"
 				dangerouslySetInnerHTML={{
-					__html: DOMPurify.sanitize(marked.parse(data.text, { async: false })),
+					__html: DOMPurify.sanitize(marked.parse(data.text, { async: false }), {
+						USE_PROFILES: { html: true },
+					}),
 				}}
 			/>
 		</div>
