@@ -26,6 +26,8 @@ type JobSeed struct {
 	FailFast        bool
 	Priority        int
 	OutputsSpec     map[string]string
+	Environment     string
+	EnvironmentURL  string
 	Steps           []StepSeed
 }
 
@@ -114,11 +116,13 @@ func (s *Store) createRunOnce(ctx context.Context, p CreateRunParams, jobs []Job
 		err = tx.QueryRow(ctx, `
 			INSERT INTO jobs
 				(run_id, job_key, key, name, status, needs, runs_on, image, matrix, env,
-				 if_condition, timeout_seconds, continue_on_error, fail_fast, priority, outputs_spec)
-			VALUES ($1, $2, $3, $4, 'waiting', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+				 if_condition, timeout_seconds, continue_on_error, fail_fast, priority, outputs_spec,
+				 environment, environment_url)
+			VALUES ($1, $2, $3, $4, 'waiting', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 			RETURNING id`,
 			id, j.JobKey, j.Key, j.Name, j.Needs, j.RunsOn, j.Image, matrix, env,
-			j.IfCondition, j.TimeoutSeconds, j.ContinueOnError, j.FailFast, j.Priority, outputsSpec).Scan(&jobID)
+			j.IfCondition, j.TimeoutSeconds, j.ContinueOnError, j.FailFast, j.Priority, outputsSpec,
+			j.Environment, j.EnvironmentURL).Scan(&jobID)
 		if err != nil {
 			return Run{}, fmt.Errorf("insert job %s: %w", j.Key, err)
 		}
@@ -206,7 +210,8 @@ func (s *Store) JobsForRun(ctx context.Context, runID uuid.UUID) ([]Job, error) 
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, run_id, job_key, key, name, status, conclusion, needs, runs_on, image, matrix, env,
 		       if_condition, timeout_seconds, continue_on_error, fail_fast, priority, attempt, runner_id,
-		       queued_at, started_at, completed_at, lease_expires_at, error, outputs, outputs_spec
+		       queued_at, started_at, completed_at, lease_expires_at, error, outputs, outputs_spec,
+		       environment, environment_url
 		FROM jobs WHERE run_id = $1 ORDER BY queued_at, key`, runID)
 	if err != nil {
 		return nil, err
@@ -261,7 +266,8 @@ func scanJob(row pgx.Row) (Job, error) {
 	err := row.Scan(&j.ID, &j.RunID, &j.JobKey, &j.Key, &j.Name, &j.Status, &j.Conclusion, &j.Needs,
 		&j.RunsOn, &j.Image, &j.Matrix, &j.Env, &j.IfCondition, &j.TimeoutSeconds,
 		&j.ContinueOnError, &j.FailFast, &j.Priority, &j.Attempt, &j.RunnerID, &j.QueuedAt,
-		&j.StartedAt, &j.CompletedAt, &j.LeaseExpiresAt, &j.Error, &j.Outputs, &j.OutputsSpec)
+		&j.StartedAt, &j.CompletedAt, &j.LeaseExpiresAt, &j.Error, &j.Outputs, &j.OutputsSpec,
+		&j.Environment, &j.EnvironmentURL)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Job{}, ErrNotFound
 	}
@@ -273,7 +279,7 @@ func (s *Store) Job(ctx context.Context, id uuid.UUID) (Job, error) {
 		SELECT j.id, j.run_id, j.job_key, j.key, j.name, j.status, j.conclusion, j.needs, j.runs_on,
 		       j.image, j.matrix, j.env, j.if_condition, j.timeout_seconds, j.continue_on_error,
 		       j.fail_fast, j.priority, j.attempt, j.runner_id, j.queued_at, j.started_at, j.completed_at,
-		       j.lease_expires_at, j.error, j.outputs, j.outputs_spec
+		       j.lease_expires_at, j.error, j.outputs, j.outputs_spec, j.environment, j.environment_url
 		FROM jobs j WHERE j.id = $1`, id))
 	if err != nil {
 		return Job{}, err
@@ -296,7 +302,12 @@ func (s *Store) CancelRun(ctx context.Context, runID uuid.UUID) (Run, error) {
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE jobs SET status = 'cancelled', conclusion = 'cancelled', completed_at = now()
-		WHERE run_id = $1 AND status IN ('queued', 'waiting', 'in_progress')`, runID); err != nil {
+		WHERE run_id = $1 AND status IN ('queued', 'waiting', 'waiting_approval', 'in_progress')`, runID); err != nil {
+		return Run{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE deployments SET status = 'failure', completed_at = now()
+		WHERE run_id = $1 AND status IN ('queued', 'in_progress')`, runID); err != nil {
 		return Run{}, err
 	}
 	if _, err := tx.Exec(ctx, `
@@ -320,7 +331,7 @@ func (s *Store) CancelRun(ctx context.Context, runID uuid.UUID) (Run, error) {
 // group is free. When a newer queued run shares a group with an in-progress run
 // that opted into cancel-in-progress, the older run is cancelled first.
 func (s *Store) PromoteQueuedRuns(ctx context.Context) (int, error) {
-	if _, err := s.pool.Exec(ctx, `
+	dead, err := s.pool.Query(ctx, `
 		UPDATE workflow_runs SET status = 'cancelled', conclusion = 'cancelled', completed_at = now()
 		WHERE id IN (
 			SELECT o.id FROM workflow_runs o
@@ -330,8 +341,42 @@ func (s *Store) PromoteQueuedRuns(ctx context.Context) (int, error) {
 				AND n.status = 'queued'
 				AND (n.created_at, n.id) > (o.created_at, o.id)
 			WHERE o.status IN ('queued', 'in_progress')
-			  AND o.cancel_in_progress)`); err != nil {
+			  AND o.cancel_in_progress)
+		RETURNING id`)
+	if err != nil {
 		return 0, err
+	}
+	var deadIDs []uuid.UUID
+	for dead.Next() {
+		var id uuid.UUID
+		if err := dead.Scan(&id); err != nil {
+			dead.Close()
+			return 0, err
+		}
+		deadIDs = append(deadIDs, id)
+	}
+	dead.Close()
+	if err := dead.Err(); err != nil {
+		return 0, err
+	}
+	for _, runID := range deadIDs {
+		// Jobs of a superseded run were previously left dangling; cancel them
+		// and their open deployments alongside the run.
+		if _, err := s.pool.Exec(ctx, `
+			UPDATE jobs SET status = 'cancelled', conclusion = 'cancelled', completed_at = now()
+			WHERE run_id = $1 AND status IN ('queued', 'waiting', 'waiting_approval', 'in_progress')`, runID); err != nil {
+			return 0, err
+		}
+		if _, err := s.pool.Exec(ctx, `
+			UPDATE deployments SET status = 'failure', completed_at = now()
+			WHERE run_id = $1 AND status IN ('queued', 'in_progress')`, runID); err != nil {
+			return 0, err
+		}
+		if _, err := s.pool.Exec(ctx, `
+			UPDATE job_leases SET released_at = now() WHERE released_at IS NULL
+			  AND job_id IN (SELECT id FROM jobs WHERE run_id = $1)`, runID); err != nil {
+			return 0, err
+		}
 	}
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE workflow_runs r SET status = 'in_progress', started_at = now()
@@ -367,7 +412,7 @@ func (s *Store) FinishRunIfDone(ctx context.Context, runID uuid.UUID) error {
 
 	var pending int
 	if err := tx.QueryRow(ctx, `
-		SELECT count(*) FROM jobs WHERE run_id = $1 AND status IN ('queued','waiting','in_progress')`,
+		SELECT count(*) FROM jobs WHERE run_id = $1 AND status IN ('queued','waiting','waiting_approval','in_progress')`,
 		runID).Scan(&pending); err != nil {
 		return err
 	}

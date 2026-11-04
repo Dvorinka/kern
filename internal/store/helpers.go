@@ -57,9 +57,16 @@ func (s *Store) CancelSiblings(ctx context.Context, runID uuid.UUID, jobKey stri
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE jobs SET status = 'cancelled', conclusion = 'cancelled', completed_at = now(),
 			error = 'cancelled by fail-fast'
-		WHERE run_id = $1 AND job_key = $2 AND id <> $3 AND status IN ('queued', 'waiting')`,
+		WHERE run_id = $1 AND job_key = $2 AND id <> $3 AND status IN ('queued', 'waiting', 'waiting_approval')`,
 		runID, jobKey, exceptJobID)
 	if err != nil {
+		return 0, err
+	}
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE deployments d SET status = 'failure', completed_at = now()
+		FROM jobs j
+		WHERE j.run_id = $1 AND j.job_key = $2 AND j.id <> $3 AND d.job_id = j.id
+		  AND d.status IN ('queued', 'in_progress')`, runID, jobKey, exceptJobID); err != nil {
 		return 0, err
 	}
 	return tag.RowsAffected(), nil

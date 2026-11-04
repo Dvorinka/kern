@@ -18,15 +18,16 @@ export function Button({
 	return (
 		<button
 			className={cn(
-				"inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-[3px] font-medium tracking-[0.01em] transition-colors",
+				"inline-flex cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-lg font-medium transition-colors",
 				"disabled:cursor-not-allowed disabled:opacity-50",
-				size === "sm" ? "h-7 px-2.5 text-xs" : "h-8 px-3 text-[12.5px]",
+				size === "sm" ? "h-7 px-3 text-xs" : "h-8 px-3.5 text-xs",
 				variant === "default" &&
-					"border border-[var(--border-strong)] bg-[var(--bg-raised)] text-[var(--text)] hover:border-[var(--text-faint)] hover:bg-[var(--bg-subtle)]",
+					"border border-[var(--ctl)] bg-[var(--bg)] text-[var(--ink)] hover:border-[#555]",
 				variant === "primary" &&
-					"bg-[var(--accent)] font-semibold text-[var(--accent-ink)] hover:bg-[var(--accent-bright)]",
-				variant === "danger" && "bg-[var(--err)] text-white hover:opacity-90",
-				variant === "ghost" && "text-[var(--text-muted)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text)]",
+					"bg-[var(--ink)] text-black hover:bg-white border border-[var(--ink)] hover:border-white",
+				variant === "danger" &&
+					"border border-[var(--ctl)] bg-[var(--bg)] text-[var(--err)] hover:border-[var(--err)]",
+				variant === "ghost" && "text-[var(--dim)] hover:bg-[var(--raise2)] hover:text-[var(--ink)]",
 				className,
 			)}
 			{...props}
@@ -38,9 +39,9 @@ export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElem
 	return (
 		<input
 			className={cn(
-				"h-8 w-full rounded-[3px] border border-[var(--border-strong)] bg-[var(--bg-inset)] px-2.5 font-mono text-[12.5px]",
-				"text-[var(--text)] placeholder:font-sans placeholder:text-[var(--text-faint)] outline-none",
-				"focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]/30",
+				"h-8 w-full rounded-[7px] border border-[var(--ctl)] bg-transparent px-2.5 font-mono text-xs",
+				"text-[var(--ink)] placeholder:font-sans placeholder:text-[var(--faint)] outline-none",
+				"focus:border-[#555]",
 				className,
 			)}
 			{...props}
@@ -52,12 +53,22 @@ export function Card({ className, children }: { className?: string; children: Re
 	return <div className={cn("panel", className)}>{children}</div>;
 }
 
-export function CardHeader({ title, sub, actions }: { title: string; sub?: string; actions?: ReactNode }) {
+export function CardHeader({
+	title,
+	sub,
+	actions,
+}: {
+	title: string;
+	sub?: string;
+	actions?: ReactNode;
+}) {
 	return (
-		<div className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-2.5">
-			<div className="klabel">{title}</div>
-			{sub && <span className="text-xs text-[var(--text-faint)]">{sub}</span>}
-			{actions && <div className="flex items-center gap-2">{actions}</div>}
+		<div className="phead">
+			<span className="pt">{title}</span>
+			<span className="r">
+				{sub && <span>{sub}</span>}
+				{actions}
+			</span>
 		</div>
 	);
 }
@@ -68,20 +79,21 @@ export function PageHeader({
 	actions,
 }: {
 	title: string;
-	sub?: string;
+	sub?: ReactNode;
 	actions?: ReactNode;
 }) {
 	return (
-		<div className="mb-6 flex items-end justify-between gap-4 border-b border-[var(--border)] pb-4">
-			<div>
-				<h1 className="text-[19px] font-semibold tracking-tight">{title}</h1>
-				{sub && <p className="mt-1 text-[12.5px] text-[var(--text-muted)]">{sub}</p>}
+		<div className="mb-5">
+			<div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+				<h1 className="text-xl font-semibold tracking-[-0.02em]">{title}</h1>
+				{actions && <div className="ml-auto flex shrink-0 items-center gap-2">{actions}</div>}
 			</div>
-			{actions && <div className="flex items-center gap-2">{actions}</div>}
+			{sub && <div className="mt-1.5 text-xs text-[var(--dim)]">{sub}</div>}
 		</div>
 	);
 }
 
+// Honest empty states keep their frame: one dashed box, one sentence.
 export function EmptyState({
 	icon,
 	title,
@@ -92,10 +104,10 @@ export function EmptyState({
 	hint?: string;
 }) {
 	return (
-		<div className="flex flex-col items-center justify-center gap-2 py-14 text-center">
-			{icon && <div className="text-[var(--text-faint)]">{icon}</div>}
-			<div className="text-[13px] font-medium text-[var(--text-muted)]">{title}</div>
-			{hint && <div className="max-w-sm text-xs text-[var(--text-faint)]">{hint}</div>}
+		<div className="emptynote" style={{ margin: "14px 16px" }}>
+			{icon}
+			{title}
+			{hint ? ` — ${hint}` : ""}
 		</div>
 	);
 }
@@ -103,18 +115,22 @@ export function EmptyState({
 export function Spinner() {
 	return (
 		<div className="flex justify-center py-14">
-			<div className="h-5 w-5 animate-spin rounded-full border-2 border-[var(--border-strong)] border-t-[var(--accent)]" />
+			<span className="sq live" />
 		</div>
 	);
 }
 
+// Label-over-value for padded cards. For divided cell strips use .cells/.cell
+// markup directly; for side-by-side rows use the .kv CSS pattern.
 export function KV({ k, v, mono }: { k: string; v: ReactNode; mono?: boolean }) {
 	return (
-		<div className="flex min-w-0 items-baseline gap-3 py-1">
-			<span className="w-36 shrink-0 truncate text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--text-faint)]">
-				{k}
-			</span>
-			<span className={cn("min-w-0 truncate text-[13px]", mono && "font-mono text-xs")}>{v}</span>
+		<div className="py-1">
+			<div className="text-[11px] text-[var(--faint)]">{k}</div>
+			<div
+				className={cn("mt-0.5 text-xs text-[var(--ink)]", mono && "font-mono text-[var(--dim)]")}
+			>
+				{v}
+			</div>
 		</div>
 	);
 }

@@ -80,9 +80,10 @@ outputs, `env`, `secrets`, `vars`, matrices with include/exclude/fail-fast, `if`
 later, step and job outputs, file commands (`GITHUB_ENV`, `GITHUB_OUTPUT`, `GITHUB_PATH`,
 `GITHUB_STEP_SUMMARY`), annotations, masking.
 
-Not yet: composite/JS/Docker actions, reusable workflows, services, OIDC, environment approvals,
-artifact/cache actions. Each unsupported construct produces an explicit diagnostic; it is never
-silently ignored.
+Not yet: composite/JS/Docker actions, reusable workflows, services, OIDC.
+Environment protection is implemented: approvals, a reviewer list, a wait, and selected branch patterns (see `docs/compatibility.md`);
+artifact and cache actions are partial. Each unsupported construct produces an explicit
+diagnostic; it is never silently ignored.
 
 ## 7. Milestones
 

@@ -62,7 +62,7 @@ export function SecretsPage() {
 						data.secrets.map((s) => (
 							<Row key={s.id}>
 								<span className="font-mono min-w-0 flex-1 truncate text-[13px]">{s.name}</span>
-								<span className="text-xs text-[var(--text-faint)]">updated {relTime(s.updated_at)}</span>
+								<span className="text-xs text-[var(--faint)]">updated {relTime(s.updated_at)}</span>
 								<Button
 									size="sm"
 									variant="ghost"

@@ -135,7 +135,29 @@ func Compile(content string, c Compiler) (Result, error) {
 			d.errorf("services", "jobs."+id+".services", "service containers are not implemented by KERN yet")
 		}
 		if job.Environment != nil {
-			d.errorf("environment", "jobs."+id+".environment", "environment protection/approvals are not implemented by KERN yet")
+			switch env := job.Environment.(type) {
+			case string:
+				if strings.TrimSpace(env) == "" {
+					d.errorf("environment", "jobs."+id+".environment", "environment name must not be empty")
+				}
+			case map[string]any:
+				name, ok := env["name"].(string)
+				if !ok || strings.TrimSpace(name) == "" {
+					d.errorf("environment", "jobs."+id+".environment.name", "environment.name is required and must be a string")
+				}
+				if u, ok := env["url"]; ok {
+					if _, isStr := u.(string); !isStr {
+						d.errorf("environment", "jobs."+id+".environment.url", "environment.url must be a string")
+					}
+				}
+				for k := range env {
+					if k != "name" && k != "url" {
+						d.warnf("environment", "jobs."+id+".environment."+k, fmt.Sprintf("environment option %q is not implemented and is ignored", k))
+					}
+				}
+			default:
+				d.errorf("environment", "jobs."+id+".environment", "environment must be a name string or a mapping with name")
+			}
 		}
 		if len(job.Steps) == 0 && job.Uses == "" {
 			d.errorf("no-steps", "jobs."+id+".steps", "job must define at least one step")
@@ -285,6 +307,11 @@ func compileJob(wf Workflow, id string, job *Job, matrix map[string]any, c Compi
 		stepIDs[sp.ID]++
 	}
 
+	envName, envURL, err := jobEnvironment(job.Environment, ctx)
+	if err != nil {
+		return JobPlan{}, err
+	}
+
 	return JobPlan{
 		Key:             key,
 		JobID:           id,
@@ -299,8 +326,36 @@ func compileJob(wf Workflow, id string, job *Job, matrix map[string]any, c Compi
 		TimeoutSeconds:  timeout,
 		ContinueOnError: job.ContinueOnError,
 		FailFast:        failFast(job),
+		Environment:     envName,
+		EnvironmentURL:  envURL,
 		Steps:           steps,
 	}, nil
+}
+
+// jobEnvironment resolves jobs.<id>.environment into a name and optional URL.
+// Expressions are interpolated against the matrix context only — GitHub
+// evaluates these at runtime with the full job context.
+func jobEnvironment(raw any, ctx map[string]any) (string, string, error) {
+	var name, url string
+	switch env := raw.(type) {
+	case nil:
+		return "", "", nil
+	case string:
+		name = env
+	case map[string]any:
+		name, _ = env["name"].(string)
+		url, _ = env["url"].(string)
+	}
+	var err error
+	if name, err = expressions.Interpolate(name, ctx); err != nil {
+		return "", "", fmt.Errorf("environment name: %w", err)
+	}
+	if url != "" {
+		if url, err = expressions.Interpolate(url, ctx); err != nil {
+			return "", "", fmt.Errorf("environment url: %w", err)
+		}
+	}
+	return name, url, nil
 }
 
 func (c Compiler) resolveImage(labels []string) string {

@@ -1,68 +1,348 @@
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
+import { useMemo } from "react";
 import { api } from "../lib/api";
-import type { OverviewResponse } from "../lib/types";
-import { Card, EmptyState, PageHeader, Spinner } from "../components/ui";
-import { StatusPill } from "../components/status";
-import { Row } from "../components/layout";
-import { duration, relTime, seconds } from "../lib/format";
+import type { OverviewResponse, Run, Runner } from "../lib/types";
+import { PageHeader, Spinner } from "../components/ui";
+import { StatusSq } from "../components/status";
+import { Fingerprint, jobHue, useRunDetails } from "../components/fingerprint";
+import { bytes, duration, relTime, seconds } from "../lib/format";
 
 export function OverviewPage() {
 	const nav = useNavigate();
-	const { data, isLoading } = useQuery({
+	const { data, isLoading, dataUpdatedAt } = useQuery({
 		queryKey: ["overview"],
 		queryFn: () => api.get<OverviewResponse>("/overview"),
 		refetchInterval: 5000,
 	});
+	const { data: runsData } = useQuery({
+		queryKey: ["runs", "all"],
+		queryFn: () => api.get<{ runs: Run[]; total: number }>("/runs?limit=100"),
+		refetchInterval: 8000,
+	});
+	const { data: runners } = useQuery({
+		queryKey: ["runners"],
+		queryFn: () => api.get<{ runners: Runner[] }>("/runners"),
+		refetchInterval: 8000,
+	});
+	const { data: meta } = useQuery({
+		queryKey: ["meta"],
+		queryFn: () => api.get<{ name: string; version: string; env: string }>("/meta"),
+		staleTime: Number.POSITIVE_INFINITY,
+	});
+
+	const runs = useMemo(() => runsData?.runs ?? [], [runsData]);
+	const liveRun = runs.find((r) => r.status === "in_progress" || r.status === "queued");
+	// the live run earns its own slot in the detail fan-out — it is not
+	// necessarily inside the recent-six window
+	const detailRuns = useMemo(
+		() => (liveRun && !runs.slice(0, 6).includes(liveRun) ? [liveRun, ...runs.slice(0, 5)] : runs.slice(0, 6)),
+		[runs, liveRun],
+	);
+	const recent = detailRuns.slice(0, 6);
+	const details = useRunDetails(detailRuns);
+
+	const liveDetail = useMemo(
+		() => (liveRun ? details[detailRuns.indexOf(liveRun)]?.data : undefined),
+		[liveRun, details, detailRuns],
+	);
+
+	// runner_id → hue of the job it's currently running, for the fleet tint
+	const runnerJob = useMemo(() => {
+		const m = new Map<string, string>();
+		for (const d of details) {
+			for (const j of d.data?.jobs ?? []) {
+				if ((j.status === "in_progress" || j.status === "waiting") && j.runner_id) {
+					m.set(j.runner_id, jobHue(j.job_key || j.name));
+				}
+			}
+		}
+		return m;
+	}, [details]);
+
+	const day = useMemo(() => runsPerDay(runs), [runs]);
 
 	if (isLoading || !data) return <Spinner />;
 	const o = data.overview;
+	const todayStart = new Date();
+	todayStart.setHours(0, 0, 0, 0);
+	const runsToday = runs.filter((r) => Date.parse(r.created_at) >= todayStart.getTime()).length;
+	const successRate = o.runs_total ? Math.round((o.runs_success / o.runs_total) * 100) : null;
 
-	const stats = [
-		{ label: "Active runs", value: o.runs_active },
-		{ label: "Queued jobs", value: o.jobs_queued },
-		{ label: "Running jobs", value: o.jobs_running },
-		{ label: "Runners online", value: `${o.runners_online}/${o.runners_total}` },
-		{ label: "Runs total", value: o.runs_total },
-		{ label: "Success rate", value: o.runs_total ? `${Math.round((o.runs_success / o.runs_total) * 100)}%` : "—" },
-		{ label: "Avg queue wait", value: seconds(o.avg_queue_seconds) },
-		{ label: "P95 queue wait", value: seconds(o.p95_queue_seconds) },
-		{ label: "Avg run duration", value: seconds(o.avg_run_seconds) },
-		{ label: "Cache", value: `${data.cache.entries} entries` },
+	const kpis = [
+		{ k: "Runs today", v: String(runsToday), c: `${o.runs_total} total`, cls: "fl" },
+		{
+			k: "Success",
+			v: successRate != null ? `${successRate}%` : "—",
+			c: `${o.runs_failure} failed of ${o.runs_total}`,
+			cls: "fl",
+		},
+		{
+			k: "Queue p95",
+			v: o.p95_queue_seconds ? seconds(o.p95_queue_seconds) : "—",
+			c: o.jobs_queued ? `${o.jobs_queued} waiting` : "no queue waiting",
+			cls: "fl",
+		},
+		{
+			k: "Runners",
+			v: `${o.runners_online}`,
+			vs: `/${o.runners_total}`,
+			c: o.jobs_running ? `${o.jobs_running} jobs running` : "fleet idle",
+			cls: "fl",
+		},
+		{ k: "Cache", v: String(data.cache.entries), c: bytes(data.cache.bytes), cls: "fl" },
 	];
 
 	return (
 		<>
-			<PageHeader title="Overview" sub="Control plane activity across all projects" />
-			<div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-				{stats.map((s) => (
-					<Card key={s.label} className="p-3">
-						<div className="text-xs text-[var(--text-faint)]">{s.label}</div>
-						<div className="mt-1 text-lg font-semibold tabular-nums">{s.value}</div>
-					</Card>
+			<PageHeader
+				title={(meta?.name ?? "kern").toLowerCase()}
+				sub={`self-hosted · ${o.runners_online} runner${o.runners_online === 1 ? "" : "s"} · every push runs on contact`}
+				actions={
+					<>
+						<span className={o.runs_failure === 0 && o.runs_total > 0 ? "tag ok" : "tag"}>
+							<span
+								className={`sq ${o.runs_failure === 0 && o.runs_total > 0 ? "ok" : "dim"}`}
+								style={{ width: 7, height: 7 }}
+							/>
+							{o.runs_failure === 0 && o.runs_total > 0 ? "healthy" : "watching"}
+						</span>
+						<span className="text-[11px] text-[var(--faint)]">
+							updated {relTime(new Date(dataUpdatedAt).toISOString())}
+						</span>
+					</>
+				}
+			/>
+
+			{liveRun && (
+				<div className="panel mt-4 flex items-center gap-3.5 px-4 py-3">
+					<span className="sq live" />
+					<span className="max-w-[46%] flex-none truncate text-[13px] font-medium">
+						{liveRun.workflow_name} #{liveRun.run_number}
+						{liveRun.commit_message ? ` · ${liveRun.commit_message.split("\n")[0]}` : ""}
+					</span>
+					<div className="min-w-[140px] flex-1">
+						<Fingerprint run={liveRun} jobs={liveDetail?.jobs} />
+					</div>
+					<span className="mono flex-none text-[11px] text-[var(--faint)]">
+						{duration(liveRun.started_at ?? liveRun.created_at, null)}
+					</span>
+					{o.avg_run_seconds > 0 && (
+						<span className="flex-none text-[11px] text-[var(--faint)]">
+							est ~{seconds(o.avg_run_seconds)}
+						</span>
+					)}
+					<button className="lnk flex-none" onClick={() => nav(`/runs/${liveRun.id}`)}>
+						View
+					</button>
+				</div>
+			)}
+
+			<div className="panel kpis mt-4">
+				{kpis.map((k) => (
+					<div className="kpi" key={k.k}>
+						<div className="k">{k.k}</div>
+						<div className="v">
+							{k.v}
+							{"vs" in k && k.vs ? <small>{k.vs}</small> : null}
+						</div>
+						<div className={`c ${k.cls}`}>{k.c}</div>
+					</div>
 				))}
 			</div>
-			<h2 className="mb-2 text-[13px] font-semibold">Recent failures</h2>
-			<Card>
-				{data.failures.length === 0 ? (
-					<EmptyState title="No failed runs" hint="Failures from the last window appear here." />
-				) : (
-					data.failures.map((r) => (
-						<Row key={r.id} onClick={() => nav(`/runs/${r.id}`)}>
-							<StatusPill status={r.status} conclusion={r.conclusion} />
-							<span className="min-w-0 flex-1 truncate">
-								<span className="font-medium">{r.workflow_name}</span>
-								<span className="text-[var(--text-faint)]"> · {r.project_slug} · #{r.run_number}</span>
+
+			<div className="mt-4 grid grid-cols-[3fr_2fr] items-start gap-4 max-lg:grid-cols-1">
+				<div className="panel">
+					<div className="phead">
+						<span className="pt">Runs per day</span>
+						<span className="r">
+							<span className="jc">
+								<i style={{ background: "#3a3a3a" }} />
+								passed
 							</span>
-							<span className="font-mono text-xs text-[var(--text-faint)]">{r.ref.replace("refs/heads/", "")}</span>
-							<span className="w-16 text-right text-xs text-[var(--text-muted)]">
-								{duration(r.started_at, r.completed_at)}
+							<span className="jc">
+								<i style={{ background: "var(--err)" }} />
+								failed
 							</span>
-							<span className="w-20 text-right text-xs text-[var(--text-faint)]">{relTime(r.created_at)}</span>
-						</Row>
-					))
-				)}
-			</Card>
+						</span>
+					</div>
+					<RunsChart days={day} version={meta?.version} />
+				</div>
+				<div className="panel">
+					<div className="phead">
+						<span className="pt">Fleet</span>
+						<span className="r">utilisation now</span>
+					</div>
+					{(runners?.runners ?? []).map((r) => {
+						const hue = runnerJob.get(r.id);
+						const busy = (r.active_jobs ?? 0) > 0;
+						const pct = Math.round(r.cpu_percent ?? 0);
+						return (
+							<div className="fr" key={r.id}>
+								<StatusSq status={busy ? "in_progress" : r.status} />
+								<span className="rn">{r.name}</span>
+								<div className="ubar">
+									<i
+										className={hue ? `u-${hue}` : "u-grey"}
+										style={{ width: `${Math.max(pct, busy ? 4 : 0)}%` }}
+									/>
+								</div>
+								{hue && <span className={`chip ${hue}`}>{hue}</span>}
+								<span className="rs">{pct}%</span>
+							</div>
+						);
+					})}
+					{!runners?.runners.length && (
+						<div className="emptynote">
+							No runners registered — a push waits in queue until one joins.
+						</div>
+					)}
+					<div className="emptynote">
+						{o.jobs_queued
+							? `${o.jobs_queued} job${o.jobs_queued === 1 ? "" : "s"} queued for a runner.`
+							: "Queue is clear. A push picks a runner on contact."}
+					</div>
+				</div>
+			</div>
+
+			<div className="mt-4 grid grid-cols-[3fr_2fr] items-start gap-4 max-lg:grid-cols-1">
+				<div className="panel">
+					<div className="phead">
+						<span className="pt">Recent runs</span>
+						<span className="r">
+							<span className="jc">
+								<i className="j-lint" />
+								lint
+							</span>
+							<span className="jc">
+								<i className="j-build" />
+								build
+							</span>
+							<span className="jc">
+								<i className="j-web" />
+								web
+							</span>
+							<button className="lnk" onClick={() => nav("/runs")}>
+								View all
+							</button>
+						</span>
+					</div>
+					{recent.length === 0 && (
+						<div className="emptynote">
+							No runs yet — push to a wired repo or trigger a workflow.
+						</div>
+					)}
+					{recent.map((r, i) => {
+						const live = r.status === "in_progress" || r.status === "queued";
+						return (
+							<div
+								key={r.id}
+								onClick={() => nav(`/runs/${r.id}`)}
+								className="grid cursor-pointer grid-cols-[14px_44px_1fr_76px_52px] items-center gap-3 border-b border-[var(--line)] px-4 py-[9px] last:border-0"
+							>
+								<StatusSq status={r.status} conclusion={r.conclusion} />
+								<span className="font-mono text-xs text-[var(--faint)]">#{r.run_number}</span>
+								<Fingerprint run={r} jobs={details[i]?.data?.jobs} small />
+								<span className="text-right font-mono text-xs text-[var(--dim)]">
+									{duration(r.started_at, r.completed_at)}
+								</span>
+								<span className="text-right text-[11px] text-[var(--faint)]">
+									{live ? "now" : relTime(r.created_at)}
+								</span>
+							</div>
+						);
+					})}
+				</div>
+				<div className="panel">
+					<div className="phead">
+						<span className="pt">Cache</span>
+						<span className="r">7d eviction</span>
+					</div>
+					<div className="bwrap">
+						<div className="flex justify-between text-xs">
+							<span className="pt">Stored</span>
+							<span className="mono text-[var(--dim)]">{bytes(data.cache.bytes)}</span>
+						</div>
+						<div className="meter mt-2.5">
+							<i style={{ width: "100%" }} />
+						</div>
+					</div>
+					<div className="kv">
+						<span className="k">Entries</span>
+						<span className="v">{data.cache.entries}</span>
+					</div>
+					<div className="kv">
+						<span className="k">Avg run</span>
+						<span className="v">{o.avg_run_seconds ? seconds(o.avg_run_seconds) : "—"}</span>
+					</div>
+					<div className="kv">
+						<span className="k">Last run</span>
+						<span className="v">{o.last_run_at ? relTime(o.last_run_at) : "—"}</span>
+					</div>
+				</div>
+			</div>
 		</>
+	);
+}
+
+interface DayBucket {
+	label: string;
+	total: number;
+	failed: number;
+	today: boolean;
+}
+
+// 14-day window of runs/day, oldest first.
+function runsPerDay(runs: Run[]): DayBucket[] {
+	const days: DayBucket[] = [];
+	const now = new Date();
+	for (let i = 13; i >= 0; i--) {
+		const d = new Date(now);
+		d.setDate(now.getDate() - i);
+		d.setHours(0, 0, 0, 0);
+		days.push({
+			label: d.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+			total: 0,
+			failed: 0,
+			today: i === 0,
+		});
+	}
+	for (const r of runs) {
+		const t = new Date(r.created_at);
+		t.setHours(0, 0, 0, 0);
+		const idx = 13 - Math.round((Date.now() - t.getTime()) / 86_400_000);
+		if (idx < 0 || idx > 13) continue;
+		days[idx]!.total++;
+		if (r.conclusion === "failure") days[idx]!.failed++;
+	}
+	return days;
+}
+
+function RunsChart({ days, version }: { days: DayBucket[]; version?: string }) {
+	const max = Math.max(...days.map((d) => d.total), 1);
+	const yMax = Math.max(Math.ceil(max / 5) * 5, 5);
+	const anyRuns = days.some((d) => d.total > 0);
+	return (
+		<div className="chart">
+			<div className="ct">
+				<span>{yMax}</span>
+				<span>{Math.round((yMax * 2) / 3)}</span>
+				<span>{Math.round(yMax / 3)}</span>
+				<span>0</span>
+			</div>
+			{!anyRuns && <div className="empty-lbl">No runs in the last 14 days.</div>}
+			{days.map((d, i) => (
+				<div className={`col${d.today ? " today" : ""}`} key={i}>
+					{d.failed > 0 && <div className="f" style={{ height: `${(d.failed / yMax) * 100}%` }} />}
+					<div
+						className="b"
+						style={{ height: `${(d.total / yMax) * 100}%` }}
+						title={`${d.label} · ${d.total} run${d.total === 1 ? "" : "s"}${d.failed ? `, ${d.failed} failed` : ""}`}
+					/>
+					{d.today && version && <span className="ann">v{version.replace(/^v/, "")}</span>}
+					{(d.today || i % 6 === 1) && <span className="lbl">{d.today ? "today" : d.label}</span>}
+				</div>
+			))}
+		</div>
 	);
 }

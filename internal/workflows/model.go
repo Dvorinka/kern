@@ -173,6 +173,8 @@ type JobPlan struct {
 	TimeoutSeconds  int               `json:"timeout_seconds"`
 	ContinueOnError bool              `json:"continue_on_error"`
 	Priority        int               `json:"priority"`
+	Environment     string            `json:"environment,omitempty"`
+	EnvironmentURL  string            `json:"environment_url,omitempty"`
 	Steps           []StepPlan        `json:"steps"`
 }
 

@@ -63,7 +63,7 @@ function TokensCard() {
 				}
 			/>
 			{minted && (
-				<div className="flex items-center gap-2 border-b border-[var(--border)] bg-[var(--ok)]/5 px-4 py-2.5">
+				<div className="flex items-center gap-2 border-b border-[var(--line)] bg-[var(--ok)]/5 px-4 py-2.5">
 					<span className="text-xs text-[var(--ok)]">Token created — copy it now, it will not be shown again:</span>
 					<code className="min-w-0 flex-1 truncate font-mono text-xs">{minted}</code>
 					<CopyButton text={minted} />
@@ -71,11 +71,11 @@ function TokensCard() {
 				</div>
 			)}
 			{creating && (
-				<form onSubmit={submit} className="flex flex-wrap items-center gap-3 border-b border-[var(--border)] px-4 py-3">
+				<form onSubmit={submit} className="flex flex-wrap items-center gap-3 border-b border-[var(--line)] px-4 py-3">
 					<Input name="name" placeholder="token name" required className="w-48" />
 					{["read", "write", "admin"].map((s) => (
-						<label key={s} className="flex cursor-pointer items-center gap-1.5 text-xs text-[var(--text-muted)]">
-							<input type="checkbox" name={`scope_${s}`} defaultChecked={s === "read"} className="accent-[var(--accent)]" />
+						<label key={s} className="flex cursor-pointer items-center gap-1.5 text-xs text-[var(--dim)]">
+							<input type="checkbox" name={`scope_${s}`} defaultChecked={s === "read"} className="accent-[#f2f2f2]" />
 							{s}
 						</label>
 					))}
@@ -94,12 +94,12 @@ function TokensCard() {
 				data.tokens.map((t) => (
 					<Row key={t.id}>
 						<span className="min-w-0 flex-1 truncate font-medium">{t.name}</span>
-						<span className="font-mono text-xs text-[var(--text-faint)]">{t.prefix}…</span>
-						<span className="text-xs text-[var(--text-muted)]">{t.scopes.join(", ")}</span>
-						<span className="w-24 text-right text-xs text-[var(--text-faint)]">
+						<span className="font-mono text-xs text-[var(--faint)]">{t.prefix}…</span>
+						<span className="text-xs text-[var(--dim)]">{t.scopes.join(", ")}</span>
+						<span className="w-24 text-right text-xs text-[var(--faint)]">
 							{t.expires_at ? `expires ${relTime(t.expires_at)}` : "no expiry"}
 						</span>
-						<span className="w-24 text-right text-xs text-[var(--text-faint)]">
+						<span className="w-24 text-right text-xs text-[var(--faint)]">
 							{t.last_used_at ? `used ${relTime(t.last_used_at)}` : "never used"}
 						</span>
 						<Button
@@ -144,7 +144,7 @@ export function CopyButton({ text }: { text: string }) {
 				setCopied(true);
 				setTimeout(() => setCopied(false), 1500);
 			}}
-			className="cursor-pointer rounded p-1 text-[var(--text-muted)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text)]"
+			className="cursor-pointer rounded p-1 text-[var(--dim)] hover:bg-[var(--raise2)] hover:text-[var(--ink)]"
 			title="Copy"
 		>
 			{copied ? <Check size={13} className="text-[var(--ok)]" /> : <Copy size={13} />}
