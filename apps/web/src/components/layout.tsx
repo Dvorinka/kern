@@ -9,6 +9,7 @@ import {
 	Package,
 	Server,
 	Settings2,
+	Shield,
 	Webhook,
 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
@@ -36,6 +37,7 @@ const NAV: {
 			{ to: "/artifacts", label: "Artifacts", icon: Package },
 			{ to: "/cache", label: "Cache", icon: Database },
 			{ to: "/secrets", label: "Secrets", icon: KeyRound },
+			{ to: "/environments", label: "Environments", icon: Shield },
 			{ to: "/deliveries", label: "Webhooks", icon: Webhook },
 		],
 	},

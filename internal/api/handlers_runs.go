@@ -60,10 +60,16 @@ func (s *Server) getRun(c *gin.Context) {
 	if len(version.Parsed) > 0 && string(version.Parsed) != "null" {
 		plan = version.Parsed
 	}
+	deployments, err := s.Store.DeploymentsForRun(c.Request.Context(), run.ID)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"run":  run,
-		"jobs": jobs,
-		"plan": plan,
+		"run":         run,
+		"jobs":        jobs,
+		"plan":        plan,
+		"deployments": deployments,
 		"workflow": gin.H{
 			"id":         run.WorkflowID,
 			"path":       run.WorkflowPath,

@@ -38,7 +38,7 @@ never silently ignored.
 | `concurrency.cancel-in-progress` | done | newer queued run cancels the older in-group run |
 | `container` (job image) | partial | `image` only, string or `container.image`; other options warn and are ignored |
 | `services` | no | compile error `services` |
-| `environment` / approvals | no | compile error `environment` |
+| `environment` / approvals | partial | `environment: name` or `{name, url}` compiles and is created on first use. A protected environment parks the job in `waiting_approval` until `required_approvals` distinct org members approve. No reviewer allow-list, wait timer, or branch policy |
 | `permissions` | partial | recorded, not enforced |
 
 ## Steps
@@ -97,5 +97,5 @@ never silently ignored.
 - Reusable workflows `jobs.<id>.uses` (M5)
 - Service containers; job `container` options beyond `image` (M5)
 - Cache paths outside the workspace; cache size quotas; `upload-chunk-size` and other action tuning inputs
-- OIDC, deployment environments, approvals (M5+)
+- OIDC; environment reviewer allow-lists, wait timers, and deployment branch policies (M5+)
 - Some string functions, arithmetic operators, object filters `a.*`

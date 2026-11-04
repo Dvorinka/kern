@@ -5,9 +5,10 @@ import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { Download, Wrench } from "lucide-react";
 import { api } from "../lib/api";
-import type { Artifact, Job, RunDetail, Runner, Step } from "../lib/types";
+import type { Artifact, Deployment, Job, RunDetail, Runner, Step } from "../lib/types";
 import { Button, PageHeader, Spinner, cn } from "../components/ui";
 import { StatusPill } from "../components/status";
+import { useAuth } from "../lib/auth";
 import { LogView } from "../components/log-view";
 import { RunGantt } from "../components/gantt";
 import { CopyButton } from "./settings";
@@ -93,6 +94,11 @@ export function RunDetailPage() {
 					</>
 				}
 			/>
+			<ApprovalGate
+				deployments={data.deployments ?? []}
+				jobs={jobs}
+				onDone={() => qc.invalidateQueries({ queryKey: ["run", id] })}
+			/>
 			<RunGantt run={run} jobs={jobs} runners={runnerNames} />
 			{job && (
 				<StepsPanel
@@ -132,7 +138,10 @@ function StepsPanel({
 	return (
 		<div className="panel mt-4">
 			<div className="phead">
-				<span className="pt">Steps · {job.name}</span>
+				<span className="pt">
+					Steps · {job.name}
+					{job.environment ? ` · ${job.environment}` : ""}
+				</span>
 				{jobs.length > 1 && (
 					<span className="flex gap-3">
 						{jobs.map((j) => (
@@ -156,14 +165,20 @@ function StepsPanel({
 				)}
 				<span className="r">
 					{sel ? `step ${sel.number} of ${steps.length}` : `${steps.length} steps`}
-					{job.runner_id && <span>·</span>}
-					{duration(job.started_at, job.completed_at)}
+					{job.started_at && (
+						<>
+							<span>·</span>
+							{duration(job.started_at, job.completed_at)}
+						</>
+					)}
 				</span>
 			</div>
 			<div className="sbody">
 				<div className="slist">
 					{steps.length === 0 && (
-						<div className="px-4 py-3 text-[11px] text-[var(--faint)]">No steps yet.</div>
+						<div className="px-4 py-3 text-[11px] text-[var(--faint)]">
+							{job.status === "waiting_approval" ? "Waiting for deployment approval." : "No steps yet."}
+						</div>
 					)}
 					{steps.map((s) => (
 						<StepButton
@@ -178,7 +193,9 @@ function StepsPanel({
 					<StepLog key={sel.id} job={job} step={sel} live={live && sel.status === "running"} />
 				) : (
 					<div className="px-4 py-8 text-[11px] text-[var(--faint)]">
-						Waiting for the first step.
+						{job.status === "waiting_approval"
+							? `Deployment to ${job.environment || "this environment"} is waiting for approval.`
+							: "Waiting for the first step."}
 					</div>
 				)}
 			</div>
@@ -306,6 +323,70 @@ function StepSummary({ stepId }: { stepId: string }) {
 					}),
 				}}
 			/>
+		</div>
+	);
+}
+
+function ApprovalGate({
+	deployments,
+	jobs,
+	onDone,
+}: {
+	deployments: Deployment[];
+	jobs: Job[];
+	onDone: () => void;
+}) {
+	const { user } = useAuth();
+	const pending = deployments.filter((d) =>
+		jobs.some((j) => j.id === d.job_id && j.status === "waiting_approval"),
+	);
+	if (pending.length === 0) return null;
+	return (
+		<div className="panel mb-4">
+			<div className="phead">
+				<span className="pt">Deployment approval</span>
+				<span className="r">{pending.length} waiting</span>
+			</div>
+			{pending.map((d) => (
+				<ApprovalRow key={d.id} d={d} email={user?.email ?? ""} onDone={onDone} />
+			))}
+		</div>
+	);
+}
+
+function ApprovalRow({ d, email, onDone }: { d: Deployment; email: string; onDone: () => void }) {
+	const qc = useQueryClient();
+	const approvals = d.approvals ?? [];
+	const mine = approvals.some((a) => a.email === email);
+	const act = useMutation({
+		mutationFn: (op: "approve" | "reject") => api.post(`/jobs/${d.job_id}/${op}`),
+		onSuccess: () => {
+			onDone();
+			qc.invalidateQueries({ queryKey: ["deployments"] });
+		},
+	});
+	return (
+		<div className="flex flex-wrap items-center gap-3 border-b border-[var(--line)] px-4 py-2.5 last:border-0">
+			<span className="font-mono text-[13px]">{d.environment_name}</span>
+			<span className="text-xs text-[var(--dim)]">{d.job_name}</span>
+			<span className="font-mono text-xs text-[var(--faint)]">
+				{approvals.length}/{d.required_approvals}
+				{approvals.length > 0 ? ` · ${approvals.map((a) => a.email).join(", ")}` : ""}
+			</span>
+			<span className="ml-auto flex items-center gap-2">
+				<Button
+					size="sm"
+					variant="primary"
+					disabled={act.isPending || mine}
+					onClick={() => act.mutate("approve")}
+				>
+					{mine ? "Approved" : "Approve"}
+				</Button>
+				<Button size="sm" variant="danger" disabled={act.isPending} onClick={() => act.mutate("reject")}>
+					Reject
+				</Button>
+			</span>
+			{act.error && <span className="w-full text-xs text-[var(--err)]">{act.error.message}</span>}
 		</div>
 	);
 }

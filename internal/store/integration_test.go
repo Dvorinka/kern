@@ -233,3 +233,118 @@ func TestCancelInProgressNoGroup(t *testing.T) {
 		t.Fatalf("newer run = %s, want in_progress", n.Status)
 	}
 }
+
+// Protected environments park their job until enough approvals land; approval
+// releases it to the queue, rejection cancels it.
+func TestEnvironmentApprovalGate(t *testing.T) {
+	s, ctx := testStore(t)
+	pid, wid, vid := fixture(t, ctx, s)
+	env, err := s.PutEnvironment(ctx, pid, "prod", true, 1)
+	if err != nil {
+		t.Fatalf("put environment: %v", err)
+	}
+	run, err := s.CreateRun(ctx, CreateRunParams{
+		ProjectID: pid, WorkflowID: wid, WorkflowVersionID: vid,
+		Event: "push", Ref: "refs/heads/main", SHA: "abc", TrustLevel: "trusted",
+	}, []JobSeed{{
+		Key: "deploy", JobKey: "deploy", RunsOn: []string{"ubuntu-latest"},
+		Needs: []string{}, Image: "ubuntu:24.04", TimeoutSeconds: 3600,
+		Environment: "prod", EnvironmentURL: "https://prod.example",
+	}})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	jobs, err := s.JobsForRun(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("jobs: %v", err)
+	}
+	job := jobs[0]
+	if job.Environment != "prod" || job.EnvironmentURL != "https://prod.example" {
+		t.Fatalf("job env = %q/%q", job.Environment, job.EnvironmentURL)
+	}
+	if _, err := s.PromoteQueuedRuns(ctx); err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	dep, err := s.CreateDeployment(ctx, pid, env.ID, run.ID, job.ID, run.Ref, run.SHA, job.EnvironmentURL)
+	if err != nil {
+		t.Fatalf("create deployment: %v", err)
+	}
+	if dep.Status != "queued" {
+		t.Fatalf("deployment status = %s", dep.Status)
+	}
+	if err := s.SetJobWaitingApproval(ctx, job.ID); err != nil {
+		t.Fatalf("park job: %v", err)
+	}
+	r := runner(t, ctx, s, "deployer")
+	if claimed, err := s.ClaimJob(ctx, r.ID, time.Minute); err != nil || claimed != nil {
+		t.Fatal("parked job must not be claimable")
+	}
+
+	var userID uuid.UUID
+	if err := s.pool.QueryRow(ctx, `SELECT id FROM users LIMIT 1`).Scan(&userID); err != nil {
+		t.Fatalf("user: %v", err)
+	}
+	dep, released, err := s.ApproveDeployment(ctx, job.ID, userID, "it@kern.local")
+	if err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if !released {
+		t.Fatal("single required approval should release the job")
+	}
+	if len(dep.Approvals) == 0 || string(dep.Approvals) == "[]" {
+		t.Fatal("approval was not recorded")
+	}
+	j, _ := s.Job(ctx, job.ID)
+	if j.Status != "queued" {
+		t.Fatalf("job = %s, want queued", j.Status)
+	}
+	if _, _, err := s.ApproveDeployment(ctx, job.ID, userID, "it@kern.local"); err == nil {
+		t.Fatal("double approval should fail")
+	}
+	claimed, err := s.ClaimJob(ctx, r.ID, time.Minute)
+	if err != nil || claimed == nil {
+		t.Fatalf("approved job should be claimable: %v", err)
+	}
+	if got, _ := s.DeploymentForJob(ctx, job.ID); got.Status != "in_progress" {
+		t.Fatalf("deployment = %s, want in_progress", got.Status)
+	}
+}
+
+func TestDeploymentReject(t *testing.T) {
+	s, ctx := testStore(t)
+	pid, wid, vid := fixture(t, ctx, s)
+	env, err := s.PutEnvironment(ctx, pid, "prod", true, 1)
+	if err != nil {
+		t.Fatalf("put environment: %v", err)
+	}
+	run, err := s.CreateRun(ctx, CreateRunParams{
+		ProjectID: pid, WorkflowID: wid, WorkflowVersionID: vid,
+		Event: "push", Ref: "refs/heads/main", TrustLevel: "trusted",
+	}, []JobSeed{{
+		Key: "deploy", JobKey: "deploy", RunsOn: []string{"ubuntu-latest"},
+		Needs: []string{}, Image: "ubuntu:24.04", TimeoutSeconds: 3600, Environment: "prod",
+		Steps: []StepSeed{{Key: "1", Name: "ship"}},
+	}})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	jobs, _ := s.JobsForRun(ctx, run.ID)
+	job := jobs[0]
+	if _, err := s.CreateDeployment(ctx, pid, env.ID, run.ID, job.ID, run.Ref, run.SHA, ""); err != nil {
+		t.Fatalf("create deployment: %v", err)
+	}
+	if err := s.SetJobWaitingApproval(ctx, job.ID); err != nil {
+		t.Fatalf("park: %v", err)
+	}
+	dep, err := s.RejectDeployment(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("reject: %v", err)
+	}
+	if dep.Status != "failure" {
+		t.Fatalf("deployment = %s, want failure", dep.Status)
+	}
+	j, _ := s.Job(ctx, job.ID)
+	if j.Status != "cancelled" || j.Conclusion != "cancelled" {
+		t.Fatalf("job = %s/%s, want cancelled", j.Status, j.Conclusion)
+	}
+}

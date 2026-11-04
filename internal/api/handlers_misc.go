@@ -126,28 +126,43 @@ func validSignature(secret string, body []byte, header string) bool {
 	return hmac.Equal(mac.Sum(nil), want)
 }
 
-// secretScope resolves the optional ?project=<slug> scope into a project id.
-func (s *Server) secretScope(c *gin.Context) (*uuid.UUID, bool) {
-	scope := c.Query("project")
-	if scope == "" {
-		return nil, true
-	}
+// secretScope resolves the optional ?project=<slug> and ?environment=<name>
+// scope into ids. Environment scope requires a project and must name an
+// existing environment.
+func (s *Server) secretScope(c *gin.Context) (*uuid.UUID, *uuid.UUID, bool) {
 	user, _ := currentUser(c)
-	p, err := s.Store.Project(c.Request.Context(), user.OrgID, scope)
-	if err != nil {
-		s.internalError(c, err)
-		return nil, false
+	var projectID *uuid.UUID
+	if scope := c.Query("project"); scope != "" {
+		p, err := s.Store.Project(c.Request.Context(), user.OrgID, scope)
+		if err != nil {
+			s.internalError(c, err)
+			return nil, nil, false
+		}
+		projectID = &p.ID
 	}
-	return &p.ID, true
+	var envID *uuid.UUID
+	if envName := c.Query("environment"); envName != "" {
+		if projectID == nil {
+			fail(c, http.StatusBadRequest, "invalid_scope", "environment scope requires ?project=")
+			return nil, nil, false
+		}
+		env, err := s.Store.Environment(c.Request.Context(), *projectID, envName)
+		if err != nil {
+			s.internalError(c, err)
+			return nil, nil, false
+		}
+		envID = &env.ID
+	}
+	return projectID, envID, true
 }
 
 func (s *Server) listSecrets(c *gin.Context) {
 	user, _ := currentUser(c)
-	projectID, ok := s.secretScope(c)
+	projectID, envID, ok := s.secretScope(c)
 	if !ok {
 		return
 	}
-	rows, err := s.Store.Secrets(c.Request.Context(), user.OrgID, projectID)
+	rows, err := s.Store.Secrets(c.Request.Context(), user.OrgID, projectID, envID)
 	if err != nil {
 		s.internalError(c, err)
 		return
@@ -280,7 +295,7 @@ func secretSummaries(rows []store.Secret) []gin.H {
 	out := make([]gin.H, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, gin.H{
-			"id": r.ID, "name": r.Name, "project_id": r.ProjectID,
+			"id": r.ID, "name": r.Name, "project_id": r.ProjectID, "environment_id": r.EnvironmentID,
 			"created_at": r.CreatedAt, "updated_at": r.UpdatedAt,
 		})
 	}
@@ -294,7 +309,7 @@ func (s *Server) putSecret(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_name", "secret name must not contain spaces or '='")
 		return
 	}
-	projectID, ok := s.secretScope(c)
+	projectID, envID, ok := s.secretScope(c)
 	if !ok {
 		return
 	}
@@ -310,7 +325,7 @@ func (s *Server) putSecret(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
-	if err := s.Store.UpsertSecret(c.Request.Context(), user.OrgID, projectID, name, ct, nonce); err != nil {
+	if err := s.Store.UpsertSecret(c.Request.Context(), user.OrgID, projectID, envID, name, ct, nonce); err != nil {
 		s.internalError(c, err)
 		return
 	}
@@ -321,11 +336,11 @@ func (s *Server) putSecret(c *gin.Context) {
 func (s *Server) deleteSecret(c *gin.Context) {
 	user, _ := currentUser(c)
 	name := c.Param("name")
-	projectID, ok := s.secretScope(c)
+	projectID, envID, ok := s.secretScope(c)
 	if !ok {
 		return
 	}
-	rows, err := s.Store.Secrets(c.Request.Context(), user.OrgID, projectID)
+	rows, err := s.Store.Secrets(c.Request.Context(), user.OrgID, projectID, envID)
 	if err != nil {
 		s.internalError(c, err)
 		return

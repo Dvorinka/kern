@@ -139,9 +139,13 @@ export function RunGantt({
 								<div
 									className="seg wait"
 									style={{ left: `${pct(qs)}%`, width: `${Math.max(1.5, pct(now) - pct(qs))}%` }}
-									title={`${j.name} · queued since ${new Date(qs).toLocaleTimeString()}`}
+									title={
+										j.status === "waiting_approval"
+											? `${j.name} · waiting for approval`
+											: `${j.name} · queued since ${new Date(qs).toLocaleTimeString()}`
+									}
 								>
-									queued
+									{j.status === "waiting_approval" ? "approval" : "queued"}
 								</div>
 							)}
 						</div>

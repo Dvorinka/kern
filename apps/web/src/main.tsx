@@ -16,6 +16,7 @@ import { ArtifactsPage } from "./routes/artifacts";
 import { CachePage } from "./routes/cache";
 import { DeliveriesPage } from "./routes/deliveries";
 import { SettingsPage } from "./routes/settings";
+import { EnvironmentsPage } from "./routes/environments";
 
 const router = createBrowserRouter([
 	{ path: "/login", element: <LoginPage /> },
@@ -30,6 +31,7 @@ const router = createBrowserRouter([
 			{ path: "runs/:id", element: <RunDetailPage /> },
 			{ path: "runners", element: <RunnersPage /> },
 			{ path: "secrets", element: <SecretsPage /> },
+			{ path: "environments", element: <EnvironmentsPage /> },
 			{ path: "artifacts", element: <ArtifactsPage /> },
 			{ path: "cache", element: <CachePage /> },
 			{ path: "deliveries", element: <DeliveriesPage /> },

@@ -167,9 +167,14 @@ export function ProjectDetailPage() {
 				title={project.name}
 				sub={project.repo_full_name || project.local_path || project.repo_url}
 				actions={
-					<Button size="sm" onClick={() => sync.mutate()} disabled={sync.isPending}>
-						<RefreshCw size={13} className={sync.isPending ? "animate-spin" : ""} /> Sync workflows
-					</Button>
+					<>
+						<Button size="sm" onClick={() => nav(`/environments?project=${slug}`)}>
+							Environments
+						</Button>
+						<Button size="sm" onClick={() => sync.mutate()} disabled={sync.isPending}>
+							<RefreshCw size={13} className={sync.isPending ? "animate-spin" : ""} /> Sync workflows
+						</Button>
+					</>
 				}
 			/>
 			<Card className="mb-4 p-4">

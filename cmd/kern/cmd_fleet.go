@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
+	"time"
 )
 
 func (c *cli) cmdRunners(ctx context.Context, args []string) error {
@@ -295,6 +297,178 @@ func (c *cli) cmdSecrets(ctx context.Context, args []string) error {
 		fmt.Println("secret", name, "deleted")
 	default:
 		return fmt.Errorf("unknown secrets subcommand %q", args[0])
+	}
+	return nil
+}
+
+type environmentRow struct {
+	Name              string    `json:"name"`
+	Protected         bool      `json:"protected"`
+	RequiredApprovals int       `json:"required_approvals"`
+	CreatedAt         time.Time `json:"created_at"`
+}
+
+func (c *cli) projectSlug(opts map[string]string) (string, error) {
+	slug := first(opts["project"], c.project)
+	if slug == "" {
+		return "", fmt.Errorf("set --project or kern config set project <slug>")
+	}
+	return slug, nil
+}
+
+func (c *cli) cmdEnvironments(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: kern environments list|set|delete [--project S]")
+	}
+	if err := c.requireAuth(); err != nil {
+		return err
+	}
+	opts, pos := parseFlags(args[1:], "project", "protected", "approvals")
+	slug, err := c.projectSlug(opts)
+	if err != nil {
+		return err
+	}
+	base := "/projects/" + url.PathEscape(slug) + "/environments"
+	switch args[0] {
+	case "list":
+		var out struct {
+			Environments []environmentRow `json:"environments"`
+		}
+		if err := c.api().get(ctx, base, nil, &out); err != nil {
+			return err
+		}
+		c.orJSON(out.Environments, func() {
+			rows := make([][]string, 0, len(out.Environments))
+			for _, e := range out.Environments {
+				gate := "open"
+				if e.Protected {
+					gate = "protected"
+				}
+				rows = append(rows, []string{e.Name, gate, strconv.Itoa(e.RequiredApprovals), relT(e.CreatedAt)})
+			}
+			table([]string{"NAME", "GATE", "APPROVALS", "CREATED"}, rows)
+		})
+	case "set":
+		name, err := strarg(pos, 0, "environment name")
+		if err != nil {
+			return err
+		}
+		protected := false
+		approvals := 0
+		var cur struct {
+			Environments []environmentRow `json:"environments"`
+		}
+		if err := c.api().get(ctx, base, nil, &cur); err != nil {
+			return err
+		}
+		for _, e := range cur.Environments {
+			if e.Name == name {
+				protected = e.Protected
+				approvals = e.RequiredApprovals
+				break
+			}
+		}
+		if v, ok := opts["protected"]; ok {
+			switch v {
+			case "true", "1", "yes":
+				protected = true
+			case "false", "0", "no":
+				protected = false
+			default:
+				return fmt.Errorf("--protected expects true or false, got %q", v)
+			}
+		}
+		if v, ok := opts["approvals"]; ok {
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				return fmt.Errorf("--approvals expects an integer, got %q", v)
+			}
+			approvals = n
+		}
+		if protected && approvals < 1 {
+			approvals = 1
+		}
+		var out struct {
+			Environment environmentRow `json:"environment"`
+		}
+		body := map[string]any{"protected": protected, "required_approvals": approvals}
+		if err := c.api().put(ctx, base+"/"+url.PathEscape(name), body, &out); err != nil {
+			return err
+		}
+		c.orJSON(out.Environment, func() {
+			fmt.Printf("%s protected=%t approvals=%d\n", out.Environment.Name, out.Environment.Protected, out.Environment.RequiredApprovals)
+		})
+	case "delete":
+		name, err := strarg(pos, 0, "environment name")
+		if err != nil {
+			return err
+		}
+		if err := c.api().del(ctx, base+"/"+url.PathEscape(name)); err != nil {
+			return err
+		}
+		fmt.Println("environment", name, "deleted")
+	default:
+		return fmt.Errorf("unknown environments subcommand %q", args[0])
+	}
+	return nil
+}
+
+func (c *cli) cmdDeployments(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: kern deployments list|approve|reject")
+	}
+	if err := c.requireAuth(); err != nil {
+		return err
+	}
+	opts, pos := parseFlags(args[1:], "project")
+	switch args[0] {
+	case "list":
+		q := url.Values{}
+		if slug := first(opts["project"], c.project); slug != "" {
+			q.Set("project", slug)
+		}
+		var out struct {
+			Deployments []struct {
+				EnvironmentName string `json:"environment_name"`
+				Status          string `json:"status"`
+				JobID           string `json:"job_id"`
+				JobName         string `json:"job_name"`
+				RunNumber       int    `json:"run_number"`
+				ProjectSlug     string `json:"project_slug"`
+				Ref             string `json:"ref"`
+				Approvals       []any  `json:"approvals"`
+				Required        int    `json:"required_approvals"`
+			} `json:"deployments"`
+		}
+		if err := c.api().get(ctx, "/deployments", q, &out); err != nil {
+			return err
+		}
+		c.orJSON(out.Deployments, func() {
+			rows := make([][]string, 0, len(out.Deployments))
+			for _, d := range out.Deployments {
+				rows = append(rows, []string{
+					d.ProjectSlug, d.EnvironmentName, d.Status, d.JobName,
+					fmt.Sprintf("#%d", d.RunNumber),
+					fmt.Sprintf("%d/%d", len(d.Approvals), d.Required),
+					d.JobID,
+				})
+			}
+			table([]string{"PROJECT", "ENV", "STATUS", "JOB", "RUN", "APPROVALS", "JOB ID"}, rows)
+		})
+	case "approve", "reject":
+		id, err := strarg(pos, 0, "job id")
+		if err != nil {
+			return err
+		}
+		var out map[string]any
+		if err := c.api().post(ctx, "/jobs/"+id+"/"+args[0], map[string]any{}, &out); err != nil {
+			return err
+		}
+		c.orJSON(out, func() {
+			fmt.Println(args[0], id)
+		})
+	default:
+		return fmt.Errorf("unknown deployments subcommand %q", args[0])
 	}
 	return nil
 }

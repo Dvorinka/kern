@@ -150,6 +150,13 @@ func (s *Server) respondWithClaim(c *gin.Context, claimed *store.ClaimedJob) {
 				secretNames = append(secretNames, sec.Name)
 			}
 		}
+		if claimed.Job.Environment != "" {
+			if envRows, err := s.Store.SecretsForEnvironment(c.Request.Context(), project.ID, claimed.Job.Environment); err == nil {
+				for _, sec := range envRows {
+					secretNames = append(secretNames, sec.Name)
+				}
+			}
+		}
 	}
 	// needs.* context: the runner resolves needs.<id>.outputs in step bodies and
 	// conditions; by then every needed job has reached a terminal state.
@@ -234,7 +241,7 @@ func (s *Server) appendLog(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_body", "log chunk too large or unreadable")
 		return
 	}
-	masker := s.maskerForRun(c, job.RunID)
+	masker := s.maskerForJob(c, job)
 	data := masker.MaskBytes(body)
 	key := blobs.LogKey(job.RunID.String(), job.ID.String(), n)
 	size, err := s.Blobs.Append(key, data)
@@ -267,7 +274,7 @@ func (s *Server) uploadStepSummary(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 		return
 	}
-	masker := s.maskerForRun(c, job.RunID)
+	masker := s.maskerForJob(c, job)
 	ref := blobs.SummaryKey(job.ID.String(), n)
 	if _, _, err := s.Blobs.Put(ref, bytes.NewReader(masker.MaskBytes(body))); err != nil {
 		s.internalError(c, err)
@@ -280,9 +287,10 @@ func (s *Server) uploadStepSummary(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-// maskerForRun collects every secret value that could appear in this run's logs.
-func (s *Server) maskerForRun(c *gin.Context, runID uuid.UUID) *secrets.Masker {
-	run, err := s.Store.Run(c.Request.Context(), runID)
+// maskerForJob collects every secret value that could appear in this job's
+// logs — project/org secrets plus the job's environment-scoped secrets.
+func (s *Server) maskerForJob(c *gin.Context, job store.Job) *secrets.Masker {
+	run, err := s.Store.Run(c.Request.Context(), job.RunID)
 	if err != nil {
 		return secrets.NewMasker(nil)
 	}
@@ -293,6 +301,11 @@ func (s *Server) maskerForRun(c *gin.Context, runID uuid.UUID) *secrets.Masker {
 	rows, err := s.Store.SecretsForProject(c.Request.Context(), project.OrgID, project.ID)
 	if err != nil {
 		return secrets.NewMasker(nil)
+	}
+	if job.Environment != "" {
+		if envRows, err := s.Store.SecretsForEnvironment(c.Request.Context(), project.ID, job.Environment); err == nil {
+			rows = append(rows, envRows...)
+		}
 	}
 	values := make([]string, 0, len(rows))
 	for _, sec := range rows {
@@ -430,13 +443,23 @@ func (s *Server) jobSecrets(c *gin.Context) {
 		return
 	}
 	out := map[string]string{}
-	for _, sec := range rows {
-		plain, err := s.Cipher.Decrypt(sec.Ciphertext, sec.Nonce)
-		if err != nil {
-			s.Log.Error("decrypt secret", zap.String("secret", sec.Name), zap.Error(err))
-			continue
+	decryptInto := func(rows []store.Secret) {
+		for _, sec := range rows {
+			plain, err := s.Cipher.Decrypt(sec.Ciphertext, sec.Nonce)
+			if err != nil {
+				s.Log.Error("decrypt secret", zap.String("secret", sec.Name), zap.Error(err))
+				continue
+			}
+			out[sec.Name] = plain
 		}
-		out[sec.Name] = plain
+	}
+	decryptInto(rows)
+	// Environment secrets outrank project and org values for jobs that name
+	// the environment.
+	if job.Environment != "" {
+		if envRows, err := s.Store.SecretsForEnvironment(c.Request.Context(), project.ID, job.Environment); err == nil {
+			decryptInto(envRows)
+		}
 	}
 	c.Header("Cache-Control", "no-store")
 	c.JSON(http.StatusOK, gin.H{"secrets": out, "blocked": false})

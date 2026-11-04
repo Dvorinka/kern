@@ -54,6 +54,13 @@ Artifacts / cache / secrets:
   cache list|delete <id>
   secrets list|set|delete [--project S] <name>
 
+Environments:
+  environments list [--project S]
+  environments set <name> [--protected true|false] [--approvals N] [--project S]
+  environments delete <name> [--project S]
+  deployments list [--project S]
+  deployments approve|reject <job-id>
+
 Advisory:
   split --pattern GLOB --shards N [--root DIR]   suggest matrix shards
 
@@ -152,6 +159,10 @@ func dispatch(c *cli, args []string) int {
 		err = c.cmdCache(ctx, rest)
 	case "secrets":
 		err = c.cmdSecrets(ctx, rest)
+	case "environments":
+		err = c.cmdEnvironments(ctx, rest)
+	case "deployments":
+		err = c.cmdDeployments(ctx, rest)
 	case "settings":
 		err = c.cmdSettings(ctx, rest)
 	case "exec":

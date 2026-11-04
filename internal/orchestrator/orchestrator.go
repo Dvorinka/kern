@@ -107,6 +107,8 @@ func (o *Orchestrator) StartRun(ctx context.Context, p store.CreateRunParams) (s
 			ContinueOnError: jp.ContinueOnError,
 			FailFast:        jp.FailFast,
 			OutputsSpec:     jp.Outputs,
+			Environment:     jp.Environment,
+			EnvironmentURL:  jp.EnvironmentURL,
 		}
 		for _, sp := range jp.Steps {
 			seed.Steps = append(seed.Steps, store.StepSeed{Key: sp.ID, Name: sp.Name, Spec: sp})
@@ -236,6 +238,24 @@ func (o *Orchestrator) AdvanceRun(ctx context.Context, runID uuid.UUID) error {
 			_ = o.Store.SetJobSkipped(ctx, job.ID, reason)
 			continue
 		}
+		// Environment gate: every environment-named job leaves a deployment
+		// record; protected environments park the job until approved.
+		if job.Environment != "" {
+			env, err := o.Store.EnsureEnvironment(ctx, run.ProjectID, job.Environment)
+			if err != nil {
+				return err
+			}
+			if _, err := o.Store.CreateDeployment(ctx, run.ProjectID, env.ID, run.ID, job.ID,
+				run.Ref, run.SHA, job.EnvironmentURL); err != nil {
+				return err
+			}
+			if env.Protected && env.RequiredApprovals > 0 {
+				if err := o.Store.SetJobWaitingApproval(ctx, job.ID); err != nil {
+					return err
+				}
+				continue
+			}
+		}
 		if err := o.Store.SetJobQueued(ctx, job.ID); err != nil {
 			return err
 		}
@@ -364,8 +384,10 @@ func jobStatus(j store.Job) string {
 	switch j.Status {
 	case "in_progress":
 		return "running"
-	case "queued", "waiting":
+	case "queued":
 		return "queued"
+	case "waiting", "waiting_approval":
+		return "waiting"
 	case "skipped":
 		return "skipped"
 	case "cancelled":
