@@ -161,24 +161,42 @@ dirs via explicit chmod (umask eats MkdirAll mode; Docker Desktop hides it);
 git safe.directory=* env for uid-mismatch clones; /opt/kern/app.pem must be
 0644 (api runs as non-root `kern`); pct exec PATH lacks /usr/local/bin.
 
+PERF/RELIABILITY PASS (2026-11-04, commits 4a4e10a + 9c68fbf + aca8ffc):
+- Persistent runner cache: <work-root>/_cache mounts into every job at
+  /kern/cache (KERN_CACHE_DIR exported). kern.yml moved gomod/gocache/gopath
+  onto it. VERIFIED on CT 908: baseline job 100s -> warm job 13s (build 71s->3s,
+  vet 10s->0s, test 15s->2s). Cold-cache run: 114s.
+- Image GC: pulled images tracked in image-usage.json, removed after
+  KERN_RUNNER_IMAGE_MAX_AGE (default 168h) idle-only. Load gate:
+  KERN_RUNNER_LOAD_GATE pauses claims above n*cpu loadavg1 (set to 6 on CT 908).
+  Claim backoff exponential 1s-30s.
+- Log pump: mutex fix (stdout/stderr raced on buffer), 256KiB + 1s flush.
+- Content-addressed source bundles: kern exec hashes path+content, resolves
+  via GET /projects/:p/source/resolve, skips upload on hit; PUT ?sha256= stores
+  under digest key and dedupes server-side too.
+- continue-on-error: failed CoE job no longer fails the run; needs.<id>.result
+  reports success. Stored conclusion stays 'failure' for the UI.
+- Watchdog: in-progress jobs past timeout_seconds now failed server-side.
+  KERN_LOG_RETENTION wired: hourly sweep prunes step log+summary blobs.
+- Docs: docs/deploy.md (production checklist), .env.example + compatibility.md
+  updated (incl. documented PR merge-ref divergence: we run head SHA).
+- Tests: FuzzCompile (YAML corpus), logPump batch tests (race-clean), bundle
+  digest stability, store tests now refuse non-kern_test DSNs (was truncating
+  dev DB).
+
 Remaining work, ordered by value:
 
 1. Check-runs as the App (currently commit statuses only); pull_request_target
    strict semantics; first-time-contributor approval gate for fork PRs.
-2. Correctness gaps — pull_request/checkout ref semantics, timeout-minutes,
-   step-level `if:`, concurrency-group cancel across triggers, continue-on-error.
-3. Performance (the user's next ask) — persistent runner-side caches so warm
-   runs skip module/image downloads entirely; container image GC; bundle
-   content-addressed dedupe; log flush batching; parallel job caps.
-4. Reliability — runner claim retry/backoff, stale-lease job reaper check,
-   run timeout watchdog, api graceful shutdown.
-5. Security — fork-PR isolation policy, secret masking breadth test, webhook
+2. PR merge-ref semantics (refs/pull/N/merge) if wanted — head SHA is the
+   current documented choice.
+3. Security — fork-PR isolation policy, secret masking breadth test, webhook
    replay window.
-6. Ops — production deploy doc (compose + TLS), retention for logs/artifacts,
-   /metrics endpoint, backup story.
-7. Frontend — artifact browsing, webhook delivery viewer, run cancel coverage.
-8. Tests — webhook processing integration tests, testcontainers e2e, compiler
-   fuzz.
+4. Ops — artifact/run-row retention knobs beyond logs, backup story, metrics
+   alerting rules.
+5. Frontend — artifact browsing, webhook delivery viewer, run cancel coverage.
+   NEXT PHASE IS USER-DIRECTED UI REDESIGN — hand back, do not restyle.
+6. Tests — webhook processing integration tests, testcontainers e2e.
 
 Traps unchanged: pkill -f kills your shell; /tmp tmpfs 512m in job containers;
 docker bind-mounts only under $HOME; rebuild .data/kern-* before trusting
