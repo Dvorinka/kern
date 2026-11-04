@@ -144,6 +144,11 @@ export interface Environment {
 	name: string;
 	protected: boolean;
 	required_approvals: number;
+	reviewers: string[];
+	reviewer_emails: string[];
+	wait_minutes: number;
+	branch_policy: "all" | "selected";
+	branch_patterns: string[];
 	created_at: string;
 }
 
@@ -160,6 +165,8 @@ export interface Deployment {
 	url: string;
 	approvals: Approval[];
 	required_approvals: number;
+	reviewer_emails: string[];
+	wait_until: string | null;
 	run_number: number;
 	project_slug: string;
 	job_name: string;

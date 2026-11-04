@@ -56,7 +56,9 @@ Artifacts / cache / secrets:
 
 Environments:
   environments list [--project S]
-  environments set <name> [--protected true|false] [--approvals N] [--project S]
+  environments set <name> [--protected true|false] [--approvals N]
+                       [--reviewers a@b,c@d] [--wait MIN]
+                       [--branches all|PATTERN,PATTERN] [--project S]
   environments delete <name> [--project S]
   deployments list [--project S]
   deployments approve|reject <job-id>

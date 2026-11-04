@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -305,6 +306,10 @@ type environmentRow struct {
 	Name              string    `json:"name"`
 	Protected         bool      `json:"protected"`
 	RequiredApprovals int       `json:"required_approvals"`
+	ReviewerEmails    []string  `json:"reviewer_emails"`
+	WaitMinutes       int       `json:"wait_minutes"`
+	BranchPolicy      string    `json:"branch_policy"`
+	BranchPatterns    []string  `json:"branch_patterns"`
 	CreatedAt         time.Time `json:"created_at"`
 }
 
@@ -323,7 +328,7 @@ func (c *cli) cmdEnvironments(ctx context.Context, args []string) error {
 	if err := c.requireAuth(); err != nil {
 		return err
 	}
-	opts, pos := parseFlags(args[1:], "project", "protected", "approvals")
+	opts, pos := parseFlags(args[1:], "project", "protected", "approvals", "reviewers", "wait", "branches")
 	slug, err := c.projectSlug(opts)
 	if err != nil {
 		return err
@@ -344,9 +349,16 @@ func (c *cli) cmdEnvironments(ctx context.Context, args []string) error {
 				if e.Protected {
 					gate = "protected"
 				}
-				rows = append(rows, []string{e.Name, gate, strconv.Itoa(e.RequiredApprovals), relT(e.CreatedAt)})
+				branches := e.BranchPolicy
+				if branches == "selected" {
+					branches = strings.Join(e.BranchPatterns, ",")
+				}
+				rows = append(rows, []string{
+					e.Name, gate, strconv.Itoa(e.RequiredApprovals), strconv.Itoa(e.WaitMinutes) + "m",
+					branches, strings.Join(e.ReviewerEmails, ","), relT(e.CreatedAt),
+				})
 			}
-			table([]string{"NAME", "GATE", "APPROVALS", "CREATED"}, rows)
+			table([]string{"NAME", "GATE", "APPROVALS", "WAIT", "BRANCHES", "REVIEWERS", "CREATED"}, rows)
 		})
 	case "set":
 		name, err := strarg(pos, 0, "environment name")
@@ -355,6 +367,9 @@ func (c *cli) cmdEnvironments(ctx context.Context, args []string) error {
 		}
 		protected := false
 		approvals := 0
+		waitMin := 0
+		policy := "all"
+		var reviewers, patterns []string
 		var cur struct {
 			Environments []environmentRow `json:"environments"`
 		}
@@ -365,6 +380,13 @@ func (c *cli) cmdEnvironments(ctx context.Context, args []string) error {
 			if e.Name == name {
 				protected = e.Protected
 				approvals = e.RequiredApprovals
+				waitMin = e.WaitMinutes
+				reviewers = e.ReviewerEmails
+				policy = e.BranchPolicy
+				patterns = e.BranchPatterns
+				if policy == "" {
+					policy = "all"
+				}
 				break
 			}
 		}
@@ -385,18 +407,43 @@ func (c *cli) cmdEnvironments(ctx context.Context, args []string) error {
 			}
 			approvals = n
 		}
-		if protected && approvals < 1 {
+		if v, ok := opts["reviewers"]; ok {
+			reviewers = splitCSV(v)
+		}
+		if v, ok := opts["wait"]; ok {
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				return fmt.Errorf("--wait expects minutes, got %q", v)
+			}
+			waitMin = n
+		}
+		if v, ok := opts["branches"]; ok {
+			if v == "all" || v == "" {
+				policy = "all"
+				patterns = nil
+			} else {
+				policy = "selected"
+				patterns = splitCSV(v)
+			}
+		}
+		if protected && approvals < 1 && waitMin < 1 && policy != "selected" {
 			approvals = 1
 		}
 		var out struct {
 			Environment environmentRow `json:"environment"`
 		}
-		body := map[string]any{"protected": protected, "required_approvals": approvals}
+		body := map[string]any{
+			"protected": protected, "required_approvals": approvals,
+			"reviewer_emails": reviewers, "wait_minutes": waitMin,
+			"branch_policy": policy, "branch_patterns": patterns,
+		}
 		if err := c.api().put(ctx, base+"/"+url.PathEscape(name), body, &out); err != nil {
 			return err
 		}
 		c.orJSON(out.Environment, func() {
-			fmt.Printf("%s protected=%t approvals=%d\n", out.Environment.Name, out.Environment.Protected, out.Environment.RequiredApprovals)
+			fmt.Printf("%s protected=%t approvals=%d wait=%dm branches=%s reviewers=%s\n",
+				out.Environment.Name, out.Environment.Protected, out.Environment.RequiredApprovals,
+				out.Environment.WaitMinutes, out.Environment.BranchPolicy, strings.Join(out.Environment.ReviewerEmails, ","))
 		})
 	case "delete":
 		name, err := strarg(pos, 0, "environment name")

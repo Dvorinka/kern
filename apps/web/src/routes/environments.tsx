@@ -3,6 +3,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Trash2 } from "lucide-react";
 import { api } from "../lib/api";
+import { useAuth } from "../lib/auth";
 import type { Deployment, Environment, Project } from "../lib/types";
 import { Button, Card, EmptyState, Input, PageHeader, Spinner } from "../components/ui";
 import { Row } from "../components/layout";
@@ -45,7 +46,7 @@ export function EnvironmentsPage() {
 		<>
 			<PageHeader
 				title="Environments"
-				sub="Protected environments hold a job until enough distinct users approve the deployment"
+				sub="A protected environment can require reviewers, a wait, and a branch pattern"
 				actions={
 					list.length > 0 && (
 						<>
@@ -166,10 +167,26 @@ function AddEnvironment({ slug, onClose }: { slug: string; onClose: () => void }
 	);
 }
 
+type EnvRule = {
+	protected: boolean;
+	required_approvals: number;
+	reviewer_emails: string[];
+	wait_minutes: number;
+	branch_policy: "all" | "selected";
+	branch_patterns: string[];
+};
+
+function splitList(raw: string) {
+	return raw
+		.split(",")
+		.map((s) => s.trim())
+		.filter(Boolean);
+}
+
 function EnvRow({ slug, env }: { slug: string; env: Environment }) {
 	const qc = useQueryClient();
 	const put = useMutation({
-		mutationFn: (body: { protected: boolean; required_approvals: number }) =>
+		mutationFn: (body: EnvRule) =>
 			api.put(`/projects/${encodeURIComponent(slug)}/environments/${encodeURIComponent(env.name)}`, body),
 		onSuccess: () => qc.invalidateQueries({ queryKey: ["environments", slug] }),
 	});
@@ -178,8 +195,31 @@ function EnvRow({ slug, env }: { slug: string; env: Environment }) {
 			api.del(`/projects/${encodeURIComponent(slug)}/environments/${encodeURIComponent(env.name)}`),
 		onSuccess: () => qc.invalidateQueries({ queryKey: ["environments", slug] }),
 	});
-	const setGate = (protected_: boolean, n: number) => {
-		put.mutate({ protected: protected_, required_approvals: protected_ ? Math.max(n, 1) : n });
+	const [emails, setEmails] = useState((env.reviewer_emails ?? []).join(", "));
+	const [patterns, setPatterns] = useState((env.branch_patterns ?? []).join(", "));
+	const [wait, setWait] = useState(String(env.wait_minutes ?? 0));
+	const [policy, setPolicy] = useState<EnvRule["branch_policy"]>(env.branch_policy || "all");
+	useEffect(() => {
+		setEmails((env.reviewer_emails ?? []).join(", "));
+		setPatterns((env.branch_patterns ?? []).join(", "));
+		setWait(String(env.wait_minutes ?? 0));
+		setPolicy(env.branch_policy || "all");
+	}, [env]);
+
+	const rule = (patch: Partial<EnvRule>): EnvRule => {
+		const next: EnvRule = {
+			protected: env.protected,
+			required_approvals: env.required_approvals,
+			reviewer_emails: splitList(emails),
+			wait_minutes: Math.max(0, Number(wait) || 0),
+			branch_policy: policy,
+			branch_patterns: splitList(patterns),
+			...patch,
+		};
+		if (next.protected && next.required_approvals < 1 && next.wait_minutes < 1 && next.branch_policy !== "selected") {
+			next.required_approvals = 1;
+		}
+		return next;
 	};
 	return (
 		<Row className="flex-wrap">
@@ -192,20 +232,16 @@ function EnvRow({ slug, env }: { slug: string; env: Environment }) {
 					value={env.required_approvals}
 					disabled={put.isPending}
 					aria-label={`Approvals for ${env.name}`}
-					onChange={(e) => setGate(env.protected, Number(e.target.value))}
+					onChange={(e) => put.mutate(rule({ required_approvals: Number(e.target.value) }))}
 				>
 					{[0, 1, 2, 3, 4, 5, 6].map((n) => (
-						<option key={n} value={n} disabled={env.protected && n < 1}>
+						<option key={n} value={n}>
 							{n}
 						</option>
 					))}
 				</select>
 			</label>
-			<Button
-				size="sm"
-				disabled={put.isPending}
-				onClick={() => setGate(!env.protected, env.required_approvals)}
-			>
+			<Button size="sm" disabled={put.isPending} onClick={() => put.mutate(rule({ protected: !env.protected }))}>
 				{env.protected ? "Open" : "Protect"}
 			</Button>
 			<Button
@@ -220,17 +256,90 @@ function EnvRow({ slug, env }: { slug: string; env: Environment }) {
 			>
 				<Trash2 size={13} />
 			</Button>
+			{env.protected && (
+				<div className="flex basis-full flex-wrap items-center gap-2 pt-1">
+					<label className="flex items-center gap-1.5 text-xs text-[var(--dim)]">
+						wait
+						<Input
+							type="number"
+							min={0}
+							max={43200}
+							value={wait}
+							aria-label={`Wait minutes for ${env.name}`}
+							className="w-20"
+							onChange={(e) => setWait(e.target.value)}
+							onBlur={() => put.mutate(rule({}))}
+						/>
+						<span className="text-[var(--faint)]">min</span>
+					</label>
+					<label className="flex min-w-40 flex-1 items-center gap-1.5 text-xs text-[var(--dim)]">
+						reviewers
+						<Input
+							value={emails}
+							placeholder="any member"
+							aria-label={`Reviewers for ${env.name}`}
+							className="min-w-0 flex-1"
+							onChange={(e) => setEmails(e.target.value)}
+							onBlur={() => put.mutate(rule({}))}
+						/>
+					</label>
+					<label className="flex items-center gap-1.5 text-xs text-[var(--dim)]">
+						branches
+						<select
+							className="h-7 rounded-lg border border-[var(--ctl)] bg-transparent px-1.5 text-xs"
+							value={policy}
+							aria-label={`Branch policy for ${env.name}`}
+							onChange={(e) => {
+								const branch_policy = e.target.value as EnvRule["branch_policy"];
+								setPolicy(branch_policy);
+								put.mutate(rule({ branch_policy }));
+							}}
+						>
+							<option value="all">all</option>
+							<option value="selected">selected</option>
+						</select>
+					</label>
+					{policy === "selected" && (
+						<Input
+							value={patterns}
+							placeholder="main, release/*"
+							aria-label={`Branch patterns for ${env.name}`}
+							className="w-44"
+							onChange={(e) => setPatterns(e.target.value)}
+							onBlur={() => put.mutate(rule({}))}
+						/>
+					)}
+				</div>
+			)}
 			{(put.error || del.error) && (
-				<span className="text-xs text-[var(--err)]">{(put.error ?? del.error)?.message}</span>
+				<span className="basis-full text-xs text-[var(--err)]">{(put.error ?? del.error)?.message}</span>
 			)}
 		</Row>
 	);
 }
 
+function reviewerCanAct(emails: string[] | undefined, email: string, role: string) {
+	const list = emails ?? [];
+	if (role === "owner" || role === "admin") return true;
+	if (list.length === 0) return true;
+	return list.includes(email);
+}
+
+function waitLeft(until: string | null) {
+	if (!until) return "";
+	const ms = new Date(until).getTime() - Date.now();
+	if (ms <= 0) return "";
+	return `wait ${Math.max(1, Math.round(ms / 60000))}m`;
+}
+
 function DeploymentRow({ d, slug }: { d: Deployment; slug: string }) {
+	const { user } = useAuth();
 	const qc = useQueryClient();
 	const approvals = d.approvals ?? [];
-	const waiting = d.status === "queued" && d.required_approvals > 0 && approvals.length < d.required_approvals;
+	const waitingOnPeople = approvals.length < d.required_approvals;
+	const timer = waitLeft(d.wait_until);
+	const waiting = d.status === "queued" && (waitingOnPeople || timer !== "");
+	const allowed = reviewerCanAct(d.reviewer_emails, user?.email ?? "", user?.role ?? "");
 	const act = useMutation({
 		mutationFn: (op: "approve" | "reject") => api.post(`/jobs/${d.job_id}/${op}`),
 		onSuccess: () => {
@@ -254,17 +363,21 @@ function DeploymentRow({ d, slug }: { d: Deployment; slug: string }) {
 			</Link>
 			<span className="font-mono text-xs text-[var(--faint)]">
 				{approvals.length}/{d.required_approvals}
+				{timer ? ` · ${timer}` : ""}
 			</span>
-			{waiting && (
+			{waiting && allowed && (
 				<>
-					<Button size="sm" variant="primary" disabled={act.isPending} onClick={() => act.mutate("approve")}>
-						Approve
-					</Button>
+					{waitingOnPeople && (
+						<Button size="sm" variant="primary" disabled={act.isPending} onClick={() => act.mutate("approve")}>
+							Approve
+						</Button>
+					)}
 					<Button size="sm" variant="danger" disabled={act.isPending} onClick={() => act.mutate("reject")}>
 						Reject
 					</Button>
 				</>
 			)}
+			{waiting && !allowed && <span className="text-xs text-[var(--faint)]">reviewers only</span>}
 			{act.error && <span className="text-xs text-[var(--err)]">{act.error.message}</span>}
 		</Row>
 	);
