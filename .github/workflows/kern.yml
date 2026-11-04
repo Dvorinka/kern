@@ -18,6 +18,8 @@ jobs:
       GOPATH: /github/cmd/gopath
       GOTMPDIR: /github/cmd/gotmp
     steps:
+      - name: prep Go dirs
+        run: mkdir -p "$GOTMPDIR" "$GOCACHE" "$GOMODCACHE" "$GOPATH"
       - name: build
         run: go build ./...
       - name: vet
