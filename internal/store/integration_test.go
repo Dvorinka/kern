@@ -15,7 +15,28 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// testDBLock serializes packages that truncate kern_test. go test runs
+// packages in parallel; without this, store and orchestrator wipe each other.
+const testDBLock int64 = 8424242
+
+func lockTestDB(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire test db lock: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, testDBLock); err != nil {
+		conn.Release()
+		t.Fatalf("lock test db: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, testDBLock)
+		conn.Release()
+	})
+}
 
 func testStore(t *testing.T) (*Store, context.Context) {
 	t.Helper()
@@ -32,6 +53,7 @@ func testStore(t *testing.T) (*Store, context.Context) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(s.Close)
+	lockTestDB(t, ctx, s.pool)
 	if _, err := s.Bootstrap(ctx, "it-org", "IT Org", "it@kern.local", "IT", "x"); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
