@@ -82,6 +82,19 @@ func (s *Store) WebhookDelivery(ctx context.Context, id uuid.UUID) (WebhookDeliv
 	return d, err
 }
 
+// PruneWebhookDeliveries drops deliveries older than age. Provider retries
+// arrive within hours, so a 30-day horizon cannot resurrect duplicate work.
+func (s *Store) PruneWebhookDeliveries(ctx context.Context, age time.Duration) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM webhook_deliveries
+		WHERE received_at < now() - make_interval(secs => $1)`,
+		int64(age.Seconds()))
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 type invalidJSONError struct{}
 
 func (invalidJSONError) Error() string { return "webhook payload is not valid JSON" }

@@ -13,7 +13,7 @@ func (s *Store) Overview(ctx context.Context) (Overview, error) {
 			(SELECT count(*) FROM workflow_runs),
 			(SELECT count(*) FROM workflow_runs WHERE conclusion = 'success'),
 			(SELECT count(*) FROM workflow_runs WHERE conclusion = 'failure'),
-			(SELECT count(*) FROM workflow_runs WHERE status IN ('queued', 'in_progress')),
+			(SELECT count(*) FROM workflow_runs WHERE status IN ('awaiting_approval', 'queued', 'in_progress')),
 			(SELECT count(*) FROM jobs WHERE status = 'queued'),
 			(SELECT count(*) FROM jobs WHERE status = 'in_progress'),
 			(SELECT count(*) FROM runners WHERE status = 'online'),

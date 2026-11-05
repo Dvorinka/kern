@@ -33,10 +33,27 @@ func TestPullRequestMatchesPlan(t *testing.T) {
 		{"unsupported filter declared", prPlan([]string{"pull_request"}, map[string]any{"paths": []any{"src/**"}}), "opened", "main", false},
 	}
 	for _, tc := range cases {
-		got, _ := pullRequestMatchesPlan(tc.plan, tc.action, tc.baseBranch)
+		got, _ := pullRequestMatchesPlan(tc.plan, "pull_request", tc.action, tc.baseBranch)
 		if got != tc.want {
 			t.Errorf("%s: got %v want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+func TestPullRequestTargetMatchesOnlyItsOwnEvent(t *testing.T) {
+	plan := &workflows.Plan{
+		Events:   []string{"pull_request_target"},
+		Triggers: map[string]any{"pull_request_target": nil},
+	}
+	if ok, _ := pullRequestMatchesPlan(plan, "pull_request_target", "opened", "main"); !ok {
+		t.Fatal("pull_request_target plan should match its own event")
+	}
+	if ok, _ := pullRequestMatchesPlan(plan, "pull_request", "opened", "main"); ok {
+		t.Fatal("pull_request_target plan must not match pull_request deliveries")
+	}
+	prOnly := prPlan([]string{"pull_request"}, nil)
+	if ok, _ := pullRequestMatchesPlan(prOnly, "pull_request_target", "opened", "main"); ok {
+		t.Fatal("pull_request plan must not match pull_request_target deliveries")
 	}
 }
 
@@ -45,14 +62,15 @@ func TestParsePRTriggerTrust(t *testing.T) {
 		"action": "opened", "number": 7,
 		"pull_request": {
 			"title": "feat: things",
+			"author_association": "CONTRIBUTOR",
 			"head": {"sha": "abc123", "ref": "feat-x",
 				"repo": {"full_name": "o/r", "clone_url": "https://github.com/o/r.git", "fork": false}},
-			"base": {"ref": "main"}
+			"base": {"ref": "main", "sha": "base999"}
 		},
 		"sender": {"login": "dev"},
-		"repository": {"full_name": "o/r", "clone_url": "https://github.com/o/r.git"}
+		"repository": {"full_name": "o/r", "clone_url": "https://github.com/o/r.git", "default_branch": "main"}
 	}`)
-	tr, status, _ := parsePRTrigger(body)
+	tr, status, _ := parsePRTrigger(body, "pull_request")
 	if tr == nil {
 		t.Fatalf("same-repo PR rejected: %s", status)
 	}
@@ -65,6 +83,9 @@ func TestParsePRTriggerTrust(t *testing.T) {
 	if tr.cloneURL != "https://github.com/o/r.git" {
 		t.Fatalf("cloneURL = %q", tr.cloneURL)
 	}
+	if tr.association != "CONTRIBUTOR" || tr.headRef != "feat-x" {
+		t.Fatalf("association/headRef = %q %q", tr.association, tr.headRef)
+	}
 }
 
 func TestParsePRTriggerFork(t *testing.T) {
@@ -72,14 +93,15 @@ func TestParsePRTriggerFork(t *testing.T) {
 		"action": "synchronize", "number": 9,
 		"pull_request": {
 			"title": "external change",
+			"author_association": "FIRST_TIME_CONTRIBUTOR",
 			"head": {"sha": "def456", "ref": "patch-1",
 				"repo": {"full_name": "stranger/r", "clone_url": "https://github.com/stranger/r.git", "fork": true}},
-			"base": {"ref": "main"}
+			"base": {"ref": "main", "sha": "base999"}
 		},
 		"sender": {"login": "stranger"},
-		"repository": {"full_name": "o/r", "clone_url": "https://github.com/o/r.git"}
+		"repository": {"full_name": "o/r", "clone_url": "https://github.com/o/r.git", "default_branch": "main"}
 	}`)
-	tr, _, _ := parsePRTrigger(body)
+	tr, _, _ := parsePRTrigger(body, "pull_request")
 	if tr == nil {
 		t.Fatal("fork PR rejected")
 	}
@@ -92,6 +114,9 @@ func TestParsePRTriggerFork(t *testing.T) {
 	if tr.repoName != "o/r" {
 		t.Fatalf("statuses must post to base repo, got %q", tr.repoName)
 	}
+	if tr.association != "FIRST_TIME_CONTRIBUTOR" {
+		t.Fatalf("association = %q", tr.association)
+	}
 }
 
 func TestParsePRTriggerMissingHead(t *testing.T) {
@@ -101,10 +126,69 @@ func TestParsePRTriggerMissingHead(t *testing.T) {
 			"head": {"sha": "", "ref": "gone", "repo": {"full_name": "", "fork": true}},
 			"base": {"ref": "main"}},
 		"sender": {"login": "dev"},
-		"repository": {"full_name": "o/r", "clone_url": "u"}
+		"repository": {"full_name": "o/r", "clone_url": "u", "default_branch": "main"}
 	}`)
-	tr, status, _ := parsePRTrigger(body)
+	tr, status, _ := parsePRTrigger(body, "pull_request")
 	if tr != nil || status != "ignored" {
 		t.Fatalf("deleted-fork PR should be ignored, got %v %q", tr, status)
+	}
+}
+
+func TestParsePRTargetTrigger(t *testing.T) {
+	body := []byte(`{
+		"action": "opened", "number": 11,
+		"pull_request": {
+			"title": "external change",
+			"author_association": "NONE",
+			"head": {"sha": "def456", "ref": "patch-1",
+				"repo": {"full_name": "stranger/r", "clone_url": "https://github.com/stranger/r.git", "fork": true}},
+			"base": {"ref": "main", "sha": "base999"}
+		},
+		"sender": {"login": "stranger"},
+		"repository": {"full_name": "o/r", "clone_url": "https://github.com/o/r.git", "default_branch": "trunk"}
+	}`)
+	tr, status, _ := parsePRTrigger(body, "pull_request_target")
+	if tr == nil {
+		t.Fatalf("pull_request_target rejected: %s", status)
+	}
+	// Base-repo context: trusted (secrets allowed), default-branch clone.
+	if tr.trust != "trusted" {
+		t.Fatalf("trust = %q, want trusted", tr.trust)
+	}
+	if tr.cloneURL != "https://github.com/o/r.git" {
+		t.Fatalf("cloneURL = %q, want base repo", tr.cloneURL)
+	}
+	if tr.defaultBranch != "trunk" || tr.baseSHA != "base999" || tr.headRef != "patch-1" {
+		t.Fatalf("target fields = %q %q %q", tr.defaultBranch, tr.baseSHA, tr.headRef)
+	}
+	// sha/ref stay empty until resolvePRTargetSHA pins the default head.
+	if tr.sha != "" || tr.ref != "" {
+		t.Fatalf("target trigger should defer sha/ref, got %q %q", tr.sha, tr.ref)
+	}
+}
+
+func TestForkGateHold(t *testing.T) {
+	cases := []struct {
+		gate        string
+		association string
+		want        bool
+	}{
+		{"off", "NONE", false},
+		{"", "FIRST_TIMER", false},
+		{"all", "OWNER", true},
+		{"all", "CONTRIBUTOR", true},
+		{"first-time", "FIRST_TIME_CONTRIBUTOR", true},
+		{"first-time", "FIRST_TIMER", true},
+		{"first-time", "NONE", true},
+		{"first-time", "", true},
+		{"first-time", "CONTRIBUTOR", false},
+		{"first-time", "MEMBER", false},
+		{"first-time", "COLLABORATOR", false},
+		{"first-time", "MANNEQUIN", false},
+	}
+	for _, tc := range cases {
+		if got := forkGateHold(tc.gate, tc.association); got != tc.want {
+			t.Errorf("forkGateHold(%q, %q) = %v, want %v", tc.gate, tc.association, got, tc.want)
+		}
 	}
 }

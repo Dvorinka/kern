@@ -14,7 +14,8 @@ never silently ignored.
 | `on: push` | done | parsed, modelled |
 | `on: pull_request` | done | live via webhook: runs the head SHA (`refs/pull/N/head`) — GitHub tests `refs/pull/N/merge` instead, a documented divergence; fork heads get trust `fork` (no secrets, own cache scope), same-repo PRs `pull_request`; `types`/`branches` filters honoured |
 | `on: workflow_dispatch` | done | `POST /projects/:p/workflows/:id/runs` |
-| `on: pull_request_target` | partial | parsed; strict handling lands with the GitHub App (M4) |
+| `on: pull_request_target` | done | runs the base repo's default-branch head (workflow file and checkout both trusted); `github.head_ref`/`head_sha` expose the PR head branch for job-level `if:` filters; secrets allowed — keep job code on the default branch |
+| Fork-PR approval gate | done | project setting `fork_gate` (`off` default, `all`, `first-time`): matching fork runs park in `awaiting_approval` until an operator approves (`POST /runs/:id/approve`, `kern runs approve`, or the run page) or cancels; audited as `run.approve` |
 | `on: release`, `repository_dispatch`, `workflow_run` | partial | parsed and modelled; no provider events yet |
 | `on: schedule` | done | 5-field cron in UTC; the scheduler mints a run per due instant, deduped; missed windows are not caught up (same as GitHub) |
 | `on: workflow_call` / reusable workflows | no | compile error `reusable-workflow` |
@@ -72,6 +73,8 @@ never silently ignored.
 | --- | --- | --- |
 | Inbound `push` webhooks | done | HMAC-verified deliveries persisted + processed; matching projects trigger runs compiled at the pushed SHA; `branches`/`branches-ignore` honoured, other filters are declared skips |
 | Inbound `pull_request` webhooks | done | head-SHA runs compiled at the head SHA on the base repo; checkout comes from the head repo so forks work; default action set + `types`/`branches` filters honoured |
+| Inbound `pull_request_target` webhooks | done | workflow and checkout both pinned to the base repo's default-branch head (resolved via the contents API, falling back to the PR's base SHA); `github.head_ref`/`head_sha` carry the PR head branch; same `types`/`branches` filters as `pull_request`. The GitHub App manifest subscribes to the event for new installs — existing installations need it enabled under the app's webhook settings |
+| Webhook delivery retention | done | `webhook_deliveries` rows older than `KERN_WEBHOOK_RETENTION` (default 30d) are pruned hourly |
 | GitHub App auth | done | RS256 JWT → installation access tokens (cached); repo → installation resolved via API; preferred over `KERN_GITHUB_TOKEN` when `KERN_GITHUB_APP_ID` + key are set; `KERN_GITHUB_APP_PRIVATE_KEY_FILE` for pem paths |
 | Workflow discovery from GitHub | done | contents/tree API via `repo_full_name`; App token or `KERN_GITHUB_TOKEN` for private repos |
 | Commit statuses | done | `pending` at run creation, terminal state on completion; context `kern/<workflow>`; description includes the job tally; posted as the App installation when configured |

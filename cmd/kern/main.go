@@ -33,7 +33,7 @@ Runs:
   runs list [--status S] [--limit N]
   runs show <run-id>
   runs trigger [<project>] <workflow-id|path|name> [--event E] [--ref R] [--sha S]
-  runs cancel|rerun <run-id>
+  runs cancel|approve|rerun <run-id>
   runs logs <run-id> [--job KEY] [--step N] [--follow]
   runs remediate <job-id> --step N        approve a remediation proposal
 
@@ -45,6 +45,7 @@ Settings:
   settings get
   settings set self_heal off|auto|approve [--project S]
   settings set public_ci on|off
+  settings set fork_gate off|all|first-time --project S
 
 Runners:
   runners list

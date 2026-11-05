@@ -33,7 +33,7 @@ export interface Workflow {
 	updated_at: string;
 }
 
-export type RunStatus = "queued" | "in_progress" | "completed" | "cancelled";
+export type RunStatus = "awaiting_approval" | "queued" | "in_progress" | "completed" | "cancelled";
 export type Conclusion = "" | "success" | "failure" | "cancelled" | "skipped";
 
 export interface Run {

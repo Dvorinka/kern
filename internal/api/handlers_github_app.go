@@ -36,7 +36,7 @@ func (s *Server) githubAppManifest(c *gin.Context) {
 				"checks":        "write",
 				"pull_requests": "read",
 			},
-			"default_events": []string{"push", "pull_request", "check_run", "check_suite"},
+			"default_events": []string{"push", "pull_request", "pull_request_target", "check_run", "check_suite"},
 		},
 	})
 }

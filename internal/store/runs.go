@@ -53,6 +53,9 @@ type CreateRunParams struct {
 	Source            map[string]any
 	ConcurrencyGroup  string
 	CancelInProgress  bool
+	// HoldForApproval parks the run in awaiting_approval: jobs stay 'waiting'
+	// and nothing is promoted until ApproveRunHold releases it.
+	HoldForApproval bool
 }
 
 // CreateRun persists a run and its compiled jobs atomically. Run numbers are allocated
@@ -85,16 +88,21 @@ func (s *Store) createRunOnce(ctx context.Context, p CreateRunParams, jobs []Job
 	}
 
 	var id uuid.UUID
+	status := "queued"
+	if p.HoldForApproval {
+		status = "awaiting_approval"
+	}
 	err = tx.QueryRow(ctx, `
 		INSERT INTO workflow_runs
 			(project_id, workflow_id, workflow_version_id, run_number, event, ref, sha,
 			 commit_message, actor, trust_level, source, concurrency_group, cancel_in_progress, status)
 		VALUES ($1, $2, $3,
 		        (SELECT COALESCE(MAX(run_number), 0) + 1 FROM workflow_runs WHERE workflow_id = $2),
-		        $4, $5, $6, $7, $8, $9, $10, $11, $12, 'queued')
+		        $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		RETURNING id`,
 		p.ProjectID, p.WorkflowID, p.WorkflowVersionID, p.Event, p.Ref, p.SHA,
-		p.CommitMessage, p.Actor, p.TrustLevel, source, p.ConcurrencyGroup, p.CancelInProgress).Scan(&id)
+		p.CommitMessage, p.Actor, p.TrustLevel, source, p.ConcurrencyGroup, p.CancelInProgress,
+		status).Scan(&id)
 	if err != nil {
 		return Run{}, err
 	}
@@ -399,10 +407,25 @@ func (s *Store) PromoteQueuedRuns(ctx context.Context) (int, error) {
 	return int(tag.RowsAffected()), nil
 }
 
+// ApproveRunHold releases a run parked in awaiting_approval back to queued;
+// PromoteQueuedRuns then schedules it like any other run.
+func (s *Store) ApproveRunHold(ctx context.Context, runID uuid.UUID) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE workflow_runs SET status = 'queued'
+		WHERE id = $1 AND status = 'awaiting_approval'`, runID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("run %s is not awaiting approval", runID)
+	}
+	return nil
+}
+
 // ActiveRuns returns the count of runs that have not reached a terminal status.
 func (s *Store) ActiveRuns(ctx context.Context) (int, error) {
 	var n int
-	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM workflow_runs WHERE status IN ('queued','in_progress')`).Scan(&n)
+	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM workflow_runs WHERE status IN ('awaiting_approval','queued','in_progress')`).Scan(&n)
 	return n, err
 }
 

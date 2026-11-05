@@ -55,6 +55,8 @@ type Claim struct {
 		DefaultBranch string `json:"default_branch"`
 		LocalPath     string `json:"local_path"`
 		BundleRef     string `json:"bundle_ref"`
+		HeadRef       string `json:"head_ref"`
+		HeadSHA       string `json:"head_sha"`
 	} `json:"run"`
 	Steps        []StepSpec          `json:"steps"`
 	Secrets      []string            `json:"secrets"`
