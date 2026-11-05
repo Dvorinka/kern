@@ -51,7 +51,10 @@ never silently ignored.
 | `uses: actions/checkout` | done | native checkout before step execution; an uploaded source bundle (`kern exec`) replaces the clone entirely |
 | `uses: actions/upload-artifact`, `actions/download-artifact` | done | native; `name`, `path` (glob incl. `**`), `if-no-files-found` (`warn`/`error`/`ignore`) |
 | `uses: actions/cache` (+ `/restore`, `/save`) | partial | native; `key`, `path`, `restore-keys` (prefix, newest wins), `cache-hit` output, `fail-on-cache-miss`, `lookup-only`. Combined action saves at job end on miss/partial restore. Limits: workspace-relative paths only; branch-level scoping approximated by run trust (`pull_request` runs read trusted entries, save to their own scope); entries unused for 7 days are evicted |
-| Other `uses:` actions | no | compile error `action-unsupported`; composite/JS/Docker actions are M5 |
+| `uses: ./path` local composite actions | done | action.yml resolved from the checked-out workspace; inputs (defaults, `required`, case-insensitive `with:`), per-step `if:`/`env`/`working-directory`, `shell` (required per sub-step, as on GitHub), nesting to depth 10, declared `outputs:` via `steps.<id>.outputs`, summaries folded into the parent step's log and `GITHUB_ENV`/`GITHUB_PATH` propagated |
+| `uses: owner/repo[/path]@ref` remote actions | partial | the runner fetches with `git fetch --depth 1` (branches, tags and reachable SHAs) into a read-only mount; public https only — host derived from the run's repo URL or `KERN_ACTIONS_GIT_BASE`; composite actions execute, `runs.using: node*`/`docker` fail loudly at the step |
+| `uses: docker://image` / Dockerfile actions | no | compile error `action-docker` |
+| `runs.using: node12/16/20/24` JavaScript actions | no | resolved at run time; the step fails with an explicit diagnostic |
 | `shell:` | partial | `bash` honoured; `sh` honoured; bash-less images fall back to `sh` |
 | `working-directory:` | done | |
 | File commands `GITHUB_ENV`, `GITHUB_PATH`, `GITHUB_OUTPUT`, `GITHUB_STEP_SUMMARY` | done | summaries stored per step, rendered as sanitized markdown in run detail |
@@ -94,11 +97,12 @@ never silently ignored.
 - Every job container mounts the runner-persistent host dir `<work-root>/_cache` at `/kern/cache` (`KERN_CACHE_DIR` is exported). Point tool caches there (`GOMODCACHE`, `GOCACHE`, npm/pip caches) to get warm runs without `actions/cache` round trips. The dir survives job cleanup and is shared by all projects on the runner — do not place secrets in it.
 - Images the runner pulls are tracked and garbage-collected after `KERN_RUNNER_IMAGE_MAX_AGE` of disuse (default `168h`; `0` disables). GC only removes images KERN recorded, and only while no job is running.
 - `KERN_RUNNER_LOAD_GATE` pauses job claiming while `loadavg1` exceeds `n` × CPU count (`0` = off). Use it on hosts where parallel builds starve the control plane.
+- `KERN_ACTIONS_GIT_BASE` overrides the git host remote `uses: owner/repo@ref` actions are fetched from (default: the run's repo host, else `https://github.com`). Fetches are anonymous https/git only — private action repositories are not supported yet.
 - Step logs flush to the control plane every second or at 256 KiB buffered, whichever comes first.
 
 ## Not implemented (tracked)
 
-- Composite, JavaScript, and Docker action runtimes (M5)
+- JavaScript and Docker action runtimes (composite actions are implemented) (M5)
 - Reusable workflows `jobs.<id>.uses` (M5)
 - Service containers; job `container` options beyond `image` (M5)
 - Cache paths outside the workspace; cache size quotas; `upload-chunk-size` and other action tuning inputs

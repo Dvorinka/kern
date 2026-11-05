@@ -44,13 +44,7 @@ func (e *executor) runStep(ctx context.Context, step StepSpec) (string, error) {
 		return "", fmt.Errorf("start step %d: %w", step.Number, err)
 	}
 
-	outcome, code, stepErr := e.runStepBody(ctx, step)
-	if stepErr != nil {
-		e.logStep(step, "KERN: "+stepErr.Error())
-	}
-	if stepErr == nil && step.Uses != "" {
-		outcome, code = e.runUsesStep(ctx, step)
-	}
+	outcome, code, stepErr := e.runStepUnit(ctx, step)
 
 	var diag *diagnosis
 	if outcome == "failure" && !e.cancelled.Load() {
@@ -63,7 +57,7 @@ func (e *executor) runStep(ctx context.Context, step StepSpec) (string, error) {
 		if diag.Fixable && diag.Remediation != nil && e.claim.SelfHeal == "auto" {
 			e.logStep(step, "KERN: self-heal auto — applying fix: "+strings.Join(diag.Remediation.Fix, "; "))
 			if e.applyFix(ctx, step, diag.Remediation.Fix) {
-				retry, retryCode, retryErr := e.runStepBody(ctx, step)
+				retry, retryCode, retryErr := e.runStepUnit(ctx, step)
 				diag.Remediation.Applied = true
 				if retry == "success" && retryErr == nil {
 					diag.Remediation.Result = "step passed after fix"
@@ -120,6 +114,20 @@ func (e *executor) recordStep(step StepSpec, conclusion, outcome string, outputs
 }
 
 func (e *executor) cmdDir() string { return filepath.Join(e.workRoot(), "cmd") }
+
+// runStepUnit runs a whole step unit: the script body (empty for uses steps,
+// which also clears the file-command targets) then the action dispatch.
+func (e *executor) runStepUnit(ctx context.Context, step StepSpec) (string, int, error) {
+	outcome, code, stepErr := e.runStepBody(ctx, step)
+	if stepErr != nil {
+		e.logStep(step, "KERN: "+stepErr.Error())
+		return outcome, code, stepErr
+	}
+	if step.Uses != "" {
+		outcome, code = e.runUsesStep(ctx, step)
+	}
+	return outcome, code, nil
+}
 
 // runStepBody renders the script, launches docker exec and streams output.
 func (e *executor) runStepBody(ctx context.Context, step StepSpec) (string, int, error) {
@@ -210,38 +218,17 @@ func (e *executor) runStepBody(ctx context.Context, step StepSpec) (string, int,
 	return "failure", code, nil
 }
 
-// runUsesStep handles the natively-supported actions; anything else fails with
-// an explicit diagnostic (compatibility.md guarantees loud, not silent).
-func (e *executor) runUsesStep(_ context.Context, step StepSpec) (string, int) {
-	for k, v := range step.With {
-		if str, ok := v.(string); ok {
-			if nv, err := expressions.Interpolate(str, e.runnerContext()); err == nil {
-				step.With[k] = nv
-			}
-		}
+// runUsesStep dispatches a `uses` step to its runtime: native actions,
+// local/remote composites, or a loud failure. Composite sub-step summaries
+// accumulate in sumBuf and land back on the step's summary file for upload.
+func (e *executor) runUsesStep(ctx context.Context, step StepSpec) (string, int) {
+	e.sumBuf.Reset()
+	outcome, code := e.runAction(ctx, step, e.runnerContext(), 0)
+	if e.sumBuf.Len() > 0 {
+		p := filepath.Join(e.cmdDir(), "STEP_SUMMARY")
+		_ = os.WriteFile(p, e.sumBuf.Bytes(), 0o644)
 	}
-	ref := strings.TrimSpace(step.Uses)
-	name := strings.ToLower(strings.SplitN(ref, "@", 2)[0])
-	switch name {
-	case "actions/checkout":
-		// The workspace was checked out during prepare; an explicit step keeps that state.
-		return "success", 0
-	case "actions/upload-artifact":
-		return e.artifactUpload(step)
-	case "actions/download-artifact":
-		return e.artifactDownload(step)
-	case "actions/cache":
-		return e.cacheRestoreStep(step, true)
-	case "actions/cache/restore":
-		return e.cacheRestoreStep(step, false)
-	case "actions/cache/save":
-		return e.cacheSaveStep(step)
-	}
-	e.log.Warn("action kind unavailable", zap.Int("step", step.Number), zap.String("uses", ref))
-	diag := fmt.Sprintf("KERN: action %q is not supported yet (action runtimes ship in a later phase). "+
-		"The step fails by design rather than being silently ignored; see docs/compatibility.md.", ref)
-	_ = e.c.appendLog(context.Background(), e.jobID, step.Number, []byte(diag+"\n"))
-	return "failure", 1
+	return outcome, code
 }
 
 // harvestEnv folds GITHUB_ENV / GITHUB_PATH content into the env builder so later
@@ -272,10 +259,13 @@ func (e *executor) stepCondition(step StepSpec) (bool, error) {
 }
 
 // renderScript writes the bash wrapper and body; returns the wrapper path inside the
-// container (/kern/scripts is mounted read-only).
+// container (/kern/scripts is mounted read-only). Names carry a sequence so
+// composite sub-steps sharing a step number never clobber each other.
 func (e *executor) renderScript(step StepSpec) (string, error) {
-	name := fmt.Sprintf("step-%d.sh", step.Number)
-	body := fmt.Sprintf("step-%d.body.sh", step.Number)
+	e.scriptSeq++
+	tag := fmt.Sprintf("step-%d-%d", step.Number, e.scriptSeq)
+	name := tag + ".sh"
+	body := tag + ".body.sh"
 	dir := filepath.Join(e.workRoot(), "scripts")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
@@ -284,8 +274,11 @@ func (e *executor) renderScript(step StepSpec) (string, error) {
 	if shell == "" {
 		shell = "/bin/bash"
 	}
-	if step.Shell == "sh" {
+	switch {
+	case step.Shell == "sh":
 		shell = "/bin/sh"
+	case strings.HasPrefix(step.Shell, "/"):
+		shell = step.Shell // composite steps carry resolved interpreter paths
 	}
 	pipefail := "set -eo pipefail\n"
 	if filepath.Base(shell) != "bash" {
@@ -308,7 +301,11 @@ func (e *executor) renderScript(step StepSpec) (string, error) {
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(wrapper), 0o755); err != nil {
 		return "", err
 	}
-	bodyText, err := expressions.Interpolate(step.Run, e.runnerContext())
+	ctx := e.exprCtx
+	if ctx == nil {
+		ctx = e.runnerContext()
+	}
+	bodyText, err := expressions.Interpolate(step.Run, ctx)
 	if err != nil {
 		return "", fmt.Errorf("interpolate run script: %w", err)
 	}

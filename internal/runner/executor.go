@@ -9,6 +9,7 @@ package runner
 // GITHUB_OUTPUT carries step outputs; the host merges the files between steps.
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -66,6 +67,11 @@ type executor struct {
 	stopped  sync.WaitGroup
 	killFn   context.CancelFunc // kills the docker exec of the step in flight
 	lastTail string             // log tail of the most recent step, for diagnosis
+
+	scriptSeq  int               // unique script filenames across composite sub-steps
+	sumBuf     bytes.Buffer      // composite sub-step summaries, folded into the parent step
+	actionDirs map[string]string // remote actions fetched this job, keyed by owner__repo__ref
+	exprCtx    map[string]any    // composite sub-step interpolation context; nil = runnerContext()
 }
 
 type stepOutcome struct {
@@ -83,12 +89,12 @@ func newJobExecutor(cfg Config, c *client, claim *Claim, secrets map[string]stri
 		return nil, fmt.Errorf("job id is empty")
 	}
 	workRoot := filepath.Join(cfg.WorkRoot, id)
-	for _, dir := range []string{"workspace", "cmd", "scripts"} {
+	for _, dir := range []string{"workspace", "cmd", "scripts", "actions"} {
 		p := filepath.Join(workRoot, dir)
 		if err := os.MkdirAll(p, 0o755); err != nil {
 			return nil, fmt.Errorf("create %s dir: %w", dir, err)
 		}
-		if dir == "scripts" {
+		if dir == "scripts" || dir == "actions" {
 			continue // mounted read-only
 		}
 		// Job containers run as uid 1000; MkdirAll honours umask, so chmod
@@ -194,6 +200,7 @@ func (e *executor) startContainer(ctx context.Context) error {
 		"-v", filepath.Join(workRoot, "workspace") + ":" + containerWorkspace,
 		"-v", cmdHome + ":" + containerCmdDir,
 		"-v", scriptDir + ":" + containerScriptDir + ":ro",
+		"-v", filepath.Join(workRoot, "actions") + ":" + containerActionsDir + ":ro",
 		"-v", cacheDir(e.cfg.WorkRoot) + ":" + containerCacheDir,
 		"-e", "KERN_CACHE_DIR=" + containerCacheDir,
 		"-e", "GITHUB_WORKSPACE=" + containerWorkspace,

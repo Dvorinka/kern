@@ -48,6 +48,8 @@ Flags (each has an environment fallback, listed with it):
 Environment only:
   KERN_RUNNER_LOAD_GATE     pause claims while loadavg1 > n * cpu count (0=off)
   KERN_RUNNER_IMAGE_MAX_AGE GC pulled job images unused this long (default 168h, 0=off)
+  KERN_ACTIONS_GIT_BASE     git base URL for remote actions (default: the run's
+                            repo host, or https://github.com)
   KERN_JOB_CPUS / KERN_JOB_MEMORY   per-job container limits (unset CPUs share the host)
 
 join flags:
@@ -217,15 +219,16 @@ func main() {
 func agentConfig(o options) runner.Config {
 	workers, cpus := runner.SizeWorkers(runtime.NumCPU(), o.concurrency, os.Getenv("KERN_JOB_CPUS"))
 	cfg := runner.Config{
-		ControlURL:    o.control,
-		JoinToken:     o.joinToken,
-		Name:          o.name,
-		Labels:        o.labels,
-		WorkRoot:      o.workRoot,
-		Concurrency:   workers,
-		JobCPUs:       cpus,
-		JobMemory:     os.Getenv("KERN_JOB_MEMORY"),
-		LeaseDuration: 90 * time.Second,
+		ControlURL:     o.control,
+		JoinToken:      o.joinToken,
+		Name:           o.name,
+		Labels:         o.labels,
+		WorkRoot:       o.workRoot,
+		Concurrency:    workers,
+		JobCPUs:        cpus,
+		JobMemory:      os.Getenv("KERN_JOB_MEMORY"),
+		ActionsGitBase: os.Getenv("KERN_ACTIONS_GIT_BASE"),
+		LeaseDuration:  90 * time.Second,
 	}
 	if v := os.Getenv("KERN_RUNNER_LOAD_GATE"); v != "" {
 		cfg.MaxLoadPerCPU, _ = strconv.ParseFloat(v, 64)

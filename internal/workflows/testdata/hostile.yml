@@ -6,7 +6,7 @@ jobs:
     needs: b
     runs-on: ubuntu-latest
     steps:
-      - uses: evil/action@main
+      - uses: docker://alpine:3.19
       - run: echo hi
         uses: actions/checkout@v4
   b:
