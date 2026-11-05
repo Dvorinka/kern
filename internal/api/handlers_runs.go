@@ -153,14 +153,24 @@ func (s *Server) rerunRun(c *gin.Context) {
 }
 
 func (s *Server) stepLogs(c *gin.Context) {
-	step, _, _, err := s.StepByIDParam(c)
+	step, _, jobID, err := s.StepByIDParam(c)
 	if err != nil {
 		return
 	}
 	offset := int64(parseInt(c.DefaultQuery("offset", "0"), 0))
 	max := parseInt(c.DefaultQuery("limit", "262144"), 262144)
 	if step.LogRef == "" {
-		c.JSON(http.StatusOK, gin.H{"text": "", "next_offset": 0, "size": 0,
+		// Steps skipped server-side never ran a runner, so nothing was
+		// posted. Surface the recorded reason instead of an empty log.
+		text := ""
+		if step.Conclusion == "skipped" || step.Conclusion == "cancelled" {
+			text = "KERN: step " + step.Conclusion
+			if job, jerr := s.Store.Job(c.Request.Context(), jobID); jerr == nil && job.Error != "" {
+				text += " — " + job.Error
+			}
+			text += "\n"
+		}
+		c.JSON(http.StatusOK, gin.H{"text": text, "next_offset": 0, "size": int64(len(text)),
 			"status": step.Status, "conclusion": step.Conclusion})
 		return
 	}

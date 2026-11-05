@@ -27,10 +27,12 @@ func (e *executor) runStep(ctx context.Context, step StepSpec) (string, error) {
 	if ok, err := e.stepCondition(step); err != nil {
 		e.recordStep(step, "skipped", "skipped", nil)
 		e.log.Warn("step condition error", zap.Int("step", step.Number), zap.Error(err))
+		e.logStep(step, "KERN: step skipped — if: "+step.If+" — "+err.Error())
 		_ = e.c.finishStep(context.Background(), e.jobID, step.Number, "skipped", 0, nil)
 		return "skipped", nil
 	} else if !ok {
 		e.recordStep(step, "skipped", "skipped", nil)
+		e.logStep(step, "KERN: step skipped — if: "+step.If+" evaluated to false")
 		_ = e.c.finishStep(context.Background(), e.jobID, step.Number, "skipped", 0, nil)
 		return "skipped", nil
 	}
