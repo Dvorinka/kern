@@ -52,9 +52,10 @@ never silently ignored.
 | `uses: actions/upload-artifact`, `actions/download-artifact` | done | native; `name`, `path` (glob incl. `**`), `if-no-files-found` (`warn`/`error`/`ignore`) |
 | `uses: actions/cache` (+ `/restore`, `/save`) | partial | native; `key`, `path`, `restore-keys` (prefix, newest wins), `cache-hit` output, `fail-on-cache-miss`, `lookup-only`. Combined action saves at job end on miss/partial restore. Limits: workspace-relative paths only; branch-level scoping approximated by run trust (`pull_request` runs read trusted entries, save to their own scope); entries unused for 7 days are evicted |
 | `uses: ./path` local composite actions | done | action.yml resolved from the checked-out workspace; inputs (defaults, `required`, case-insensitive `with:`), per-step `if:`/`env`/`working-directory`, `shell` (required per sub-step, as on GitHub), nesting to depth 10, declared `outputs:` via `steps.<id>.outputs`, summaries folded into the parent step's log and `GITHUB_ENV`/`GITHUB_PATH` propagated |
-| `uses: owner/repo[/path]@ref` remote actions | partial | the runner fetches with `git fetch --depth 1` (branches, tags and reachable SHAs) into a read-only mount; public https only — host derived from the run's repo URL or `KERN_ACTIONS_GIT_BASE`; composite actions execute, `runs.using: node*`/`docker` fail loudly at the step |
-| `uses: docker://image` / Dockerfile actions | no | compile error `action-docker` |
-| `runs.using: node12/16/20/24` JavaScript actions | no | resolved at run time; the step fails with an explicit diagnostic |
+| `uses: owner/repo[/path]@ref` remote actions | partial | the runner fetches with `git fetch --depth 1` (branches, tags and reachable SHAs) into a read-only mount; public https only — host derived from the run's repo URL or `KERN_ACTIONS_GIT_BASE`; composite, JavaScript and Docker actions execute |
+| `runs.using: node12/16/20/24` JavaScript actions | partial | executed inside the job container on a pinned Node distribution the runner downloads once (`<work-root>/_node`, verified against `SHASUMS256.txt`, mounted read-only); all `node*` runtimes map to Node 20; `INPUT_*` env and `GITHUB_*` file commands honoured. Limits: `pre:`/`post:` entrypoints are skipped with a warning; linux amd64/arm64 runner hosts only |
+| `uses: docker://image` | partial | runs as a hardened sibling container (dropped caps, no-new-privileges, read-only root, resource limits) with workspace, file-command and `/kern/actions` mounts; `with.args` appends to the image entrypoint; `INPUT_*` env from `with:` keys |
+| `runs.using: docker` Dockerfile actions | partial | `runs.image: Dockerfile` builds the action dir context; a registry ref pulls instead. `runs.args` interpolates against `inputs`, `with.args` appends; `pre-entrypoint`/`post-entrypoint` are skipped with a warning; action containers run as the image's user under the same hardening as `docker://` |
 | `shell:` | partial | `bash` honoured; `sh` honoured; bash-less images fall back to `sh` |
 | `working-directory:` | done | |
 | File commands `GITHUB_ENV`, `GITHUB_PATH`, `GITHUB_OUTPUT`, `GITHUB_STEP_SUMMARY` | done | summaries stored per step, rendered as sanitized markdown in run detail |
@@ -98,11 +99,12 @@ never silently ignored.
 - Images the runner pulls are tracked and garbage-collected after `KERN_RUNNER_IMAGE_MAX_AGE` of disuse (default `168h`; `0` disables). GC only removes images KERN recorded, and only while no job is running.
 - `KERN_RUNNER_LOAD_GATE` pauses job claiming while `loadavg1` exceeds `n` × CPU count (`0` = off). Use it on hosts where parallel builds starve the control plane.
 - `KERN_ACTIONS_GIT_BASE` overrides the git host remote `uses: owner/repo@ref` actions are fetched from (default: the run's repo host, else `https://github.com`). Fetches are anonymous https/git only — private action repositories are not supported yet.
+- JavaScript actions need a Node runtime the runner downloads once from `nodejs.org` into `<work-root>/_node/<release>` (checksum-verified, `.complete`-marked) and mounts read-only at `/kern/node`. Air-gapped runners can pre-seed that directory with any `node-v<release>-linux-<arch>` dist.
 - Step logs flush to the control plane every second or at 256 KiB buffered, whichever comes first.
 
 ## Not implemented (tracked)
 
-- JavaScript and Docker action runtimes (composite actions are implemented) (M5)
+- JavaScript action `pre:`/`post:` and docker action `pre-entrypoint:`/`post-entrypoint:` lifecycles (M5)
 - Reusable workflows `jobs.<id>.uses` (M5)
 - Service containers; job `container` options beyond `image` (M5)
 - Cache paths outside the workspace; cache size quotas; `upload-chunk-size` and other action tuning inputs

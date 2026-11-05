@@ -109,6 +109,12 @@ func newJobExecutor(cfg Config, c *client, claim *Claim, secrets map[string]stri
 		return nil, fmt.Errorf("create runner cache dir: %w", err)
 	}
 	_ = os.Chmod(cacheDir(cfg.WorkRoot), 0o777) // umask may have narrowed MkdirAll
+	// _node holds the JavaScript action runtime; it must exist before
+	// docker create or the daemon plants a root-owned dir the runner
+	// cannot provision into.
+	if err := os.MkdirAll(filepath.Join(cfg.WorkRoot, "_node"), 0o755); err != nil {
+		return nil, fmt.Errorf("create node runtime dir: %w", err)
+	}
 	return &executor{
 		cfg: cfg, c: c, claim: claim, secrets: secrets, log: log,
 		jobID:       claim.Job.ID,
@@ -201,6 +207,7 @@ func (e *executor) startContainer(ctx context.Context) error {
 		"-v", cmdHome + ":" + containerCmdDir,
 		"-v", scriptDir + ":" + containerScriptDir + ":ro",
 		"-v", filepath.Join(workRoot, "actions") + ":" + containerActionsDir + ":ro",
+		"-v", filepath.Join(e.cfg.WorkRoot, "_node") + ":" + containerNodeRoot + ":ro",
 		"-v", cacheDir(e.cfg.WorkRoot) + ":" + containerCacheDir,
 		"-e", "KERN_CACHE_DIR=" + containerCacheDir,
 		"-e", "GITHUB_WORKSPACE=" + containerWorkspace,
