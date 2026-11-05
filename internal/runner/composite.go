@@ -63,8 +63,7 @@ func (e *executor) runAction(ctx context.Context, step StepSpec, evalCtx map[str
 		}
 		return e.runActionDir(ctx, step, host, container, evalCtx, depth)
 	case actions.KindDocker:
-		e.logStep(step, "KERN: docker action "+ref+" is not implemented by KERN yet")
-		return "failure", 1
+		return e.runDockerRef(ctx, step)
 	}
 	e.logStep(step, "KERN: action reference "+ref+" is malformed")
 	return "failure", 1
@@ -105,8 +104,7 @@ func (e *executor) runActionDir(ctx context.Context, step StepSpec, hostDir, act
 	case "node12", "node16", "node20", "node24":
 		return e.runNodeAction(ctx, step, meta, actionPath)
 	case "docker":
-		e.logStep(step, "KERN: "+step.Uses+" is a Dockerfile action; docker action runtimes are not implemented by KERN yet")
-		return "failure", 1
+		return e.runDockerAction(ctx, step, meta, hostDir, actionPath, evalCtx)
 	default:
 		e.logStep(step, fmt.Sprintf("KERN: action %q has unsupported runs.using %q", step.Uses, meta.Runs.Using))
 		return "failure", 1
