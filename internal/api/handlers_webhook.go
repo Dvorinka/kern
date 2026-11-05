@@ -412,11 +412,13 @@ func (s *Server) workflowAtSHA(c *gin.Context, fullName string, projectID uuid.U
 		}
 		return version, &plan, nil
 	}
-	res, err := workflows.Compile(content, s.Orch.Compiler)
+	cc := s.Orch.Compiler
+	cc.Resolve = s.reusableResolver(ctx, "", fullName, sha, gh)
+	res, err := workflows.Compile(content, cc)
 	if err != nil || !res.Valid || res.Plan == nil {
 		return store.WorkflowVersion{}, nil, fmt.Errorf("workflow does not compile at %s", sha[:8])
 	}
-	version, err := s.Store.PutWorkflowVersion(ctx, wf.ID, sha, content, res.Plan, res.Valid, res.Diagnostics)
+	version, err := s.Store.PutWorkflowVersion(ctx, wf.ID, sha, content, res.Plan, res.Valid, res.Diagnostics, res.Deps)
 	if err != nil {
 		return store.WorkflowVersion{}, nil, err
 	}

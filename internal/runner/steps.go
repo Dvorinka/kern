@@ -384,8 +384,13 @@ func (e *executor) runnerContext() map[string]any {
 	if needs == nil {
 		needs = map[string]any{}
 	}
+	inputs := map[string]any{}
+	for k, v := range e.claim.Job.Inputs {
+		inputs[k] = v
+	}
 	return map[string]any{
 		"github": github, "matrix": matrix, "env": env, "steps": steps, "needs": needs,
+		"inputs": inputs,
 		"runner": map[string]any{}, "job": map[string]any{},
 		"__job_status": e.jobStatusSoFar(),
 		"__workspace":  filepath.Join(e.workRoot(), "workspace"),

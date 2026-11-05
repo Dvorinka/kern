@@ -139,7 +139,7 @@ func (s *Store) WorkflowByID(ctx context.Context, id uuid.UUID) (Workflow, error
 }
 
 // PutWorkflowVersion stores an immutable version. Identical content for the same commit is reused.
-func (s *Store) PutWorkflowVersion(ctx context.Context, workflowID uuid.UUID, sha, content string, parsed any, valid bool, diagnostics any) (WorkflowVersion, error) {
+func (s *Store) PutWorkflowVersion(ctx context.Context, workflowID uuid.UUID, sha, content string, parsed any, valid bool, diagnostics, deps any) (WorkflowVersion, error) {
 	parsedJSON, err := json.Marshal(parsed)
 	if err != nil {
 		return WorkflowVersion{}, err
@@ -148,25 +148,29 @@ func (s *Store) PutWorkflowVersion(ctx context.Context, workflowID uuid.UUID, sh
 	if err != nil {
 		return WorkflowVersion{}, err
 	}
+	depsJSON, err := json.Marshal(deps)
+	if err != nil {
+		return WorkflowVersion{}, err
+	}
 	var v WorkflowVersion
 	err = s.pool.QueryRow(ctx, `
-		INSERT INTO workflow_versions (workflow_id, commit_sha, content, parsed, valid, diagnostics)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO workflow_versions (workflow_id, commit_sha, content, parsed, valid, diagnostics, deps)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		ON CONFLICT (workflow_id, commit_sha) DO UPDATE
 		SET content = EXCLUDED.content, parsed = EXCLUDED.parsed,
-		    valid = EXCLUDED.valid, diagnostics = EXCLUDED.diagnostics
-		RETURNING id, workflow_id, commit_sha, content, parsed, valid, diagnostics, created_at`,
-		workflowID, sha, content, parsedJSON, valid, diagJSON).
-		Scan(&v.ID, &v.WorkflowID, &v.CommitSHA, &v.Content, &v.Parsed, &v.Valid, &v.Diagnostics, &v.CreatedAt)
+		    valid = EXCLUDED.valid, diagnostics = EXCLUDED.diagnostics, deps = EXCLUDED.deps
+		RETURNING id, workflow_id, commit_sha, content, parsed, valid, diagnostics, deps, created_at`,
+		workflowID, sha, content, parsedJSON, valid, diagJSON, depsJSON).
+		Scan(&v.ID, &v.WorkflowID, &v.CommitSHA, &v.Content, &v.Parsed, &v.Valid, &v.Diagnostics, &v.Deps, &v.CreatedAt)
 	return v, err
 }
 
 func (s *Store) WorkflowVersion(ctx context.Context, id uuid.UUID) (WorkflowVersion, error) {
 	var v WorkflowVersion
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, workflow_id, commit_sha, content, parsed, valid, diagnostics, created_at
+		SELECT id, workflow_id, commit_sha, content, parsed, valid, diagnostics, deps, created_at
 		FROM workflow_versions WHERE id = $1`, id).
-		Scan(&v.ID, &v.WorkflowID, &v.CommitSHA, &v.Content, &v.Parsed, &v.Valid, &v.Diagnostics, &v.CreatedAt)
+		Scan(&v.ID, &v.WorkflowID, &v.CommitSHA, &v.Content, &v.Parsed, &v.Valid, &v.Diagnostics, &v.Deps, &v.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return WorkflowVersion{}, ErrNotFound
 	}

@@ -129,13 +129,15 @@ func (s *Server) syncProject(c *gin.Context) {
 		Diagnostics []workflows.Diagnostic `json:"diagnostics"`
 	}
 	out := []synced{}
+	cc := s.Orch.Compiler
+	cc.Resolve = s.reusableResolver(c.Request.Context(), p.LocalPath, p.RepoFullName, sha, nil)
 	for _, name := range names {
 		content, err := os.ReadFile(filepath.Join(pattern, name))
 		if err != nil {
 			continue
 		}
 		rel := ".github/workflows/" + name
-		res, err := workflows.Compile(string(content), s.Orch.Compiler)
+		res, err := workflows.Compile(string(content), cc)
 		if err != nil {
 			s.Log.Error("compile workflow during sync", zap.Error(err))
 			continue
@@ -146,7 +148,7 @@ func (s *Server) syncProject(c *gin.Context) {
 			return
 		}
 		if _, err := s.Store.PutWorkflowVersion(c.Request.Context(), wf.ID, sha,
-			string(content), res.Plan, res.Valid, res.Diagnostics); err != nil {
+			string(content), res.Plan, res.Valid, res.Diagnostics, res.Deps); err != nil {
 			s.internalError(c, err)
 			return
 		}
@@ -187,13 +189,15 @@ func (s *Server) syncProjectGitHub(c *gin.Context, user store.User, p store.Proj
 		Diagnostics []workflows.Diagnostic `json:"diagnostics"`
 	}
 	out := []synced{}
+	cc := s.Orch.Compiler
+	cc.Resolve = s.reusableResolver(ctx, p.LocalPath, p.RepoFullName, sha, gh)
 	for _, f := range files {
 		content, err := gh.FileContent(ctx, p.RepoFullName, f.Path, sha)
 		if err != nil {
 			s.Log.Error("fetch workflow file", zap.String("path", f.Path), zap.Error(err))
 			continue
 		}
-		res, err := workflows.Compile(content, s.Orch.Compiler)
+		res, err := workflows.Compile(content, cc)
 		if err != nil {
 			s.Log.Error("compile workflow during sync", zap.Error(err))
 			continue
@@ -203,7 +207,7 @@ func (s *Server) syncProjectGitHub(c *gin.Context, user store.User, p store.Proj
 			s.internalError(c, err)
 			return
 		}
-		if _, err := s.Store.PutWorkflowVersion(ctx, wf.ID, sha, content, res.Plan, res.Valid, res.Diagnostics); err != nil {
+		if _, err := s.Store.PutWorkflowVersion(ctx, wf.ID, sha, content, res.Plan, res.Valid, res.Diagnostics, res.Deps); err != nil {
 			s.internalError(c, err)
 			return
 		}

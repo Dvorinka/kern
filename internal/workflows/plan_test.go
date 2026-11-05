@@ -141,9 +141,9 @@ jobs:
 		t.Fatal(err)
 	}
 	if res.Valid {
-		t.Fatal("reusable workflow should be invalid")
+		t.Fatal("reusable workflow without a resolver should be invalid")
 	}
-	if !hasDiagnostic(res, "reusable-workflow") {
+	if !hasDiagnostic(res, "reusable-resolve") {
 		t.Fatalf("diagnostics: %+v", res.Diagnostics)
 	}
 	boxed := findJob(t, res, "boxed")

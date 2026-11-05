@@ -187,6 +187,8 @@ type StepPlan struct {
 }
 
 // JobPlan is a single schedulable unit (one matrix combination counts as one job).
+// Inputs carries workflow_call inputs resolved by the caller (`jobs.<id>.with`),
+// exposed to the job's steps as the `inputs` expression context.
 type JobPlan struct {
 	Key             string            `json:"key"`
 	JobID           string            `json:"job_id"`
@@ -208,6 +210,9 @@ type JobPlan struct {
 	SplitN    int        `json:"split,omitempty"`
 	SplitAuto bool       `json:"split_auto,omitempty"`
 	Steps     []StepPlan `json:"steps"`
+	// Inputs is set on jobs expanded from a reusable-workflow call: the
+	// resolved `on.workflow_call` inputs, surfaced as the `inputs` context.
+	Inputs map[string]string `json:"inputs,omitempty"`
 }
 
 // Edge is a dependency between plan jobs, kept for DAG rendering.
@@ -239,12 +244,15 @@ type Diagnostic struct {
 
 // Result is the outcome of parsing and compiling a workflow file.
 type Result struct {
-	Workflow    *Workflow    `json:"-"`
-	Plan        *Plan        `json:"plan,omitempty"`
-	Name        string       `json:"name"`
-	Events      []string     `json:"events"`
-	Valid       bool         `json:"valid"`
-	Diagnostics []Diagnostic `json:"diagnostics"`
+	Workflow *Workflow `json:"-"`
+	// Deps maps resolved reusable-workflow uses refs to their YAML content,
+	// captured during compile so a later recompile can resolve deterministically.
+	Deps        map[string]string `json:"-"`
+	Plan        *Plan             `json:"plan,omitempty"`
+	Name        string            `json:"name"`
+	Events      []string          `json:"events"`
+	Valid       bool              `json:"valid"`
+	Diagnostics []Diagnostic      `json:"diagnostics"`
 }
 
 // asString converts YAML scalar values the way GitHub stringifies env values.
