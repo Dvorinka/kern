@@ -1,11 +1,25 @@
 package runner
 
 import (
+	"os"
 	"strings"
 	"testing"
 
 	"go.uber.org/zap"
 )
+
+func TestJobCAMount(t *testing.T) {
+	got := jobCAMount()
+	if _, err := os.Stat(hostCABundle); err != nil {
+		if got != nil {
+			t.Fatal(got)
+		}
+		return
+	}
+	if len(got) != 2 || got[1] != hostCABundle+":"+hostCABundle+":ro" {
+		t.Fatal(got)
+	}
+}
 
 func TestImageValidation(t *testing.T) {
 	for _, img := range []string{"ubuntu:24.04", "ghcr.io/dvorinka/kern-runner", "alpine", "node:22-bookworm@sha256:abc-_.0"} {

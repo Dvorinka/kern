@@ -96,6 +96,7 @@ never silently ignored.
 ## Runner behaviour (not GitHub-surface, documented for operators)
 
 - Every job container mounts the runner-persistent host dir `<work-root>/_cache` at `/kern/cache` (`KERN_CACHE_DIR` is exported). Point tool caches there (`GOMODCACHE`, `GOCACHE`, npm/pip caches) to get warm runs without `actions/cache` round trips. The dir survives job cleanup and is shared by all projects on the runner — do not place secrets in it.
+- Job containers also mount the host file `/etc/ssl/certs/ca-certificates.crt` when the runner can see it. `ubuntu:24.04` ships no CA bundle, and Go will not use its embedded roots without that file, so `go` module fetches fail closed.
 - Images the runner pulls are tracked and garbage-collected after `KERN_RUNNER_IMAGE_MAX_AGE` of disuse (default `168h`; `0` disables). GC only removes images KERN recorded, and only while no job is running.
 - `KERN_RUNNER_LOAD_GATE` pauses job claiming while `loadavg1` exceeds `n` × CPU count (`0` = off). Use it on hosts where parallel builds starve the control plane.
 - `KERN_ACTIONS_GIT_BASE` overrides the git host remote `uses: owner/repo@ref` actions are fetched from (default: the run's repo host, else `https://github.com`). Fetches are anonymous https/git only — private action repositories are not supported yet.

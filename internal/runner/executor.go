@@ -38,6 +38,18 @@ func cacheDir(workRoot string) string {
 	return filepath.Join(workRoot, "_cache")
 }
 
+// hostCABundle is the trust store the job container does not ship.
+// ubuntu:24.04 has no CA bundle, and Go ignores its embedded roots when
+// the system store is missing. The daemon mounts this host path.
+const hostCABundle = "/etc/ssl/certs/ca-certificates.crt"
+
+func jobCAMount() []string {
+	if _, err := os.Stat(hostCABundle); err != nil {
+		return nil
+	}
+	return []string{"-v", hostCABundle + ":" + hostCABundle + ":ro"}
+}
+
 var (
 	imageRe     = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/:@-]*$`)
 	nonIDRe     = regexp.MustCompile(`[^a-zA-Z0-9_-]`)
@@ -227,6 +239,9 @@ func (e *executor) startContainer(ctx context.Context) error {
 		"-v", filepath.Join(e.cfg.WorkRoot, "_node")+":"+containerNodeRoot+":ro",
 		"-v", cacheDir(e.cfg.WorkRoot)+":"+containerCacheDir,
 		"-v", filepath.Join(workRoot, "home")+":"+containerActionHome,
+	)
+	args = append(args, jobCAMount()...)
+	args = append(args,
 		"-e", "KERN_CACHE_DIR="+containerCacheDir,
 		// setup-* actions resolve @actions/tool-cache via RUNNER_TOOL_CACHE;
 		// pointing it at the persistent runner cache makes installed SDKs warm.
