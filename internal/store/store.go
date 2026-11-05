@@ -109,6 +109,7 @@ type WorkflowVersion struct {
 	Parsed      json.RawMessage `json:"parsed,omitempty"`
 	Valid       bool            `json:"valid"`
 	Diagnostics json.RawMessage `json:"diagnostics"`
+	Deps        json.RawMessage `json:"deps"`
 	CreatedAt   time.Time       `json:"created_at"`
 }
 
@@ -166,9 +167,20 @@ type Job struct {
 	Error           string          `json:"error"`
 	Outputs         json.RawMessage `json:"outputs"`
 	OutputsSpec     json.RawMessage `json:"outputs_spec"`
+	Inputs          json.RawMessage `json:"inputs"`
 	Environment     string          `json:"environment"`
 	EnvironmentURL  string          `json:"environment_url"`
 	Steps           []Step          `json:"steps,omitempty"`
+}
+
+// InputsMap decodes the job's workflow_call inputs.
+func (j Job) InputsMap() (map[string]string, error) {
+	out := map[string]string{}
+	if len(j.Inputs) == 0 {
+		return out, nil
+	}
+	err := json.Unmarshal(j.Inputs, &out)
+	return out, err
 }
 
 // EnvMap decodes the job environment.

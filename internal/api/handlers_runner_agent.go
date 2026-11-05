@@ -172,6 +172,9 @@ func (s *Server) respondWithClaim(c *gin.Context, claimed *store.ClaimedJob) {
 				needsCtx[need] = v
 			}
 		}
+		// Inside a reusable-workflow subgraph the same entries are visible
+		// under the called workflow's local job ids.
+		needsCtx = orchestrator.NeedsWithAliases(claimed.Job.Key, needsCtx)
 	}
 	remediations, _ := s.Store.ApprovedFixes(c.Request.Context(), claimed.Job.ID)
 	policy, _ := s.Store.SelfHealPolicy(c.Request.Context(), claimed.Run.ID)
@@ -182,6 +185,7 @@ func (s *Server) respondWithClaim(c *gin.Context, claimed *store.ClaimedJob) {
 			"env": claimed.Job.Env, "matrix": claimed.Job.Matrix, "runs_on": claimed.Job.RunsOn,
 			"timeout_seconds": claimed.Job.TimeoutSeconds, "continue_on_error": claimed.Job.ContinueOnError,
 			"outputs_spec": claimed.Job.OutputsSpec,
+			"inputs":       claimed.Job.Inputs,
 			"needs":        needsCtx,
 		},
 		"run": gin.H{

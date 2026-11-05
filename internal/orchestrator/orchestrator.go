@@ -76,7 +76,20 @@ func (o *Orchestrator) StartRun(ctx context.Context, p store.CreateRunParams) (s
 	if err != nil {
 		return store.Run{}, err
 	}
-	res, err := workflows.Compile(version.Content, o.Compiler)
+	// Resolved reusable-workflow contents are pinned on the version at trigger
+	// time; recompile against them so the plan is deterministic.
+	depContents := map[string]string{}
+	if len(version.Deps) > 0 {
+		_ = json.Unmarshal(version.Deps, &depContents)
+	}
+	cc := o.Compiler
+	cc.Resolve = func(uses string) (string, error) {
+		if c, ok := depContents[uses]; ok {
+			return c, nil
+		}
+		return "", fmt.Errorf("reusable workflow %q was not resolved at trigger time", uses)
+	}
+	res, err := workflows.Compile(version.Content, cc)
 	if err != nil {
 		return store.Run{}, err
 	}
@@ -114,6 +127,7 @@ func (o *Orchestrator) StartRun(ctx context.Context, p store.CreateRunParams) (s
 			EnvironmentURL:  jp.EnvironmentURL,
 			SplitN:          jp.SplitN,
 			SplitAuto:       jp.SplitAuto,
+			Inputs:          jp.Inputs,
 		}
 		for _, sp := range jp.Steps {
 			seed.Steps = append(seed.Steps, store.StepSeed{Key: sp.ID, Name: sp.Name, Spec: sp})
@@ -398,11 +412,17 @@ func JobContext(job store.Job, run store.Run, project store.Project, byJobKey ma
 	if len(job.Matrix) > 0 {
 		_ = json.Unmarshal(job.Matrix, &matrix)
 	}
-	needs := NeedsMap(byJobKey)
+	needs := needsWithAliases(job.Key, NeedsMap(byJobKey))
 	env := map[string]any{}
 	if raw, err := job.EnvMap(); err == nil {
 		for k, v := range raw {
 			env[k] = v
+		}
+	}
+	inputs := map[string]any{}
+	if raw, err := job.InputsMap(); err == nil {
+		for k, v := range raw {
+			inputs[k] = v
 		}
 	}
 	ctx := map[string]any{
@@ -410,6 +430,7 @@ func JobContext(job store.Job, run store.Run, project store.Project, byJobKey ma
 		"matrix":  matrix,
 		"needs":   needs,
 		"env":     env,
+		"inputs":  inputs,
 		"vars":    map[string]any{},
 		"job":     map[string]any{"status": jobStatus(job)},
 		"runner":  map[string]any{},
@@ -417,6 +438,38 @@ func JobContext(job store.Job, run store.Run, project store.Project, byJobKey ma
 		"steps":   map[string]any{},
 	}
 	return ctx
+}
+
+// NeedsWithAliases exposes the alias expansion to the claim endpoint.
+func NeedsWithAliases(jobKey string, needs map[string]any) map[string]any {
+	return needsWithAliases(jobKey, needs)
+}
+
+// needsWithAliases exposes needs entries under the local ids a called
+// workflow's expressions use. Expanded jobs carry caller/called key paths and
+// prefixed job ids (caller_build); inside the call, `needs.build` must resolve.
+func needsWithAliases(jobKey string, needs map[string]any) map[string]any {
+	parts := strings.Split(jobKey, "/")
+	if len(parts) < 2 {
+		return needs
+	}
+	out := make(map[string]any, len(needs)*2)
+	for k, v := range needs {
+		out[k] = v
+	}
+	for k, v := range needs {
+		alias := k
+		for _, seg := range parts[:len(parts)-1] {
+			if !strings.HasPrefix(alias, seg+"_") {
+				break
+			}
+			alias = alias[len(seg)+1:]
+			if _, exists := out[alias]; !exists {
+				out[alias] = v
+			}
+		}
+	}
+	return out
 }
 
 func jobStatus(j store.Job) string {

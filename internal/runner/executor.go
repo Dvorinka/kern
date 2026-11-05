@@ -89,7 +89,7 @@ func newJobExecutor(cfg Config, c *client, claim *Claim, secrets map[string]stri
 		return nil, fmt.Errorf("job id is empty")
 	}
 	workRoot := filepath.Join(cfg.WorkRoot, id)
-	for _, dir := range []string{"workspace", "cmd", "scripts", "actions"} {
+	for _, dir := range []string{"workspace", "cmd", "scripts", "actions", "home"} {
 		p := filepath.Join(workRoot, dir)
 		if err := os.MkdirAll(p, 0o755); err != nil {
 			return nil, fmt.Errorf("create %s dir: %w", dir, err)
@@ -102,6 +102,14 @@ func newJobExecutor(cfg Config, c *client, claim *Claim, secrets map[string]stri
 		if err := os.Chmod(p, 0o777); err != nil {
 			return nil, fmt.Errorf("chmod %s dir: %w", dir, err)
 		}
+	}
+	// File-command targets exist before any step runs so non-shell executors
+	// (JavaScript and Docker actions) find them already present; containers
+	// run as uid 1000 so the files must be world-writable.
+	for _, f := range []string{"GITHUB_ENV", "PATH_LINES", "GITHUB_OUTPUT", "STEP_SUMMARY"} {
+		p := filepath.Join(workRoot, "cmd", f)
+		_ = os.WriteFile(p, nil, 0o666)
+		_ = os.Chmod(p, 0o666)
 	}
 	// The persistent runner cache survives cleanup(); tool caches pointed at
 	// it (GOMODCACHE, npm, pip) make warm runs skip network fetches entirely.
@@ -209,7 +217,15 @@ func (e *executor) startContainer(ctx context.Context) error {
 		"-v", filepath.Join(workRoot, "actions") + ":" + containerActionsDir + ":ro",
 		"-v", filepath.Join(e.cfg.WorkRoot, "_node") + ":" + containerNodeRoot + ":ro",
 		"-v", cacheDir(e.cfg.WorkRoot) + ":" + containerCacheDir,
+		"-v", filepath.Join(workRoot, "home") + ":" + containerActionHome,
 		"-e", "KERN_CACHE_DIR=" + containerCacheDir,
+		// setup-* actions resolve @actions/tool-cache via RUNNER_TOOL_CACHE;
+		// pointing it at the persistent runner cache makes installed SDKs warm.
+		"-e", "RUNNER_TOOL_CACHE=" + containerCacheDir + "/_toolcache",
+		"-e", "RUNNER_TEMP=/tmp",
+		// Actions resolve $HOME for tool state (setup-go GOPATH, npm config);
+		// images may carry no writable home for uid 1000 at all.
+		"-e", "HOME=" + containerActionHome,
 		"-e", "GITHUB_WORKSPACE=" + containerWorkspace,
 		"-e", "GITHUB_REPOSITORY=" + defaultStr(e.claim.Run.RepoFullName, e.claim.Run.Project),
 		"-e", "GITHUB_SHA=" + e.claim.Run.SHA,

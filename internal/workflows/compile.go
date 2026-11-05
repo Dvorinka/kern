@@ -21,15 +21,27 @@ const (
 )
 
 // Compiler resolves a parsed workflow into a plan. ImageFor maps runner labels to an
-// execution image; the default applies when nothing matches.
+// execution image; the default applies when nothing matches. Resolve, when set,
+// fetches a reusable workflow (jobs.<id>.uses) to YAML; it is the caller's
+// responsibility to pin the resolved content to the correct repo and ref.
 type Compiler struct {
 	DefaultImage string
 	LabelImages  map[string]string
+	Resolve      func(uses string) (string, error)
 }
 
 // Compile parses and compiles a workflow. A non-nil error is reserved for YAML that
 // cannot be decoded at all; semantic problems are reported as diagnostics.
 func Compile(content string, c Compiler) (Result, error) {
+	deps := map[string]string{}
+	res, err := compile(content, c, 0, new(int), deps)
+	if err == nil && len(deps) > 0 {
+		res.Deps = deps
+	}
+	return res, err
+}
+
+func compile(content string, c Compiler, depth int, calls *int, deps map[string]string) (Result, error) {
 	d := &diagnostics{}
 
 	var wf Workflow
@@ -107,7 +119,29 @@ func Compile(content string, c Compiler) (Result, error) {
 			}
 		}
 		if job.Uses != "" {
-			d.errorf("reusable-workflow", "jobs."+id+".uses", "reusable workflows (jobs.<id>.uses) are not implemented by KERN yet")
+			if err := ValidateReusableRef(job.Uses); err != nil {
+				d.errorf("reusable-workflow", "jobs."+id+".uses", err.Error())
+			}
+			for k, bad := range map[string]bool{
+				"steps": len(job.Steps) > 0, "runs-on": len(job.RunsOn) > 0,
+				"env": len(job.Env) > 0, "container": job.Container != nil,
+				"services": len(job.Services) > 0, "defaults": job.Defaults != nil,
+				"timeout-minutes": job.TimeoutMinutes != 0, "outputs": len(job.Outputs) > 0,
+				"permissions": len(job.Permissions) > 0, "environment": job.Environment != nil,
+			} {
+				if bad {
+					d.errorf("reusable-caller", "jobs."+id+"."+k,
+						fmt.Sprintf("a reusable-workflow caller may not define %q", k))
+				}
+			}
+			if job.Strategy != nil {
+				d.errorf("reusable-caller", "jobs."+id+".strategy",
+					"strategy on reusable-workflow callers is not implemented by KERN yet")
+			}
+			if s, ok := job.Secrets.(string); job.Secrets != nil && !(ok && s == "inherit") {
+				d.errorf("reusable-caller", "jobs."+id+".secrets",
+					"explicit secrets maps on reusable-workflow callers are not implemented by KERN yet; use 'secrets: inherit'")
+			}
 			continue
 		}
 		if len(job.RunsOn) == 0 {
@@ -195,7 +229,28 @@ func Compile(content string, c Compiler) (Result, error) {
 
 	for _, id := range jobIDs {
 		job := wf.Jobs[id]
-		if job == nil || job.Uses != "" {
+		if job == nil {
+			continue
+		}
+		if job.Uses != "" {
+			if err := ValidateReusableRef(job.Uses); err != nil {
+				continue // already diagnosed
+			}
+			if c.Resolve == nil {
+				d.errorf("reusable-resolve", "jobs."+id+".uses",
+					"reusable workflow resolution is not configured for this compile")
+				continue
+			}
+			content, err := c.Resolve(job.Uses)
+			if err != nil {
+				d.errorf("reusable-resolve", "jobs."+id+".uses", err.Error())
+				continue
+			}
+			deps[job.Uses] = content
+			compileCall(d, plan, callSpec{
+				id: id, name: job.Name, needs: []string(job.Needs),
+				ifCond: job.If, with: job.With,
+			}, content, c, depth, calls, deps)
 			continue
 		}
 		combos, err := expandMatrix(job)

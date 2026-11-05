@@ -18,7 +18,7 @@ never silently ignored.
 | Fork-PR approval gate | done | project setting `fork_gate` (`off` default, `all`, `first-time`): matching fork runs park in `awaiting_approval` until an operator approves (`POST /runs/:id/approve`, `kern runs approve`, or the run page) or cancels; audited as `run.approve` |
 | `on: release`, `repository_dispatch`, `workflow_run` | partial | parsed and modelled; no provider events yet |
 | `on: schedule` | done | 5-field cron in UTC; the scheduler mints a run per due instant, deduped; missed windows are not caught up (same as GitHub) |
-| `on: workflow_call` / reusable workflows | no | compile error `reusable-workflow` |
+| `on: workflow_call` / reusable workflows | partial | `jobs.<id>.uses` expands at compile: `./.github/workflows/x.yml` (local checkout or contents API at the run SHA) and `owner/repo/...@ref`. Called jobs get prefixed ids (`caller_called`); a synthetic boundary job carries the caller's `needs`/`if`/outputs so `needs.<caller>` and `needs.<caller>.outputs` resolve. Declared `on.workflow_call` inputs/outputs honoured; resolved contents are pinned on the workflow version for deterministic recompile. Not implemented (explicit diagnostics): `strategy`/`concurrency` on callers, explicit `secrets:` maps (use `inherit`); a failed called job shows the caller as `skipped`, not `failed` |
 | Trigger filters (`branches`, `paths`, `tags`, `types`…) | partial | parsed; unknown filters emit a warning and are ignored |
 
 ## Jobs
