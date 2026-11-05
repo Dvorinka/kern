@@ -109,15 +109,29 @@ export function LogView({
 						<span className="lm">No log output yet.</span>
 					</div>
 				)}
-				{lines.map((l, i) => (
-					<div className="l" key={i}>
-						<span className="ln">{i + 1}</span>
-						<span className="lm">
-							{l}
-							{active && i === lines.length - 1 && <span className="cursor" />}
-						</span>
-					</div>
-				))}
+				{lines.map((l, i) => {
+					const m = l.match(/^##\[([a-z]+)\](.*)$/);
+					if (m?.[1] === "endgroup") return null;
+					const cls =
+						m?.[1] === "group"
+							? "lg"
+							: m?.[1] === "error"
+								? "le"
+								: m?.[1] === "warning"
+									? "lw"
+									: m?.[1] === "debug" || m?.[1] === "command"
+										? "ld"
+										: "";
+					return (
+						<div className={cn("l", cls && `l-${cls}`)} key={i}>
+							<span className="ln">{i + 1}</span>
+							<span className="lm">
+								{m ? (m[2] ?? "").trimStart() : l}
+								{active && i === lines.length - 1 && <span className="cursor" />}
+							</span>
+						</div>
+					);
+				})}
 				{err && (
 					<div className="l">
 						<span className="ln">!</span>

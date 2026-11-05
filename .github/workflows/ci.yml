@@ -25,6 +25,7 @@ jobs:
       - uses: pnpm/action-setup@v5
         with:
           version: "12.15.0"
+          standalone: true # @pnpm/exe bundles node — runners without system node fail otherwise
       - uses: actions/setup-node@v7
         with:
           node-version: "22"

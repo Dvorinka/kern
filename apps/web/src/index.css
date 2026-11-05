@@ -1012,6 +1012,19 @@ select.fsel {
 .log.raw .lm {
 	white-space: pre;
 }
+.log .l.l-lg .lm {
+	color: var(--dim);
+	font-weight: 600;
+}
+.log .l.l-le .lm {
+	color: var(--err);
+}
+.log .l.l-lw .lm {
+	color: var(--warn);
+}
+.log .l.l-ld .lm {
+	opacity: 0.55;
+}
 .log .l:last-child .lm {
 	color: var(--dim);
 }
