@@ -168,6 +168,9 @@ func (e *executor) prepare(ctx context.Context) error {
 		e.goStop()
 		return fmt.Errorf("checkout: %w", err)
 	}
+	// Steps run as jobUID but checkout ran as the runner user; hand the
+	// workspace over so steps can write inside it (node_modules, dist).
+	chownTree(filepath.Join(e.workRoot(), "workspace"), jobUID)
 	if err := e.pull(ctx); err != nil {
 		e.goStop()
 		return fmt.Errorf("pull image: %w", err)
@@ -403,6 +406,20 @@ func (e *executor) cleanup() {
 	_ = exec.CommandContext(ctx, "docker", "rm", "-f", e.container).Run()
 	e.stopServices(ctx)
 	_ = os.RemoveAll(e.workRoot())
+}
+
+// chownTree gives every workspace entry to the job user. Best-effort: a
+// runner without chown rights leaves the files as they are and the step
+// surfaces its own EACCES diagnosis. Lchown keeps repository symlinks from
+// reaching outside the workspace.
+func chownTree(root string, uid int) {
+	_ = filepath.Walk(root, func(p string, _ os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		_ = os.Lchown(p, uid, uid)
+		return nil
+	})
 }
 
 func valueOr(v, def string) string {
