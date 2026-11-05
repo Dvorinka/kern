@@ -12,6 +12,7 @@ interface PublicStep {
 	conclusion: string;
 	started_at: string | null;
 	completed_at: string | null;
+	diagnosis?: { kind: string; summary: string; suggestion: string };
 }
 
 interface PublicJob {
@@ -127,7 +128,14 @@ function PublicBody({ data }: { data: PublicPayload }) {
 									{job.steps.map((step) => (
 										<li key={step.number} className="flex items-center gap-3 px-4 py-1 pl-9 text-xs">
 											<StatusSq status={step.status} conclusion={step.conclusion} />
-											<span className="min-w-0 flex-1 truncate text-[var(--dim)]">{step.name}</span>
+											<span className="min-w-0 flex-1 text-[var(--dim)]">
+												<span className="truncate">{step.name}</span>
+												{step.diagnosis && (
+													<span className="block text-[var(--faint)]">
+														{step.diagnosis.summary} — {step.diagnosis.suggestion}
+													</span>
+												)}
+											</span>
 											<span className="tabular-nums text-[var(--faint)]">
 												{duration(step.started_at, step.completed_at)}
 											</span>
