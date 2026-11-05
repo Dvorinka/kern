@@ -152,10 +152,20 @@ func (e *executor) runStepBody(ctx context.Context, step StepSpec) (string, int,
 		defer stepCancel()
 	}
 
-	// Clear the file-command targets; the step appends fresh content.
-	for _, f := range []string{"GITHUB_ENV", "PATH_LINES", "GITHUB_OUTPUT", "STEP_SUMMARY"} {
-		_ = os.Remove(filepath.Join(e.cmdDir(), f))
+	// Clear the file-command targets; the step appends fresh content. They are
+	// then re-created and writable: @actions/core refuses to write a file
+	// command that does not already exist, and job containers run as a
+	// different uid than the runner host. PATH_LINES is repopulated with the
+	// accumulated additions rather than emptied, since it is the only channel
+	// the wrapper script has for prepending them.
+	for _, f := range []string{"GITHUB_ENV", "GITHUB_OUTPUT", "STEP_SUMMARY"} {
+		p := filepath.Join(e.cmdDir(), f)
+		_ = os.Remove(p)
+		_ = os.WriteFile(p, nil, 0o666)
+		_ = os.Chmod(p, 0o666)
 	}
+	_ = os.WriteFile(filepath.Join(e.cmdDir(), "PATH_LINES"), []byte(e.enc.pathLines()), 0o666)
+	_ = os.Chmod(filepath.Join(e.cmdDir(), "PATH_LINES"), 0o666)
 
 	if stepEnv := e.writeStepEnv(step); stepEnv == "" {
 		return "failure", 1, fmt.Errorf("write step env file")
@@ -528,6 +538,7 @@ type envBuilder struct {
 	secrets map[string]string
 	persist map[string]string
 	paths   []string
+	pathSet map[string]bool
 }
 
 func newEnvBuilder(claim *Claim, secrets map[string]string) *envBuilder {
@@ -546,12 +557,27 @@ func (b *envBuilder) persistKV(k, v string) {
 
 func (b *envBuilder) persistPaths(paths []string) {
 	b.mu.Lock()
+	if b.pathSet == nil {
+		b.pathSet = map[string]bool{}
+		for _, p := range b.paths {
+			b.pathSet[p] = true
+		}
+	}
 	for _, p := range paths {
-		if strings.TrimSpace(p) != "" {
+		if strings.TrimSpace(p) != "" && !b.pathSet[p] {
+			b.pathSet[p] = true
 			b.paths = append(b.paths, p)
 		}
 	}
 	b.mu.Unlock()
+}
+
+// pathLines renders the accumulated PATH additions oldest-first; the step
+// wrapper prepends each line, so the newest entry ends up first.
+func (b *envBuilder) pathLines() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return strings.Join(b.paths, "\n")
 }
 
 // render returns the env-file content for a step.
