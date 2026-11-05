@@ -168,6 +168,7 @@ type Job struct {
 	Outputs         json.RawMessage `json:"outputs"`
 	OutputsSpec     json.RawMessage `json:"outputs_spec"`
 	Inputs          json.RawMessage `json:"inputs"`
+	Services        json.RawMessage `json:"services"`
 	Environment     string          `json:"environment"`
 	EnvironmentURL  string          `json:"environment_url"`
 	Steps           []Step          `json:"steps,omitempty"`

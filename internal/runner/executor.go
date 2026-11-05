@@ -160,6 +160,10 @@ func (e *executor) prepare(ctx context.Context) error {
 		e.goStop()
 		return fmt.Errorf("pull image: %w", err)
 	}
+	if err := e.startServices(ctx); err != nil {
+		e.goStop()
+		return fmt.Errorf("start services: %w", err)
+	}
 	if err := e.startContainer(ctx); err != nil {
 		e.goStop()
 		return fmt.Errorf("start container: %w", err)
@@ -203,6 +207,11 @@ func (e *executor) startContainer(ctx context.Context) error {
 	scriptDir := filepath.Join(workRoot, "scripts")
 	args := []string{
 		"create", "--rm", "--name", e.container,
+	}
+	if len(e.claim.Job.Services) > 0 {
+		args = append(args, "--network", e.serviceNet())
+	}
+	args = append(args,
 		"--user", fmt.Sprintf("%d:%d", jobUID, jobUID),
 		"--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges",
@@ -211,28 +220,28 @@ func (e *executor) startContainer(ctx context.Context) error {
 		"--tmpfs", "/run:rw,noexec,nosuid,size=64m",
 		"--memory", valueOr(e.cfg.JobMemory, "1g"),
 		"--cpus", valueOr(e.cfg.JobCPUs, "1"),
-		"-v", filepath.Join(workRoot, "workspace") + ":" + containerWorkspace,
-		"-v", cmdHome + ":" + containerCmdDir,
-		"-v", scriptDir + ":" + containerScriptDir + ":ro",
-		"-v", filepath.Join(workRoot, "actions") + ":" + containerActionsDir + ":ro",
-		"-v", filepath.Join(e.cfg.WorkRoot, "_node") + ":" + containerNodeRoot + ":ro",
-		"-v", cacheDir(e.cfg.WorkRoot) + ":" + containerCacheDir,
-		"-v", filepath.Join(workRoot, "home") + ":" + containerActionHome,
-		"-e", "KERN_CACHE_DIR=" + containerCacheDir,
+		"-v", filepath.Join(workRoot, "workspace")+":"+containerWorkspace,
+		"-v", cmdHome+":"+containerCmdDir,
+		"-v", scriptDir+":"+containerScriptDir+":ro",
+		"-v", filepath.Join(workRoot, "actions")+":"+containerActionsDir+":ro",
+		"-v", filepath.Join(e.cfg.WorkRoot, "_node")+":"+containerNodeRoot+":ro",
+		"-v", cacheDir(e.cfg.WorkRoot)+":"+containerCacheDir,
+		"-v", filepath.Join(workRoot, "home")+":"+containerActionHome,
+		"-e", "KERN_CACHE_DIR="+containerCacheDir,
 		// setup-* actions resolve @actions/tool-cache via RUNNER_TOOL_CACHE;
 		// pointing it at the persistent runner cache makes installed SDKs warm.
-		"-e", "RUNNER_TOOL_CACHE=" + containerCacheDir + "/_toolcache",
+		"-e", "RUNNER_TOOL_CACHE="+containerCacheDir+"/_toolcache",
 		"-e", "RUNNER_TEMP=/tmp",
 		// Actions resolve $HOME for tool state (setup-go GOPATH, npm config);
 		// images may carry no writable home for uid 1000 at all.
-		"-e", "HOME=" + containerActionHome,
-		"-e", "GITHUB_WORKSPACE=" + containerWorkspace,
-		"-e", "GITHUB_REPOSITORY=" + defaultStr(e.claim.Run.RepoFullName, e.claim.Run.Project),
-		"-e", "GITHUB_SHA=" + e.claim.Run.SHA,
-		"-e", "GITHUB_REF=" + e.claim.Run.Ref,
-		"-e", "GITHUB_RUN_ID=" + e.claim.Run.ID,
-		"-e", "GITHUB_RUN_NUMBER=" + itoa(e.claim.Run.Number),
-		"-e", "GITHUB_JOB=" + e.claim.Job.Key,
+		"-e", "HOME="+containerActionHome,
+		"-e", "GITHUB_WORKSPACE="+containerWorkspace,
+		"-e", "GITHUB_REPOSITORY="+defaultStr(e.claim.Run.RepoFullName, e.claim.Run.Project),
+		"-e", "GITHUB_SHA="+e.claim.Run.SHA,
+		"-e", "GITHUB_REF="+e.claim.Run.Ref,
+		"-e", "GITHUB_RUN_ID="+e.claim.Run.ID,
+		"-e", "GITHUB_RUN_NUMBER="+itoa(e.claim.Run.Number),
+		"-e", "GITHUB_JOB="+e.claim.Job.Key,
 		"-e", "KERN=true", "-e", "CI=true",
 		// The workspace is cloned by the runner (uid 0) but steps run as
 		// jobUID — tell git the tree is safe so VCS stamping works.
@@ -241,7 +250,7 @@ func (e *executor) startContainer(ctx context.Context) error {
 		"-e", "GIT_CONFIG_VALUE_0=*",
 		"--entrypoint", "/bin/sh",
 		e.claim.Job.Image, "-c", "while true; do sleep 30; done",
-	}
+	)
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -375,6 +384,7 @@ func (e *executor) cleanup() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	_ = exec.CommandContext(ctx, "docker", "rm", "-f", e.container).Run()
+	e.stopServices(ctx)
 	_ = os.RemoveAll(e.workRoot())
 }
 

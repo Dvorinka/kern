@@ -39,7 +39,7 @@ never silently ignored.
 | `concurrency.group` | done | serialises runs per project+group |
 | `concurrency.cancel-in-progress` | done | newer queued run cancels the older in-group run |
 | `container` (job image) | partial | `image` only, string or `container.image`; other options warn and are ignored |
-| `services` | no | compile error `services` |
+| `services` | partial | service containers run on a per-job docker network where the service name resolves as a DNS alias (`pg:5432`), matching GitHub's container-job access model; `image`/`env` honoured, `--health-*` `options` passed to docker with a 2-minute healthy wait; `credentials`/`ports`/`volumes` and non-health options warn and are ignored; service logs are not streamed into the job |
 | `environment` / approvals | partial | `environment: name` or `{name, url}` compiles and is created on first use. A protected environment can require N distinct approvals, a named reviewer list (empty = any org member; owners and admins bypass the list), a wait of up to 43200 minutes, and a branch policy of `all` or selected name patterns (`*` does not match `/`). The job parks in `waiting_approval` until the approvals are in and the wait has elapsed. A ref outside the pattern fails the job. No GitHub-style "protected branches only" mode, because KERN has no branch-protection source |
 | `permissions` | partial | recorded, not enforced |
 

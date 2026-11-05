@@ -166,8 +166,12 @@ func compile(content string, c Compiler, depth int, calls *int, deps map[string]
 				d.errorf("job-container", "jobs."+id+".container", "container must be an image string or a mapping")
 			}
 		}
-		if len(job.Services) > 0 {
-			d.errorf("services", "jobs."+id+".services", "service containers are not implemented by KERN yet")
+		for name, raw := range job.Services {
+			if err := validateService(name, raw); err != nil {
+				d.errorf("services", "jobs."+id+".services."+name, err.Error())
+				continue
+			}
+			serviceWarnings(d, "jobs."+id+".services."+name, raw.(map[string]any))
 		}
 		if job.Environment != nil {
 			switch env := job.Environment.(type) {
@@ -268,6 +272,12 @@ func compile(content string, c Compiler, depth int, calls *int, deps map[string]
 			if err != nil {
 				d.errorf("compile", "jobs."+id, err.Error())
 				continue
+			}
+			for name, raw := range job.Services {
+				if err := validateService(name, raw); err == nil {
+					jp.Services = append(jp.Services,
+						compileService(d, "jobs."+id+".services."+name, name, raw))
+				}
 			}
 			plan.Jobs = append(plan.Jobs, jp)
 		}
