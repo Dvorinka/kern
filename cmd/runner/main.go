@@ -51,6 +51,10 @@ Environment only:
   KERN_ACTIONS_GIT_BASE     git base URL for remote actions (default: the run's
                             repo host, or https://github.com)
   KERN_JOB_CPUS / KERN_JOB_MEMORY   per-job container limits (unset CPUs share the host)
+  KERN_RUNNER_UPDATE=1      replace this container when the control plane
+                            offers a signed ghcr.io/dvorinka/kern-runner image.
+                            Leave unset on the compose runner; the host updater
+                            rebuilds that one.
 
 join flags:
   --env-file path       credential file destination (default ~/.config/kern-runner/env)
@@ -228,6 +232,7 @@ func agentConfig(o options) runner.Config {
 		JobCPUs:        cpus,
 		JobMemory:      os.Getenv("KERN_JOB_MEMORY"),
 		ActionsGitBase: os.Getenv("KERN_ACTIONS_GIT_BASE"),
+		SelfUpdate:     os.Getenv("KERN_RUNNER_UPDATE") == "1",
 		LeaseDuration:  90 * time.Second,
 	}
 	if v := os.Getenv("KERN_RUNNER_LOAD_GATE"); v != "" {

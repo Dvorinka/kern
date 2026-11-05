@@ -101,12 +101,11 @@ never silently ignored.
 - `KERN_ACTIONS_GIT_BASE` overrides the git host remote `uses: owner/repo@ref` actions are fetched from (default: the run's repo host, else `https://github.com`). Fetches are anonymous https/git only — private action repositories are not supported yet.
 - JavaScript actions need a Node runtime the runner downloads once from `nodejs.org` into `<work-root>/_node/<release>` (checksum-verified, `.complete`-marked) and mounts read-only at `/kern/node`. Air-gapped runners can pre-seed that directory with any `node-v<release>-linux-<arch>` dist.
 - Step logs flush to the control plane every second or at 256 KiB buffered, whichever comes first.
+- Org setting `auto_update` (default `off`) applies a signed GitHub release. The API writes nothing into its own container: a compose profile `update` sidecar fast-forwards `master` and rebuilds `api` plus the compose runner. Runners with `KERN_RUNNER_UPDATE=1` pull `ghcr.io/dvorinka/kern-runner` at the manifest digest and replace their own container, one at a time. Unsigned releases and a `dev` version stamp are shown and not applied. See `docs/deploy.md`.
 
 ## Not implemented (tracked)
 
 - JavaScript action `pre:`/`post:` and docker action `pre-entrypoint:`/`post-entrypoint:` lifecycles (M5)
-- Reusable workflows `jobs.<id>.uses` (M5)
-- Service containers; job `container` options beyond `image` (M5)
 - Cache paths outside the workspace; cache size quotas; `upload-chunk-size` and other action tuning inputs
 - OIDC; deployment branch policy "protected branches only" (no branch-protection source)
 - Some string functions, arithmetic operators, object filters `a.*`

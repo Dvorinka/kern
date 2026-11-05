@@ -66,14 +66,84 @@ jobs:
           context: .
           file: deployments/api.Dockerfile
           push: true
+          build-args: VERSION=${{ github.ref_name }}
           tags: |
             ghcr.io/dvorinka/kern-api:${{ github.ref_name }}
             ghcr.io/dvorinka/kern-api:latest
-      - uses: docker/build-push-action@v6
+      - id: runner
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: deployments/runner.Dockerfile
           push: true
+          build-args: VERSION=${{ github.ref_name }}
           tags: |
             ghcr.io/dvorinka/kern-runner:${{ github.ref_name }}
             ghcr.io/dvorinka/kern-runner:latest
+    outputs:
+      runner_digest: ${{ steps.runner.outputs.digest }}
+  manifest:
+    needs: [release, images]
+    runs-on: [self-hosted, linux, x64]
+    steps:
+      - name: sign update manifest
+        env:
+          KEY: ${{ secrets.KERN_UPDATE_SIGNING_KEY }}
+          TAG: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          DIGEST: ${{ needs.images.outputs.runner_digest }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          if [ -z "$KEY" ]; then
+            echo "KERN_UPDATE_SIGNING_KEY is unset; this release has no signed manifest"
+            exit 0
+          fi
+          case "$DIGEST" in
+            sha256:[0-9a-f]*) ;;
+            *) echo "runner image digest missing" >&2; exit 1 ;;
+          esac
+          python3 - <<'PY'
+          import json, os
+          doc = {
+              "version": os.environ["TAG"],
+              "git_sha": os.environ["SHA"],
+              "runner_image": "ghcr.io/dvorinka/kern-runner",
+              "runner_digest": os.environ["DIGEST"],
+          }
+          with open("kern-update.json", "wb") as f:
+              f.write(json.dumps(doc, separators=(",", ":")).encode())
+          PY
+          umask 077
+          key=$(mktemp)
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$KEY" > "$key"
+          openssl pkeyutl -sign -rawin -inkey "$key" \
+            -in kern-update.json -out kern-update.json.sig
+          rm -f "$key"
+          rel=$(curl -fsS \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${REPO}/releases/tags/${TAG}")
+          id=$(printf '%s' "$rel" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+          upload() {
+            name=$1
+            file=$2
+            ctype=$3
+            code=$(curl -sS -o /tmp/kern-upload.json -w '%{http_code}' \
+              -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Content-Type: $ctype" \
+              -H "Accept: application/vnd.github+json" \
+              --data-binary @"$file" \
+              "https://uploads.github.com/repos/${REPO}/releases/${id}/assets?name=${name}")
+            if [ "$code" = "201" ]; then
+              return 0
+            fi
+            echo "upload $name returned $code" >&2
+            cat /tmp/kern-upload.json >&2
+            return 1
+          }
+          upload kern-update.json kern-update.json application/json
+          upload kern-update.json.sig kern-update.json.sig application/octet-stream

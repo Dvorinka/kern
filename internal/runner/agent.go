@@ -15,9 +15,9 @@ import (
 	"time"
 
 	"go.uber.org/zap"
-)
 
-const Version = "0.1.0"
+	"github.com/dvorinka/kern/internal/version"
+)
 
 type Config struct {
 	ControlURL    string
@@ -39,16 +39,22 @@ type Config struct {
 	// (KERN_ACTIONS_GIT_BASE) — for GHES installs or action mirrors. Empty
 	// derives the host from the run's repo URL, else github.com.
 	ActionsGitBase string
+	// SelfUpdate replaces this container when the control plane offers a
+	// signed runner image (KERN_RUNNER_UPDATE=1). The compose runner on the
+	// control-plane host leaves it unset; the host updater rebuilds that one.
+	SelfUpdate bool
 }
 
 type Agent struct {
-	cfg     Config
-	log     *zap.Logger
-	c       *client
-	id      string
-	token   string
-	sampler hostSampler
-	active  atomic.Int32
+	cfg        Config
+	log        *zap.Logger
+	c          *client
+	id         string
+	token      string
+	sampler    hostSampler
+	active     atomic.Int32
+	updating   atomic.Bool
+	nextUpdate atomic.Int64
 }
 
 func New(cfg Config, log *zap.Logger) *Agent {
@@ -79,7 +85,7 @@ func (a *Agent) Register(ctx context.Context) error {
 		"memory_bytes": totalMemory(),
 		"disk_bytes":   totalDisk(a.cfg.WorkRoot),
 		"labels":       a.labels(),
-		"version":      Version,
+		"version":      version.Version,
 	}
 	runnerID, token, err := a.c.register(ctx, req)
 	if err != nil {
@@ -172,7 +178,9 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			hctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			err := a.c.heartbeat(hctx, a.sampler.sample(a.cfg.WorkRoot, int(a.active.Load())))
+			sample := a.sampler.sample(a.cfg.WorkRoot, int(a.active.Load()))
+			sample.SelfUpdate = a.cfg.SelfUpdate
+			resp, err := a.c.heartbeat(hctx, sample)
 			cancel()
 			if err != nil {
 				failures++
@@ -182,7 +190,28 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 				continue
 			}
 			failures = 0
+			if resp.Update != nil && a.cfg.SelfUpdate && !a.updating.Load() {
+				go a.maybeSelfUpdate(ctx, resp.Update.Image, resp.Update.Version)
+			}
 		}
+	}
+}
+
+func (a *Agent) maybeSelfUpdate(ctx context.Context, image, ver string) {
+	if image == "" || time.Now().Unix() < a.nextUpdate.Load() {
+		return
+	}
+	if !a.updating.CompareAndSwap(false, true) {
+		return
+	}
+	defer a.updating.Store(false)
+	a.log.Info("runner self-update", zap.String("version", ver), zap.String("image", image))
+	uctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	err := applySelfUpdate(uctx, image, func() bool { return a.active.Load() != 0 })
+	if err != nil {
+		a.log.Warn("self-update failed", zap.Error(err))
+		a.nextUpdate.Store(time.Now().Add(selfUpdateHold).Unix())
 	}
 }
 
@@ -193,6 +222,10 @@ func (a *Agent) workerLoop(ctx context.Context, n int) {
 		case <-ctx.Done():
 			return
 		default:
+		}
+		if a.updating.Load() {
+			sleepCtx(ctx, time.Second)
+			continue
 		}
 		if a.overLoaded() {
 			sleepCtx(ctx, 5*time.Second)

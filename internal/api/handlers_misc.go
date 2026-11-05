@@ -192,9 +192,10 @@ func (s *Server) getOrgSettings(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"settings":  raw,
-		"self_heal": settingsValue(raw, "self_heal", "off"),
-		"public_ci": settingsValue(raw, "public_ci", "off"),
+		"settings":    raw,
+		"self_heal":   settingsValue(raw, "self_heal", "off"),
+		"public_ci":   settingsValue(raw, "public_ci", "off"),
+		"auto_update": settingsValue(raw, "auto_update", "off"),
 	})
 }
 
@@ -206,13 +207,14 @@ type settingsRequest struct {
 // orgSettingsRequest accepts either key. A self_heal-only body, which the
 // runners page sends, must keep working.
 type orgSettingsRequest struct {
-	SelfHeal *string `json:"self_heal"`
-	PublicCI *string `json:"public_ci"`
+	SelfHeal   *string `json:"self_heal"`
+	PublicCI   *string `json:"public_ci"`
+	AutoUpdate *string `json:"auto_update"`
 }
 
-func orgSettingWrites(selfHeal, publicCI *string) (map[string]string, string) {
-	if selfHeal == nil && publicCI == nil {
-		return nil, "self_heal or public_ci is required"
+func orgSettingWrites(selfHeal, publicCI, autoUpdate *string) (map[string]string, string) {
+	if selfHeal == nil && publicCI == nil && autoUpdate == nil {
+		return nil, "self_heal, public_ci or auto_update is required"
 	}
 	out := map[string]string{}
 	if selfHeal != nil {
@@ -227,6 +229,12 @@ func orgSettingWrites(selfHeal, publicCI *string) (map[string]string, string) {
 		}
 		out["public_ci"] = *publicCI
 	}
+	if autoUpdate != nil {
+		if *autoUpdate != "on" && *autoUpdate != "off" {
+			return nil, "auto_update must be on or off"
+		}
+		out["auto_update"] = *autoUpdate
+	}
 	return out, ""
 }
 
@@ -234,10 +242,10 @@ func (s *Server) putOrgSettings(c *gin.Context) {
 	user, _ := currentUser(c)
 	var req orgSettingsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		fail(c, http.StatusBadRequest, "invalid_body", "self_heal or public_ci is required")
+		fail(c, http.StatusBadRequest, "invalid_body", "self_heal, public_ci or auto_update is required")
 		return
 	}
-	writes, msg := orgSettingWrites(req.SelfHeal, req.PublicCI)
+	writes, msg := orgSettingWrites(req.SelfHeal, req.PublicCI, req.AutoUpdate)
 	if msg != "" {
 		fail(c, http.StatusBadRequest, "invalid_body", msg)
 		return

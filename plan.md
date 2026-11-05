@@ -81,6 +81,8 @@ later, step and job outputs, file commands (`GITHUB_ENV`, `GITHUB_OUTPUT`, `GITH
 `GITHUB_STEP_SUMMARY`), annotations, masking.
 
 Done since: composite actions (local + remote), JavaScript actions (`node*` → pinned Node 20), Docker actions (`docker://` + Dockerfile), reusable workflows (`jobs.<id>.uses`, inputs/outputs/boundary job), service containers (per-job network + health waits). Not yet: JS/Docker action lifecycle hooks, caller `strategy`/`concurrency`/secrets-maps, OIDC.
+
+Operator updates: org setting `auto_update` (`off`|`on`, default off). A release is applied only when it carries `kern-update.json` signed by the compiled-in ed25519 key. The API does not replace its own container. Compose profile `update` runs `deployments/kern-updater.sh`, which fast-forwards `master` and rebuilds the API and the compose runner. Runners with `KERN_RUNNER_UPDATE=1` pull the manifest's GHCR digest and replace themselves, one at a time. A `dev` stamp and an unsigned release are not applied.
 Environment protection is implemented: approvals, a reviewer list, a wait, and selected branch patterns (see `docs/compatibility.md`);
 artifact and cache actions are partial. Each unsupported construct produces an explicit
 diagnostic; it is never silently ignored.

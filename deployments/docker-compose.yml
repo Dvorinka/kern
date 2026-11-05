@@ -85,6 +85,27 @@ services:
       # root must be the same path inside and outside this container.
       - ${KERN_RUNNER_WORK:-/opt/kern/work}:/opt/kern/work
 
+  # The API cannot replace its own container. This sidecar is started with
+  # the compose profile "update" and is the process that recreates api and
+  # the compose runner. `up --no-deps api runner` does not include it.
+  updater:
+    profiles: ["update"]
+    image: docker:27.5.1-cli
+    entrypoint: ["/bin/sh", "/opt/kern/src/deployments/kern-updater.sh"]
+    environment:
+      KERN_RUNNER_JOIN_TOKEN: ${KERN_RUNNER_JOIN_TOKEN:?set KERN_RUNNER_JOIN_TOKEN}
+      KERN_API_URL: http://api:8080
+      KERN_SRC: /opt/kern/src
+      KERN_ENV_FILE: /opt/kern/.env
+      KERN_RELEASE_REPO: ${KERN_RELEASE_REPO:-Dvorinka/kern}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${KERN_SRC:-/opt/kern/src}:/opt/kern/src
+      - ${KERN_ENV_FILE:-/opt/kern/.env}:/opt/kern/.env:ro
+    depends_on:
+      - api
+    restart: unless-stopped
+
 volumes:
   kern-db:
   kern-blobs:

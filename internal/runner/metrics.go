@@ -15,6 +15,7 @@ type heartbeatMetrics struct {
 	MemUsedBytes  *int64   `json:"mem_used_bytes,omitempty"`
 	DiskFreeBytes *int64   `json:"disk_free_bytes,omitempty"`
 	ActiveJobs    int      `json:"active_jobs"`
+	SelfUpdate    bool     `json:"self_update,omitempty"`
 }
 
 // hostSampler derives utilization from /proc and statfs. CPU is a delta

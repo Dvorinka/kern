@@ -176,8 +176,17 @@ func (c *client) register(ctx context.Context, req map[string]any) (runnerID, to
 	return out.RunnerID, out.Token, nil
 }
 
-func (c *client) heartbeat(ctx context.Context, m heartbeatMetrics) error {
-	return c.do(ctx, http.MethodPost, "/api/v1/runners/heartbeat", m, nil)
+type heartbeatResponse struct {
+	Update *struct {
+		Version string `json:"version"`
+		Image   string `json:"image"`
+	} `json:"update"`
+}
+
+func (c *client) heartbeat(ctx context.Context, m heartbeatMetrics) (heartbeatResponse, error) {
+	var out heartbeatResponse
+	err := c.do(ctx, http.MethodPost, "/api/v1/runners/heartbeat", m, &out)
+	return out, err
 }
 
 func (c *client) claim(ctx context.Context, wait int) (*Claim, error) {

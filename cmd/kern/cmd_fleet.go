@@ -205,9 +205,10 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 	switch args[0] {
 	case "get":
 		var out struct {
-			SelfHeal string `json:"self_heal"`
-			PublicCI string `json:"public_ci"`
-			ForkGate string `json:"fork_gate"`
+			SelfHeal   string `json:"self_heal"`
+			PublicCI   string `json:"public_ci"`
+			AutoUpdate string `json:"auto_update"`
+			ForkGate   string `json:"fork_gate"`
 		}
 		if err := c.api().get(ctx, path, nil, &out); err != nil {
 			return err
@@ -222,6 +223,11 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 					v = "off"
 				}
 				fmt.Println("public_ci:", v)
+				v = out.AutoUpdate
+				if v == "" {
+					v = "off"
+				}
+				fmt.Println("auto_update:", v)
 			} else {
 				v := out.ForkGate
 				if v == "" {
@@ -232,7 +238,7 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 		}
 	case "set":
 		if len(pos) < 2 {
-			return fmt.Errorf("usage: kern settings set self_heal off|auto|approve [--project S] | public_ci on|off | fork_gate off|all|first-time --project S")
+			return fmt.Errorf("usage: kern settings set self_heal off|auto|approve [--project S] | public_ci on|off | auto_update on|off | fork_gate off|all|first-time --project S")
 		}
 		body := map[string]any{}
 		switch pos[0] {
@@ -246,6 +252,14 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 				return fmt.Errorf("usage: kern settings set public_ci on|off")
 			}
 			body["public_ci"] = pos[1]
+		case "auto_update":
+			if path != "/settings" {
+				return fmt.Errorf("auto_update is an org setting")
+			}
+			if pos[1] != "on" && pos[1] != "off" {
+				return fmt.Errorf("usage: kern settings set auto_update on|off")
+			}
+			body["auto_update"] = pos[1]
 		case "fork_gate":
 			if path == "/settings" {
 				return fmt.Errorf("fork_gate is a project setting — pass --project S")
@@ -257,7 +271,7 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 			}
 			body["fork_gate"] = pos[1]
 		default:
-			return fmt.Errorf("usage: kern settings set self_heal off|auto|approve [--project S] | public_ci on|off | fork_gate off|all|first-time --project S")
+			return fmt.Errorf("usage: kern settings set self_heal off|auto|approve [--project S] | public_ci on|off | auto_update on|off | fork_gate off|all|first-time --project S")
 		}
 		var out map[string]string
 		if err := c.api().put(ctx, path, body, &out); err != nil {
