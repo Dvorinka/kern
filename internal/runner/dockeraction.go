@@ -6,10 +6,9 @@ package runner
 // hardening as job containers (dropped caps, no-new-privileges, read-only
 // root, resource limits) plus mounts for the workspace, the file-command dir
 // and a writable home. Logs stream to the step; GITHUB_* file commands flow
-// through the shared /github/cmd mount.
-//
-// ponytail: pre-entrypoint/post-entrypoint are ignored (logged once); upgrade
-// when a docker action needs them.
+// through the shared /github/cmd mount. Lifecycle hooks
+// (pre-entrypoint/post-entrypoint) run as fresh containers of the same image
+// at job setup and job end — see lifecycle.go.
 
 import (
 	"context"
@@ -53,36 +52,34 @@ func (e *executor) runDockerRef(ctx context.Context, step StepSpec) (string, int
 	return outcome, code
 }
 
-// runDockerAction handles runs.using: docker actions: build a Dockerfile in
-// the action directory or pull the named image, then run it with the
-// action's entrypoint/args contract.
-func (e *executor) runDockerAction(ctx context.Context, step StepSpec, meta *actions.Meta, hostDir, actionPath string, evalCtx map[string]any) (string, int) {
-	if meta.Runs.PreEntrypoint != "" || meta.Runs.PostEntrypoint != "" {
-		e.logStep(step, "KERN: warning: pre/post-entrypoint are not executed yet")
-	}
+// resolveDockerImage prepares the image for a runs.using: docker action —
+// building a Dockerfile in the action directory or pulling a named image.
+// Builds are deterministic per job+step so a post hook resolves the same tag.
+func (e *executor) resolveDockerImage(ctx context.Context, step StepSpec, meta *actions.Meta, hostDir string) (string, error) {
 	image := strings.TrimSpace(meta.Runs.Image)
-	var err error
 	switch {
 	case image == "":
-		e.logStep(step, "KERN: "+step.Uses+" declares runs.using: docker without runs.image")
-		return "failure", 1
+		return "", fmt.Errorf("%s declares runs.using: docker without runs.image", step.Uses)
 	case strings.EqualFold(image, "Dockerfile"):
 		tag := fmt.Sprintf("kern-action-%s-%d", sanitizeID(e.claim.Job.ID), step.Number)
-		if err = e.docker(ctx, "build", "-q", "-t", tag, hostDir); err != nil {
-			e.logStep(step, "KERN: docker build "+hostDir+": "+err.Error())
-			return "failure", 1
+		if err := e.docker(ctx, "build", "-q", "-t", tag, hostDir); err != nil {
+			return "", fmt.Errorf("docker build %s: %s", hostDir, err)
 		}
-		image = tag
+		return tag, nil
 	case !imageRe.MatchString(image):
-		e.logStep(step, "KERN: invalid runs.image "+image)
-		return "failure", 1
+		return "", fmt.Errorf("invalid runs.image %s", image)
 	default:
-		if err = e.docker(ctx, "pull", "-q", image); err != nil {
-			e.logStep(step, "KERN: docker pull "+image+": "+err.Error())
-			return "failure", 1
+		if err := e.docker(ctx, "pull", "-q", image); err != nil {
+			return "", fmt.Errorf("docker pull %s: %s", image, err)
 		}
 		recordImageUse(e.cfg.WorkRoot, image)
+		return image, nil
 	}
+}
+
+// dockerActionEnv builds the env shared by an action's pre/main/post runs:
+// step env, GITHUB_ACTION_PATH, INPUT_*, runs.env and saved STATE_* values.
+func (e *executor) dockerActionEnv(step StepSpec, meta *actions.Meta, actionPath string, state map[string]string) map[string]string {
 	env := map[string]string{}
 	for k, v := range step.Env {
 		env[k] = v
@@ -94,6 +91,25 @@ func (e *executor) runDockerAction(ctx context.Context, step StepSpec, meta *act
 	for k, v := range meta.Runs.Env {
 		env[k] = envString(v)
 	}
+	for k, v := range state {
+		env["STATE_"+k] = v
+	}
+	return env
+}
+
+// runDockerAction handles runs.using: docker actions: build a Dockerfile in
+// the action directory or pull the named image, then run it with the
+// action's entrypoint/args contract.
+func (e *executor) runDockerAction(ctx context.Context, step StepSpec, meta *actions.Meta, hostDir, actionPath string, evalCtx map[string]any) (string, int) {
+	image, err := e.resolveDockerImage(ctx, step, meta, hostDir)
+	if err != nil {
+		e.logStep(step, "KERN: "+err.Error())
+		return "failure", 1
+	}
+	if !e.runNestedPre(ctx, step, meta, actionPath, hostDir) {
+		return "failure", 1
+	}
+	env := e.dockerActionEnv(step, meta, actionPath, nil)
 	inputs, _, ierr := resolveInputs(meta, step.With)
 	if ierr != nil {
 		e.logStep(step, "KERN: "+ierr.Error())
@@ -112,7 +128,12 @@ func (e *executor) runDockerAction(ctx context.Context, step StepSpec, meta *act
 	if a := withString(step, "args", ""); a != "" {
 		args = append(args, strings.Fields(a)...)
 	}
-	return e.dockerActionRun(ctx, step, image, meta.Runs.Entrypoint, args, env)
+	h := e.armPostHook(step, meta, actionPath, hostDir)
+	outcome, code := e.dockerActionRun(ctx, step, image, meta.Runs.Entrypoint, args, env)
+	if h != nil {
+		mergeState(h, e.drainState())
+	}
+	return outcome, code
 }
 
 // dockerActionRun starts the action image with job-container hardening and
@@ -157,6 +178,7 @@ func (e *executor) dockerActionRun(ctx context.Context, step StepSpec, image, en
 		"-e", "GITHUB_PATH=" + containerCmdDir + "/PATH_LINES",
 		"-e", "GITHUB_OUTPUT=" + containerCmdDir + "/GITHUB_OUTPUT",
 		"-e", "GITHUB_STEP_SUMMARY=" + containerCmdDir + "/STEP_SUMMARY",
+		"-e", "GITHUB_STATE=" + containerCmdDir + "/GITHUB_STATE",
 		"-e", "RUNNER_TOOL_CACHE=" + containerCacheDir + "/_toolcache",
 		"-e", "RUNNER_TEMP=/tmp",
 		"-e", "GIT_CONFIG_COUNT=1",

@@ -84,6 +84,11 @@ type executor struct {
 	sumBuf     bytes.Buffer      // composite sub-step summaries, folded into the parent step
 	actionDirs map[string]string // remote actions fetched this job, keyed by owner__repo__ref
 	exprCtx    map[string]any    // composite sub-step interpolation context; nil = runnerContext()
+
+	postHooks []*actionHook          // post stack: armed lazily, popped LIFO
+	postByKey map[string]*actionHook // dedup between pre-time and main-time arms
+	preDone   map[string]bool        // top-level uses-steps whose pre phase was decided
+	preFailed map[int]string         // step number -> setup/pre failure; main never runs
 }
 
 type stepOutcome struct {
@@ -118,7 +123,7 @@ func newJobExecutor(cfg Config, c *client, claim *Claim, secrets map[string]stri
 	// File-command targets exist before any step runs so non-shell executors
 	// (JavaScript and Docker actions) find them already present; containers
 	// run as uid 1000 so the files must be world-writable.
-	for _, f := range []string{"GITHUB_ENV", "PATH_LINES", "GITHUB_OUTPUT", "STEP_SUMMARY"} {
+	for _, f := range []string{"GITHUB_ENV", "PATH_LINES", "GITHUB_OUTPUT", "STEP_SUMMARY", "GITHUB_STATE"} {
 		p := filepath.Join(workRoot, "cmd", f)
 		_ = os.WriteFile(p, nil, 0o666)
 		_ = os.Chmod(p, 0o666)

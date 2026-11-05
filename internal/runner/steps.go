@@ -37,6 +37,15 @@ func (e *executor) runStep(ctx context.Context, step StepSpec) (string, error) {
 		return "skipped", nil
 	}
 
+	if msg := e.preFailed[step.Number]; msg != "" {
+		// Action resolution or its pre hook already failed at job setup — the
+		// step fails without running main, like a failed GitHub prepare.
+		e.logStep(step, "KERN: "+msg)
+		e.recordStep(step, "failure", "failure", nil)
+		_ = e.c.finishStep(context.Background(), e.jobID, step.Number, "failure", 1, nil)
+		return "failure", nil
+	}
+
 	// Operator-approved remediation for a requeued job runs before the step.
 	if fix := e.claim.Remediations[strconv.Itoa(step.Number)]; len(fix) > 0 {
 		e.logStep(step, "KERN: applying approved remediation")
@@ -160,7 +169,7 @@ func (e *executor) runStepBody(ctx context.Context, step StepSpec) (string, int,
 	// different uid than the runner host. PATH_LINES is repopulated with the
 	// accumulated additions rather than emptied, since it is the only channel
 	// the wrapper script has for prepending them.
-	for _, f := range []string{"GITHUB_ENV", "GITHUB_OUTPUT", "STEP_SUMMARY"} {
+	for _, f := range []string{"GITHUB_ENV", "GITHUB_OUTPUT", "STEP_SUMMARY", "GITHUB_STATE"} {
 		p := filepath.Join(e.cmdDir(), f)
 		_ = os.Remove(p)
 		_ = os.WriteFile(p, nil, 0o666)
@@ -310,6 +319,7 @@ func (e *executor) renderScript(step StepSpec) (string, error) {
 		"export GITHUB_PATH=" + containerCmdDir + "/PATH_LINES\n" +
 		"export GITHUB_OUTPUT=" + containerCmdDir + "/GITHUB_OUTPUT\n" +
 		"export GITHUB_STEP_SUMMARY=" + containerCmdDir + "/STEP_SUMMARY\n" +
+		"export GITHUB_STATE=" + containerCmdDir + "/GITHUB_STATE\n" +
 		"cd " + shellQuote(containerWorkspace) + "\n"
 	if wd := strings.TrimSpace(step.WorkingDirectory); wd != "" {
 		wrapper += "cd " + shellQuote(wd) + "\n"
