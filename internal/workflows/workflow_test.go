@@ -237,3 +237,79 @@ jobs:
 		t.Errorf("diagnostics: %s", diagnosticText(res))
 	}
 }
+
+func TestSplitRecordedNotExpanded(t *testing.T) {
+	src := `on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      split: 4
+    steps:
+      - run: echo ${{ matrix.shard }}
+`
+	res, err := Compile(src, testCompiler)
+	if err != nil || !res.Valid {
+		t.Fatalf("compile: %v %+v", err, res.Diagnostics)
+	}
+	if len(res.Plan.Jobs) != 1 {
+		t.Fatalf("jobs = %d, want 1 (expansion is at run start)", len(res.Plan.Jobs))
+	}
+	job := res.Plan.Jobs[0]
+	if job.SplitN != 4 || job.SplitAuto || job.Env["KERN_SHARD"] != "" {
+		t.Fatalf("split flags = %d auto=%v env=%v", job.SplitN, job.SplitAuto, job.Env)
+	}
+
+	res, err = Compile("on: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n    strategy:\n      split: auto\n    steps:\n      - run: echo\n", testCompiler)
+	if err != nil || !res.Valid || !res.Plan.Jobs[0].SplitAuto || res.Plan.Jobs[0].SplitN != 0 {
+		t.Fatalf("auto: %v valid=%v job=%+v", err, res.Valid, res.Plan.Jobs)
+	}
+
+	res, err = Compile(`on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      split: 3
+      matrix:
+        go: ["1.23", "1.24"]
+    steps:
+      - run: echo
+`, testCompiler)
+	if err != nil || !res.Valid || len(res.Plan.Jobs) != 2 {
+		t.Fatalf("matrix+split: %v valid=%v jobs=%d diags=%+v", err, res.Valid, len(res.Plan.Jobs), res.Diagnostics)
+	}
+	for _, j := range res.Plan.Jobs {
+		if j.SplitN != 3 {
+			t.Errorf("job %s split = %d", j.Key, j.SplitN)
+		}
+	}
+}
+
+func TestSplitRejected(t *testing.T) {
+	bad := []string{
+		"on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    strategy:\n      split: 0\n    steps:\n      - run: echo\n",
+		"on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    strategy:\n      split: 33\n    steps:\n      - run: echo\n",
+		"on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    strategy:\n      split: no\n    steps:\n      - run: echo\n",
+		"on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    strategy:\n      split: [1, 2]\n    steps:\n      - run: echo\n",
+		"on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    strategy:\n      split: \"4\"\n    steps:\n      - run: echo\n",
+	}
+	for _, src := range bad {
+		res, err := Compile(src, testCompiler)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Valid || !strings.Contains(diagnosticText(res), "strategy.split") {
+			t.Fatalf("expected yaml rejection, got %s", diagnosticText(res))
+		}
+	}
+
+	res, _ := Compile("on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    environment: prod\n    strategy:\n      split: 2\n    steps:\n      - run: echo\n", testCompiler)
+	if res.Valid || !strings.Contains(diagnosticText(res), "environment") {
+		t.Fatalf("split+environment: %s", diagnosticText(res))
+	}
+	res, _ = Compile("on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    strategy:\n      split: 2\n      matrix:\n        shard: [1, 2]\n    steps:\n      - run: echo\n", testCompiler)
+	if res.Valid || !strings.Contains(diagnosticText(res), "shard") {
+		t.Fatalf("split+shard axis: %s", diagnosticText(res))
+	}
+}

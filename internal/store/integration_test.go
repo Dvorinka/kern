@@ -457,3 +457,64 @@ func TestEnvironmentRules(t *testing.T) {
 		t.Fatalf("job after wait = %s, want queued", j.Status)
 	}
 }
+
+func TestFleetSlots(t *testing.T) {
+	s, ctx := testStore(t)
+	org, err := s.FirstOrg(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := func(name string, cpus int, labels []string) {
+		t.Helper()
+		if _, err := s.RegisterRunner(ctx, RegisterRunnerParams{
+			OrgID: org.ID, Name: name, Hostname: name, OS: "linux", Arch: "amd64",
+			CPUs: cpus, Labels: labels, TokenHash: "h-" + name,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reg("a", 4, []string{"ubuntu-latest"})
+	reg("b", 2, []string{"ubuntu-latest", "linux"})
+	reg("c", 8, []string{"linux"})
+	reg("zero", 0, []string{"ubuntu-latest"})
+	reg("drain", 16, []string{"ubuntu-latest"})
+	reg("off", 32, []string{"ubuntu-latest"})
+	listed, err := s.Runners(ctx, org.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range listed {
+		if r.Name == "drain" {
+			if err := s.SetRunnerDraining(ctx, org.ID, r.ID, true); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE runners SET status = 'offline' WHERE name = 'off'`); err != nil {
+		t.Fatal(err)
+	}
+
+	got := func(labels []string) int {
+		t.Helper()
+		n, err := s.FleetSlots(ctx, org.ID, labels)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if n := got([]string{"ubuntu-latest"}); n != 7 { // 4 + 2 + zero-as-1
+		t.Fatalf("ubuntu-latest slots = %d, want 7", n)
+	}
+	if n := got([]string{"linux"}); n != 10 {
+		t.Fatalf("linux slots = %d, want 10", n)
+	}
+	if n := got([]string{"ubuntu-latest", "linux"}); n != 2 {
+		t.Fatalf("both labels slots = %d, want 2", n)
+	}
+	if n := got(nil); n != 15 { // empty runs-on matches every online runner
+		t.Fatalf("empty runs-on slots = %d, want 15", n)
+	}
+	if n := got([]string{"gpu"}); n != 0 {
+		t.Fatalf("gpu slots = %d, want 0", n)
+	}
+}

@@ -26,9 +26,13 @@ Copy `.env.example` to `/opt/kern/.env` and fill in:
 - `KERN_BOOTSTRAP_EMAIL` / `KERN_BOOTSTRAP_PASSWORD` — first admin login.
 - `KERN_GITHUB_APP_ID`, `KERN_GITHUB_APP_PRIVATE_KEY_FILE`,
   `KERN_GITHUB_WEBHOOK_SECRET` — see section 3.
-- Optional: `KERN_RUNNER_CONCURRENCY` (jobs in parallel on this runner),
-  `KERN_RUNNER_LOAD_GATE` (pause claiming above n×CPU load), `KERN_JOB_CPUS`,
-  `KERN_JOB_MEMORY`, `KERN_LOG_RETENTION`, `KERN_CACHE_MAX_AGE`.
+- Optional: `KERN_RUNNER_CONCURRENCY` (jobs in parallel on this runner; unset
+  means one worker per CPU, and `1` gives that single job every CPU unless
+  `KERN_JOB_CPUS` is set), `KERN_RUNNER_LOAD_GATE` (pause claiming above n×CPU
+  load), `KERN_JOB_CPUS` (unset shares the host equally across the workers),
+  `KERN_JOB_MEMORY`, `KERN_LOG_RETENTION`, `KERN_CACHE_MAX_AGE`. A job opts
+  into several runners with `strategy.split` (a count, or `auto` for the sum
+  of online CPUs that match `runs-on`). Each shard is a full checkout.
 
 ## 2. Bring the stack up
 

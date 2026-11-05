@@ -172,6 +172,14 @@ func Compile(content string, c Compiler) (Result, error) {
 		if job.Strategy != nil && len(job.Strategy.Matrix) > 0 {
 			d.info("matrix", "jobs."+id+".strategy.matrix", "matrix expansion is limited to 256 combinations")
 		}
+		if job.Strategy != nil && (job.Strategy.Split.N > 0 || job.Strategy.Split.Auto) {
+			if job.Environment != nil {
+				d.errorf("split", "jobs."+id+".strategy.split", "strategy.split cannot be combined with environment")
+			}
+			if _, ok := job.Strategy.Matrix["shard"]; ok {
+				d.errorf("split", "jobs."+id+".strategy.split", `strategy.split reserves the matrix axis "shard"`)
+			}
+		}
 	}
 	if cyc := detectCycle(wf.Jobs); len(cyc) > 0 {
 		d.errorf("cycle", "jobs.needs", "dependency cycle detected: "+strings.Join(cyc, " -> "))
@@ -311,6 +319,10 @@ func compileJob(wf Workflow, id string, job *Job, matrix map[string]any, c Compi
 	if err != nil {
 		return JobPlan{}, err
 	}
+	splitN, splitAuto := 0, false
+	if job.Strategy != nil {
+		splitN, splitAuto = job.Strategy.Split.N, job.Strategy.Split.Auto
+	}
 
 	return JobPlan{
 		Key:             key,
@@ -328,6 +340,8 @@ func compileJob(wf Workflow, id string, job *Job, matrix map[string]any, c Compi
 		FailFast:        failFast(job),
 		Environment:     envName,
 		EnvironmentURL:  envURL,
+		SplitN:          splitN,
+		SplitAuto:       splitAuto,
 		Steps:           steps,
 	}, nil
 }

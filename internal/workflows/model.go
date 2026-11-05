@@ -5,6 +5,7 @@ package workflows
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -122,6 +123,34 @@ type Strategy struct {
 	Matrix      map[string][]any `yaml:"matrix"`
 	FailFast    *bool            `yaml:"fail-fast"`
 	MaxParallel int              `yaml:"max-parallel"`
+	Split       Split            `yaml:"split"`
+}
+
+// Split is strategy.split: a shard count from 1 to 32, or the string "auto".
+// The compiler records it. The orchestrator expands it once runners are known.
+type Split struct {
+	N    int
+	Auto bool
+}
+
+func (s *Split) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.ScalarNode {
+		return fmt.Errorf("strategy.split must be an integer from 1 to 32 or auto")
+	}
+	value := strings.TrimSpace(node.Value)
+	if value == "auto" {
+		s.Auto = true
+		return nil
+	}
+	if node.Tag == "!!str" {
+		return fmt.Errorf("strategy.split must be an integer from 1 to 32 or auto")
+	}
+	n, err := strconv.Atoi(value)
+	if err != nil || n < 1 || n > 32 {
+		return fmt.Errorf("strategy.split must be an integer from 1 to 32 or auto")
+	}
+	s.N = n
+	return nil
 }
 
 type Step struct {
@@ -175,7 +204,10 @@ type JobPlan struct {
 	Priority        int               `json:"priority"`
 	Environment     string            `json:"environment,omitempty"`
 	EnvironmentURL  string            `json:"environment_url,omitempty"`
-	Steps           []StepPlan        `json:"steps"`
+	// SplitN and SplitAuto are expanded at run start, not at compile.
+	SplitN    int        `json:"split,omitempty"`
+	SplitAuto bool       `json:"split_auto,omitempty"`
+	Steps     []StepPlan `json:"steps"`
 }
 
 // Edge is a dependency between plan jobs, kept for DAG rendering.

@@ -28,7 +28,10 @@ type JobSeed struct {
 	OutputsSpec     map[string]string
 	Environment     string
 	EnvironmentURL  string
-	Steps           []StepSeed
+	// SplitN and SplitAuto are consumed before insert. They are not columns.
+	SplitN    int
+	SplitAuto bool
+	Steps     []StepSeed
 }
 
 type StepSeed struct {
