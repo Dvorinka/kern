@@ -141,6 +141,26 @@ export function OverviewPage() {
 				</div>
 			)}
 
+			{(data.webhooks?.failed_24h ?? 0) > 0 && (
+				<div className="panel mt-4 flex items-center gap-3.5 border-[var(--err)]/40 px-4 py-3">
+					<span className="sq bad" />
+					<span className="text-[13px] text-[var(--dim)]">
+						<span className="font-medium text-[var(--err)]">
+							{data.webhooks!.failed_24h} webhook{data.webhooks!.failed_24h === 1 ? "" : "s"}
+						</span>{" "}
+					failed in the last 24h — pushes may not have become runs.
+						{data.webhooks!.last_error && (
+							<span className="block truncate font-mono text-[11px] text-[var(--faint)]">
+								{data.webhooks!.last_error}
+							</span>
+						)}
+					</span>
+					<button className="lnk ml-auto flex-none" onClick={() => nav("/deliveries")}>
+						Deliveries
+					</button>
+				</div>
+			)}
+
 			<div className="panel kpis mt-4">
 				{kpis.map((k) => (
 					<div className="kpi" key={k.k}>

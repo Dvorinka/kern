@@ -29,11 +29,13 @@ func (s *Server) overview(c *gin.Context) {
 	series, _ := s.Store.QueueSeries(ctx)
 	failures, _ := s.Store.RecentFailures(ctx, 5)
 	cacheEntries, cacheBytes, _ := s.Store.CacheStats(ctx)
+	whfCount, whfErr, _ := s.Store.WebhookFailureSummary(ctx, 24*time.Hour)
 	c.JSON(http.StatusOK, gin.H{
 		"overview": o,
 		"series":   series,
 		"failures": failures,
 		"cache":    gin.H{"entries": cacheEntries, "bytes": cacheBytes},
+		"webhooks": gin.H{"failed_24h": whfCount, "last_error": whfErr},
 	})
 }
 

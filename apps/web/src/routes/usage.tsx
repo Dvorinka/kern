@@ -95,6 +95,33 @@ export function UsagePage() {
 
 					<MinutesChart u={u} days={days} />
 
+					{u.failures.length > 0 && (
+						<Card className="mt-4">
+							<CardHeader
+								title="Failure causes"
+								sub="failed steps by diagnosis kind — which workflow line keeps breaking"
+							/>
+							<table className="tbl">
+								<thead>
+									<tr>
+										<th>Cause</th>
+										<th className="num">Steps</th>
+										<th className="num">Fixable</th>
+									</tr>
+								</thead>
+								<tbody>
+									{u.failures.map((f) => (
+										<tr key={f.kind}>
+											<td className="lead font-mono text-xs">{f.kind}</td>
+											<td className="num">{f.count}</td>
+											<td className="num">{f.fixable > 0 ? f.fixable : "—"}</td>
+										</tr>
+									))}
+								</tbody>
+							</table>
+						</Card>
+					)}
+
 					<div className="mt-4 grid grid-cols-2 items-start gap-4 max-lg:grid-cols-1">
 						<Card>
 							<CardHeader title="By project" sub="runner time" />

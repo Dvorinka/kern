@@ -1,0 +1,169 @@
+- generic [ref=e53]:
+  - complementary [ref=e54]:
+    - generic [ref=e55]:
+      - generic [ref=e56]: KERN
+      - generic [ref=e57]: 0.1.0
+    - navigation [ref=e58]:
+      - generic [ref=e59]:
+        - link "Overview" [ref=e60] [cursor=pointer]:
+          - /url: /
+        - link "Projects" [ref=e66] [cursor=pointer]:
+          - /url: /projects
+        - link "Runs" [ref=e72] [cursor=pointer]:
+          - /url: /runs
+        - link "Runners" [ref=e75] [cursor=pointer]:
+          - /url: /runners
+      - generic [ref=e79]:
+        - generic [ref=e80]: Output
+        - link "Artifacts" [ref=e81] [cursor=pointer]:
+          - /url: /artifacts
+        - link "Cache" [ref=e86] [cursor=pointer]:
+          - /url: /cache
+        - link "Secrets" [ref=e91] [cursor=pointer]:
+          - /url: /secrets
+        - link "Environments" [ref=e95] [cursor=pointer]:
+          - /url: /environments
+        - link "Webhooks" [ref=e98] [cursor=pointer]:
+          - /url: /deliveries
+      - generic [ref=e103]:
+        - generic [ref=e104]: System
+        - link "Settings" [ref=e105] [cursor=pointer]:
+          - /url: /settings
+    - generic [ref=e109]:
+      - text: fleet · 0/0 online
+      - button "Sign out (admin@kern.local)" [ref=e111] [cursor=pointer]
+  - main [ref=e115]:
+    - generic [ref=e116]:
+      - generic [ref=e117]: kern
+      - generic [ref=e119]:
+        - generic [ref=e120]: /
+        - generic [ref=e121]: overview
+      - generic [ref=e122]:
+        - button "Search…" [ref=e123] [cursor=pointer]
+        - generic [ref=e127]: ⌘K
+        - generic "admin@kern.local" [ref=e128]: A
+    - generic [ref=e129]:
+      - generic [ref=e130]:
+        - generic [ref=e131]:
+          - heading "kern" [level=1] [ref=e132]
+          - generic [ref=e133]:
+            - generic [ref=e134]: watching
+            - generic [ref=e136]: updated just now
+        - generic [ref=e137]: self-hosted · 0 runners · every push runs on contact
+      - generic [ref=e138]:
+        - generic [ref=e140]: "IT #2"
+        - generic "queued 2m 55s" [ref=e142]
+        - generic [ref=e144]: 1m 6s
+        - generic [ref=e145]: est ~1m 0s
+        - button "View" [ref=e146] [cursor=pointer]
+      - generic [ref=e147]:
+        - generic [ref=e148]:
+          - generic [ref=e149]: Runs today
+          - generic [ref=e150]: "3"
+          - generic [ref=e151]: 3 total
+        - generic [ref=e152]:
+          - generic [ref=e153]: Success
+          - generic [ref=e154]: 33%
+          - generic [ref=e155]: 1 failed of 3
+        - generic [ref=e156]:
+          - generic [ref=e157]: Queue p95
+          - generic [ref=e158]: —
+          - generic [ref=e159]: 1 waiting
+        - generic [ref=e160]:
+          - generic [ref=e161]: Runners
+          - generic [ref=e162]: 0/0
+          - generic [ref=e163]: fleet idle
+        - generic [ref=e164]:
+          - generic [ref=e165]: Cache
+          - generic [ref=e166]: "0"
+          - generic [ref=e167]: 0 B
+      - generic [ref=e168]:
+        - generic [ref=e169]:
+          - generic [ref=e170]:
+            - generic [ref=e171]: Runs per day
+            - generic [ref=e172]:
+              - generic [ref=e173]: passed
+              - generic [ref=e175]: failed
+          - generic [ref=e177]:
+            - generic [ref=e178]:
+              - generic [ref=e179]: "5"
+              - generic [ref=e180]: "3"
+              - generic [ref=e181]: "2"
+              - generic [ref=e182]: "0"
+            - generic [ref=e183]:
+              - generic "Oct 22 · 0 runs"
+            - generic [ref=e184]:
+              - generic "Oct 23 · 0 runs"
+              - generic [ref=e185]: Oct 23
+            - generic [ref=e186]:
+              - generic "Oct 24 · 0 runs"
+            - generic [ref=e187]:
+              - generic "Oct 25 · 0 runs"
+            - generic [ref=e188]:
+              - generic "Oct 26 · 0 runs"
+            - generic [ref=e189]:
+              - generic "Oct 27 · 0 runs"
+            - generic [ref=e190]:
+              - generic "Oct 28 · 0 runs"
+            - generic [ref=e191]:
+              - generic "Oct 29 · 0 runs"
+              - generic [ref=e192]: Oct 29
+            - generic [ref=e193]:
+              - generic "Oct 30 · 0 runs"
+            - generic [ref=e194]:
+              - generic "Oct 31 · 0 runs"
+            - generic [ref=e195]:
+              - generic "Nov 1 · 0 runs"
+            - generic [ref=e196]:
+              - generic "Nov 2 · 0 runs"
+            - generic "Nov 3 · 3 runs, 1 failed" [ref=e199]
+            - generic [ref=e200]:
+              - generic "Nov 4 · 0 runs"
+              - generic [ref=e201]: v0.1.0
+              - generic [ref=e202]: today
+        - generic [ref=e203]:
+          - generic [ref=e204]:
+            - generic [ref=e205]: Fleet
+            - generic [ref=e206]: utilisation now
+          - generic [ref=e207]: No runners registered — a push waits in queue until one joins.
+          - generic [ref=e208]: 1 job queued for a runner.
+      - generic [ref=e209]:
+        - generic [ref=e210]:
+          - generic [ref=e211]:
+            - generic [ref=e212]: Recent runs
+            - generic [ref=e213]:
+              - generic [ref=e214]: lint
+              - generic [ref=e216]: build
+              - generic [ref=e218]: web
+              - button "View all" [ref=e220] [cursor=pointer]
+          - generic [ref=e221] [cursor=pointer]:
+            - generic [ref=e223]: "#1"
+            - generic "go 2m 0s" [ref=e224]
+            - generic [ref=e226]: 2m 0s
+            - generic [ref=e227]: just now
+          - generic [ref=e228] [cursor=pointer]:
+            - generic [ref=e230]: "#2"
+            - generic "queued 2m 55s" [ref=e231]
+            - generic [ref=e233]: 1m 6s
+            - generic [ref=e234]: now
+          - generic [ref=e235] [cursor=pointer]:
+            - generic [ref=e237]: "#1"
+            - generic "queued 13ms" [ref=e238]
+            - generic [ref=e240]: 21ms
+            - generic [ref=e241]: 3m ago
+        - generic [ref=e242]:
+          - generic [ref=e243]:
+            - generic [ref=e244]: Cache
+            - generic [ref=e245]: 7d eviction
+          - generic [ref=e247]:
+            - generic [ref=e248]: Stored
+            - generic [ref=e249]: 0 B
+          - generic [ref=e252]:
+            - generic [ref=e253]: Entries
+            - generic [ref=e254]: "0"
+          - generic [ref=e255]:
+            - generic [ref=e256]: Avg run
+            - generic [ref=e257]: 1m 0s
+          - generic [ref=e258]:
+            - generic [ref=e259]: Last run
+            - generic [ref=e260]: just now

@@ -224,6 +224,7 @@ export interface OverviewResponse {
 	series: { time: string; value: number }[];
 	failures: Run[];
 	cache: { entries: number; bytes: number };
+	webhooks?: { failed_24h: number; last_error: string };
 }
 
 export interface SecretSummary {
@@ -301,6 +302,7 @@ export interface UsageReport {
 	}[];
 	projects: { slug: string; name: string; seconds: number; runs: number }[];
 	runners: { name: string; seconds: number; jobs: number }[];
+	failures: { kind: string; count: number; fixable: number }[];
 }
 
 export interface UsageResponse {

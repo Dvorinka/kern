@@ -42,11 +42,20 @@ type UsageRunner struct {
 	Jobs    int64   `json:"jobs"`
 }
 
+// FailureCause counts failed steps by diagnosis kind over the window — the
+// "which workflow line keeps breaking" answer.
+type FailureCause struct {
+	Kind    string `json:"kind"`
+	Count   int64  `json:"count"`
+	Fixable int64  `json:"fixable"`
+}
+
 type UsageReport struct {
 	Totals   UsageTotals    `json:"totals"`
 	Days     []UsageDay     `json:"days"`
 	Projects []UsageProject `json:"projects"`
 	Runners  []UsageRunner  `json:"runners"`
+	Failures []FailureCause `json:"failures"`
 }
 
 // usageFrom/usageWhere bound the aggregation to whole jobs that finished
@@ -151,5 +160,33 @@ func (s *Store) Usage(ctx context.Context, orgID uuid.UUID, days int) (*UsageRep
 		rep.Runners = append(rep.Runners, u)
 	}
 	rrows.Close()
-	return rep, rrows.Err()
+	if err := rrows.Err(); err != nil {
+		return nil, err
+	}
+
+	frows, err := s.pool.Query(ctx, `
+		SELECT coalesce(s.diagnosis->>'kind', 'unclassified'),
+		       count(*),
+		       count(*) filter (where s.diagnosis->>'fixable' = 'true')
+		FROM steps s
+		JOIN jobs j ON j.id = s.job_id
+		JOIN workflow_runs r ON r.id = j.run_id
+		JOIN projects p ON p.id = r.project_id
+		WHERE p.org_id = $1
+		  AND s.diagnosis IS NOT NULL
+		  AND s.completed_at >= now() - make_interval(days => $2)
+		GROUP BY 1 ORDER BY 2 DESC`, orgID, days)
+	if err != nil {
+		return nil, fmt.Errorf("usage failures: %w", err)
+	}
+	for frows.Next() {
+		var f FailureCause
+		if err := frows.Scan(&f.Kind, &f.Count, &f.Fixable); err != nil {
+			frows.Close()
+			return nil, fmt.Errorf("usage failure scan: %w", err)
+		}
+		rep.Failures = append(rep.Failures, f)
+	}
+	frows.Close()
+	return rep, frows.Err()
 }
