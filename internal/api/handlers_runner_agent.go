@@ -352,8 +352,10 @@ func (s *Server) finishStep(c *gin.Context) {
 	}
 	if json.Unmarshal(req.Diagnosis, &d) == nil && d.Remediation != nil && d.Remediation.Applied {
 		if run, err := s.Store.Run(c.Request.Context(), job.RunID); err == nil {
-			s.Store.Audit(c.Request.Context(), run.ProjectID, nil, "remediation.apply",
-				fmt.Sprintf("job %s step %d", job.ID, n))
+			if p, err := s.Store.ProjectByID(c.Request.Context(), run.ProjectID); err == nil {
+				s.Store.Audit(c.Request.Context(), p.OrgID, nil, "remediation.apply",
+					fmt.Sprintf("job %s step %d", job.ID, n))
+			}
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})

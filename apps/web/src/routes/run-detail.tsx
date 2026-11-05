@@ -262,7 +262,8 @@ function StepLog({ job, step, live }: { job: Job; step: Step; live: boolean }) {
 		!!step.diagnosis?.fixable &&
 		!!step.diagnosis?.remediation &&
 		!step.diagnosis.remediation.approved &&
-		!step.diagnosis.remediation.applied;
+		!step.diagnosis.remediation.applied &&
+		!step.diagnosis.remediation.dismissed;
 	return (
 		<div className="flex min-w-0 flex-col">
 			{step.diagnosis && (
@@ -270,6 +271,12 @@ function StepLog({ job, step, live }: { job: Job; step: Step; live: boolean }) {
 					<span className="min-w-0 flex-1">
 						{step.diagnosis.kind}: {step.diagnosis.summary} — {step.diagnosis.suggestion}
 						{step.diagnosis.remediation && ` (${step.diagnosis.remediation.result || "proposed"})`}
+						{fixPending && (step.diagnosis.remediation?.fix?.length ?? 0) > 0 && (
+							<span className="mt-1 block rounded border border-[var(--line)] bg-[var(--bg)] px-2 py-1 font-mono text-[10px] text-[var(--dim)]">
+								runs once as root in the retried job's container:{" "}
+								{step.diagnosis.remediation!.fix!.join(" && ")}
+							</span>
+						)}
 					</span>
 					{fixPending && (
 						<Button size="sm" disabled={approve.isPending} onClick={() => approve.mutate()}>

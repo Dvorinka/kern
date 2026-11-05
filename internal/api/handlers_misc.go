@@ -361,7 +361,41 @@ func (s *Server) approveRemediation(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_body", "step number is required")
 		return
 	}
-	if err := s.Store.ApproveRemediation(c.Request.Context(), jobID, req.Step); err != nil {
+	fix, err := s.Store.ApproveRemediation(c.Request.Context(), jobID, req.Step)
+	if err != nil {
+		if strings.Contains(err.Error(), "no remediation proposal") {
+			fail(c, http.StatusNotFound, "no_proposal", err.Error())
+			return
+		}
+		if strings.Contains(err.Error(), "in progress") {
+			fail(c, http.StatusConflict, "job_running", err.Error())
+			return
+		}
+		s.internalError(c, err)
+		return
+	}
+	s.Store.AuditMeta(c.Request.Context(), user.OrgID, &user.ID, "remediation.approve",
+		fmt.Sprintf("job %s step %d", jobID, req.Step), map[string]any{"fix": fix})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "requeued": true})
+}
+
+// dismissRemediation withdraws a fix proposal without approving it — the row
+// leaves the attention feed and the diagnosis stays on the step.
+func (s *Server) dismissRemediation(c *gin.Context) {
+	user, _ := currentUser(c)
+	jobID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		fail(c, http.StatusBadRequest, "invalid_id", "job id must be a uuid")
+		return
+	}
+	var req struct {
+		Step int `json:"step"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Step <= 0 {
+		fail(c, http.StatusBadRequest, "invalid_body", "step number is required")
+		return
+	}
+	if err := s.Store.DismissRemediation(c.Request.Context(), jobID, req.Step); err != nil {
 		if strings.Contains(err.Error(), "no remediation proposal") {
 			fail(c, http.StatusNotFound, "no_proposal", err.Error())
 			return
@@ -369,9 +403,9 @@ func (s *Server) approveRemediation(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
-	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "remediation.approve",
+	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "remediation.dismiss",
 		fmt.Sprintf("job %s step %d", jobID, req.Step))
-	c.JSON(http.StatusOK, gin.H{"ok": true, "requeued": true})
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 func secretSummaries(rows []store.Secret) []gin.H {

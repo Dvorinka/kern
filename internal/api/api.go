@@ -22,6 +22,7 @@ import (
 	"github.com/dvorinka/kern/internal/orchestrator"
 	"github.com/dvorinka/kern/internal/secrets"
 	"github.com/dvorinka/kern/internal/store"
+	"github.com/dvorinka/kern/internal/version"
 )
 
 type Server struct {
@@ -171,9 +172,14 @@ func (s *Server) buildRouter() *gin.Engine {
 
 		auth.GET("/settings", s.getOrgSettings)
 		auth.PUT("/settings", s.putOrgSettings)
+		auth.GET("/usage", s.usage)
+		auth.GET("/notifications", s.notifications)
+		auth.GET("/audit", s.listAudit)
+		auth.GET("/instance/update", s.updateCheck)
 		auth.GET("/projects/:project/settings", s.getProjectSettings)
 		auth.PUT("/projects/:project/settings", s.putProjectSettings)
 		auth.POST("/jobs/:id/remediate", s.approveRemediation)
+		auth.POST("/jobs/:id/remediate-dismiss", s.dismissRemediation)
 
 		auth.GET("/secrets", s.listSecrets)
 		auth.PUT("/secrets/:name", s.putSecret)
@@ -315,9 +321,7 @@ func (s *Server) ready(c *gin.Context) {
 func (s *Server) meta(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"name":    "KERN",
-		"version": version,
+		"version": version.Version,
 		"env":     s.Cfg.Env,
 	})
 }
-
-const version = "0.1.0"

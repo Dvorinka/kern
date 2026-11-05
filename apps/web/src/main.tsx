@@ -16,6 +16,7 @@ import { ArtifactsPage } from "./routes/artifacts";
 import { CachePage } from "./routes/cache";
 import { DeliveriesPage } from "./routes/deliveries";
 import { SettingsPage } from "./routes/settings";
+import { UsagePage } from "./routes/usage";
 import { EnvironmentsPage } from "./routes/environments";
 import { PublicRunPage } from "./routes/public-run";
 
@@ -37,6 +38,7 @@ const router = createBrowserRouter([
 			{ path: "artifacts", element: <ArtifactsPage /> },
 			{ path: "cache", element: <CachePage /> },
 			{ path: "deliveries", element: <DeliveriesPage /> },
+			{ path: "usage", element: <UsagePage /> },
 			{ path: "settings", element: <SettingsPage /> },
 		],
 	},

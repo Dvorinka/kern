@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -237,7 +238,14 @@ func (s *Store) UserByAPIToken(ctx context.Context, hash string) (User, []string
 }
 
 func (s *Store) Audit(ctx context.Context, orgID uuid.UUID, actor *uuid.UUID, action, target string) {
+	s.AuditMeta(ctx, orgID, actor, action, target, nil)
+}
+
+// AuditMeta is Audit with a metadata payload for actions where the target
+// string alone is not the record (e.g. the approved fix commands).
+func (s *Store) AuditMeta(ctx context.Context, orgID uuid.UUID, actor *uuid.UUID, action, target string, meta map[string]any) {
+	m, _ := json.Marshal(meta)
 	_, _ = s.pool.Exec(ctx, `
-		INSERT INTO audit_events (org_id, actor_user_id, action, target) VALUES ($1, $2, $3, $4)`,
-		orgID, actor, action, target)
+		INSERT INTO audit_events (org_id, actor_user_id, action, target, metadata) VALUES ($1, $2, $3, $4, $5)`,
+		orgID, actor, action, target, m)
 }

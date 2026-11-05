@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
-import { Check, Copy, Trash2 } from "lucide-react";
+import { Check, Copy, RefreshCw, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
-import type { APIToken } from "../lib/types";
+import type { APIToken, AuditEvent, UpdateInfo } from "../lib/types";
 import { Button, Card, CardHeader, EmptyState, Input, KV, PageHeader, Spinner } from "../components/ui";
 import { Row } from "../components/layout";
 import { relTime } from "../lib/format";
@@ -10,10 +10,13 @@ import { relTime } from "../lib/format";
 export function SettingsPage() {
 	return (
 		<>
-			<PageHeader title="Settings" sub="Access tokens, public run links, and instance information" />
+			<PageHeader title="Settings" sub="Access tokens, automation policy, and instance information" />
 			<PublicCICard />
+			<SelfHealCard />
 			<TokensCard />
+			<UpdateCard />
 			<InstanceCard />
+			<AuditCard />
 		</>
 	);
 }
@@ -48,6 +51,140 @@ function PublicCICard() {
 			</Row>
 			{setPublic.error && (
 				<div className="px-4 py-2 text-xs text-[var(--err)]">{setPublic.error.message}</div>
+			)}
+		</Card>
+	);
+}
+
+function SelfHealCard() {
+	const qc = useQueryClient();
+	const { data } = useQuery({
+		queryKey: ["settings"],
+		queryFn: () => api.get<{ self_heal: string; public_ci: string }>("/settings"),
+	});
+	const setHeal = useMutation({
+		mutationFn: (v: string) => api.put("/settings", { self_heal: v }),
+		onSuccess: () => {
+			qc.invalidateQueries({ queryKey: ["settings"] });
+			qc.invalidateQueries({ queryKey: ["notifications"] });
+		},
+	});
+	return (
+		<Card className="mb-4">
+			<CardHeader
+				title="Self-heal"
+				sub="allow-listed fixes for fixable step failures; every approval is audit-logged"
+			/>
+			<Row>
+				<span className="min-w-0 flex-1 text-xs text-[var(--dim)]">
+					<b className="font-medium text-[var(--ink)]">off</b> diagnoses only ·{" "}
+					<b className="font-medium text-[var(--ink)]">approve</b> queues the fix for your
+					approval in the bell menu · <b className="font-medium text-[var(--ink)]">auto</b>{" "}
+					applies the allow-listed fix and retries once.
+				</span>
+				<select
+					className="fsel"
+					aria-label="Self-heal"
+					value={data?.self_heal ?? "off"}
+					disabled={setHeal.isPending}
+					onChange={(e) => setHeal.mutate(e.target.value)}
+				>
+					<option value="off">off</option>
+					<option value="approve">approve</option>
+					<option value="auto">auto</option>
+				</select>
+			</Row>
+			{setHeal.error && (
+				<div className="px-4 py-2 text-xs text-[var(--err)]">{setHeal.error.message}</div>
+			)}
+		</Card>
+	);
+}
+
+function UpdateCard() {
+	const qc = useQueryClient();
+	const { data } = useQuery({
+		queryKey: ["update"],
+		queryFn: () => api.get<UpdateInfo>("/instance/update"),
+		retry: 0,
+	});
+	const refresh = useMutation({
+		mutationFn: () => api.get<UpdateInfo>("/instance/update?refresh=1"),
+		onSuccess: () => qc.invalidateQueries({ queryKey: ["update"] }),
+	});
+	return (
+		<Card className="mb-4">
+			<CardHeader
+				title="Updates"
+				sub={data?.checked_at ? `checked ${relTime(data.checked_at)}` : "checking releases"}
+				actions={
+					<Button size="sm" variant="ghost" disabled={refresh.isPending} onClick={() => refresh.mutate()}>
+						<RefreshCw size={12} className={refresh.isPending ? "animate-spin" : ""} />
+						Check now
+					</Button>
+				}
+			/>
+			{!data ? (
+				<Spinner />
+			) : !data.ok ? (
+				<div className="px-4 py-3 text-xs text-[var(--faint)]">
+					Could not reach {data.repo} releases{data.error ? ` — ${data.error}` : ""}.
+				</div>
+			) : data.available ? (
+				<Row>
+					<span className="sq warn" style={{ width: 7, height: 7 }} />
+					<span className="min-w-0 flex-1 text-xs">
+						<span className="text-[var(--warn)]">{data.latest}</span> is available — you run{" "}
+						<span className="font-mono">{data.current}</span>
+					</span>
+					<a className="lnk text-xs" href={data.url} target="_blank" rel="noreferrer">
+						Download
+					</a>
+				</Row>
+			) : (
+				<Row>
+					<span className="sq ok" style={{ width: 7, height: 7 }} />
+					<span className="min-w-0 flex-1 text-xs text-[var(--dim)]">
+						Running <span className="font-mono">{data.current}</span> — latest release of{" "}
+						{data.repo} is{" "}
+						<a className="lnk" href={data.url} target="_blank" rel="noreferrer">
+							{data.latest}
+						</a>
+						.
+					</span>
+				</Row>
+			)}
+		</Card>
+	);
+}
+
+function AuditCard() {
+	const { data, isLoading } = useQuery({
+		queryKey: ["audit"],
+		queryFn: () => api.get<{ events: AuditEvent[] }>("/audit?limit=30"),
+	});
+	return (
+		<Card className="mb-4">
+			<CardHeader title="Audit trail" sub="approvals, settings changes, and secrets writes" />
+			{isLoading ? (
+				<Spinner />
+			) : !data || data.events.length === 0 ? (
+				<EmptyState title="No audit events yet" hint="Approvals and settings changes land here." />
+			) : (
+				data.events.map((e) => (
+					<Row key={e.id}>
+						<span className="w-44 flex-none font-mono text-xs text-[var(--ink)]">{e.action}</span>
+						<span className="min-w-0 flex-1 truncate font-mono text-xs text-[var(--dim)]">
+							{e.target || "—"}
+						</span>
+						<span className="w-40 flex-none truncate text-right text-xs text-[var(--faint)]">
+							{e.actor || "system"}
+						</span>
+						<span className="w-20 flex-none text-right text-xs text-[var(--faint)]">
+							{relTime(e.created_at)}
+						</span>
+					</Row>
+				))
 			)}
 		</Card>
 	);

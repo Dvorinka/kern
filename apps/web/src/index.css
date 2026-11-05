@@ -4,21 +4,22 @@
 	 status hues and job-keyed tints. No shadows, gradients, or glows. */
 
 :root {
-	--bg: #000;
-	--raise: #0a0a0a;
-	--raise2: #111;
-	--line: #1e1e1e;
-	--line2: #2b2b2b;
-	--ctl: #3d3d3d;
-	--ink: #f2f2f2;
-	--dim: #a6a6a6;
-	--faint: #828282;
-	--ok: #3fc07a;
-	--err: #e5566f;
-	--warn: #f0b23f;
+	--bg: #08080a;
+	--raise: #0f0f12;
+	--raise2: #16161a;
+	--line: #202026;
+	--line2: #2d2d34;
+	--ctl: #41414a;
+	--ink: #f4f4f5;
+	--dim: #a3a3ad;
+	--faint: #6e6e78;
+	--ok: #41c88a;
+	--err: #ef5f78;
+	--warn: #fbbf24;
+	--info: #5e9bff;
 	/* job hues — colour is keyed, never decorative */
 	--lint: #5e9bff;
-	--build: #f0b23f;
+	--build: #a78bfa;
 	--web: #34c9b0;
 
 	--mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
@@ -139,7 +140,7 @@ body {
 	background: rgba(94, 155, 255, 0.9);
 }
 .j-build {
-	background: rgba(240, 178, 63, 0.9);
+	background: rgba(167, 139, 250, 0.9);
 }
 .j-web {
 	background: rgba(52, 201, 176, 0.9);
@@ -159,15 +160,19 @@ body {
 }
 .tag.ok {
 	color: var(--ok);
-	border-color: #1d3a2c;
+	border-color: rgba(65, 200, 138, 0.35);
 }
 .tag.err {
 	color: var(--err);
-	border-color: #3a2028;
+	border-color: rgba(239, 95, 120, 0.4);
 }
 .tag.warn {
 	color: var(--warn);
-	border-color: #3a2f14;
+	border-color: rgba(251, 191, 36, 0.35);
+}
+.tag.info {
+	color: var(--info);
+	border-color: rgba(94, 155, 255, 0.35);
 }
 
 .chip {
@@ -184,9 +189,9 @@ body {
 	border: 1px solid rgba(94, 155, 255, 0.3);
 }
 .chip.build {
-	background: rgba(240, 178, 63, 0.14);
+	background: rgba(167, 139, 250, 0.14);
 	color: var(--build);
-	border: 1px solid rgba(240, 178, 63, 0.3);
+	border: 1px solid rgba(167, 139, 250, 0.3);
 }
 .chip.web {
 	background: rgba(52, 201, 176, 0.14);
@@ -253,7 +258,7 @@ a.lnk:hover,
 	background: rgba(94, 155, 255, 0.55);
 }
 .pb.b {
-	background: rgba(240, 178, 63, 0.55);
+	background: rgba(167, 139, 250, 0.55);
 }
 .pb.w2 {
 	background: rgba(52, 201, 176, 0.55);
@@ -487,7 +492,7 @@ select.fsel {
 	background: rgba(94, 155, 255, 0.55);
 }
 .ubar .u-build {
-	background: rgba(240, 178, 63, 0.55);
+	background: rgba(167, 139, 250, 0.55);
 }
 .ubar .u-web {
 	background: rgba(52, 201, 176, 0.55);
@@ -767,9 +772,9 @@ select.fsel {
 	color: rgba(94, 155, 255, 0.9);
 }
 .seg.done.build {
-	background: rgba(240, 178, 63, 0.14);
-	border-color: rgba(240, 178, 63, 0.3);
-	color: rgba(240, 178, 63, 0.9);
+	background: rgba(167, 139, 250, 0.14);
+	border-color: rgba(167, 139, 250, 0.3);
+	color: rgba(167, 139, 250, 0.9);
 }
 .seg.done.web {
 	background: rgba(52, 201, 176, 0.14);
@@ -777,8 +782,8 @@ select.fsel {
 	color: rgba(52, 201, 176, 0.9);
 }
 .seg.fail {
-	background: rgba(229, 86, 111, 0.14);
-	border: 1px solid rgba(229, 86, 111, 0.45);
+	background: rgba(239, 95, 120, 0.14);
+	border: 1px solid rgba(239, 95, 120, 0.45);
 	color: var(--err);
 }
 .seg.live {
@@ -1042,8 +1047,10 @@ select.fsel {
 }
 
 a:focus-visible,
-button:focus-visible {
-	outline: 1px solid var(--ctl);
+button:focus-visible,
+select:focus-visible,
+input:focus-visible {
+	outline: 1px solid var(--info);
 	outline-offset: 2px;
 	border-radius: 4px;
 }
@@ -1220,4 +1227,165 @@ button:focus-visible {
 	padding-left: 0.8em;
 	color: var(--dim);
 	margin: 0.6em 0;
+}
+
+/* ── mobile nav — the rail hides under 760px; this strip replaces it ── */
+.mnav {
+	display: none;
+}
+@media (max-width: 760px) {
+	.mnav {
+		display: flex;
+		gap: 2px;
+		align-items: center;
+		border-bottom: 1px solid var(--line);
+		padding: 6px 12px;
+		overflow-x: auto;
+	}
+	.mnav a {
+		font-size: 12px;
+		color: var(--dim);
+		text-decoration: none;
+		padding: 4px 10px;
+		border-radius: 6px;
+		white-space: nowrap;
+	}
+	.mnav a.on {
+		color: var(--ink);
+		background: var(--raise2);
+	}
+}
+
+/* ── notifications — derived attention feed behind the bell ── */
+.nbell {
+	position: relative;
+	display: grid;
+	place-items: center;
+	width: 26px;
+	height: 26px;
+	border-radius: 7px;
+	border: 1px solid var(--line);
+	color: var(--faint);
+	cursor: pointer;
+	background: none;
+	transition: color 0.12s, border-color 0.12s;
+}
+.nbell:hover {
+	color: var(--ink);
+	border-color: var(--ctl);
+}
+.nbell .dot {
+	position: absolute;
+	top: -4px;
+	right: -4px;
+	min-width: 14px;
+	height: 14px;
+	padding: 0 4px;
+	border-radius: 999px;
+	background: var(--warn);
+	color: #000;
+	font-size: 9px;
+	font-weight: 600;
+	font-family: var(--mono);
+	display: grid;
+	place-items: center;
+}
+.ndrop {
+	position: fixed;
+	inset: 0;
+	z-index: 50;
+}
+.ndrop > .panel {
+	position: absolute;
+	top: 48px;
+	right: 26px;
+	width: 380px;
+	max-height: 480px;
+	overflow-y: auto;
+	background: var(--raise);
+}
+.nrow {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	padding: 10px 14px;
+	border-bottom: 1px solid var(--line);
+	font-size: 12px;
+}
+.nrow:last-child {
+	border-bottom: 0;
+}
+.nrow .ni {
+	width: 7px;
+	height: 7px;
+	border-radius: 2px;
+	margin-top: 5px;
+	flex: none;
+}
+.nrow .nt {
+	color: var(--ink);
+	line-height: 1.4;
+}
+.nrow .ns {
+	font-size: 11px;
+	color: var(--faint);
+	margin-top: 1px;
+}
+.nrow .na {
+	margin-left: auto;
+	flex: none;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+/* ── update affordance — the sidebar version earns a dot, not a banner ── */
+.verlink {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	font-family: var(--mono);
+	font-size: 11px;
+	color: var(--faint);
+	text-decoration: none;
+}
+.verlink:hover {
+	color: var(--ink);
+}
+.verlink .udot {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--warn);
+}
+
+/* ── usage table ── */
+.tbl {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 12px;
+}
+.tbl th {
+	text-align: left;
+	font-weight: 400;
+	font-size: 11px;
+	color: var(--faint);
+	padding: 7px 16px;
+	border-bottom: 1px solid var(--line);
+}
+.tbl th.num,
+.tbl td.num {
+	text-align: right;
+	font-family: var(--mono);
+}
+.tbl td {
+	padding: 8px 16px;
+	border-bottom: 1px solid var(--line);
+	color: var(--dim);
+}
+.tbl tr:last-child td {
+	border-bottom: 0;
+}
+.tbl td.lead {
+	color: var(--ink);
 }
