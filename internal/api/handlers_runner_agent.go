@@ -186,6 +186,7 @@ func (s *Server) respondWithClaim(c *gin.Context, claimed *store.ClaimedJob) {
 			"timeout_seconds": claimed.Job.TimeoutSeconds, "continue_on_error": claimed.Job.ContinueOnError,
 			"outputs_spec": claimed.Job.OutputsSpec,
 			"inputs":       claimed.Job.Inputs,
+			"services":     claimed.Job.Services,
 			"needs":        needsCtx,
 		},
 		"run": gin.H{

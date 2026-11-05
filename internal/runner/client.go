@@ -22,6 +22,14 @@ func fh2bytes(f *os.File) []byte {
 	return data
 }
 
+// ClaimService is one service container for a job.
+type ClaimService struct {
+	Name    string            `json:"name"`
+	Image   string            `json:"image"`
+	Env     map[string]string `json:"env,omitempty"`
+	Options []string          `json:"options,omitempty"`
+}
+
 // Claim mirrors the control plane's claim payload. It is the runner's only view of a job.
 type Claim struct {
 	Job struct {
@@ -38,6 +46,7 @@ type Claim struct {
 		ContinueOnError bool              `json:"continue_on_error"`
 		OutputsSpec     map[string]string `json:"outputs_spec"`
 		Inputs          map[string]string `json:"inputs"`
+		Services        []ClaimService    `json:"services"`
 		Needs           map[string]any    `json:"needs"`
 	} `json:"job"`
 	Run struct {

@@ -213,6 +213,17 @@ type JobPlan struct {
 	// Inputs is set on jobs expanded from a reusable-workflow call: the
 	// resolved `on.workflow_call` inputs, surfaced as the `inputs` context.
 	Inputs map[string]string `json:"inputs,omitempty"`
+	// Services are the job's service containers, started on a shared
+	// per-job network before the first step.
+	Services []ServicePlan `json:"services,omitempty"`
+}
+
+// ServicePlan is one service container beside the job.
+type ServicePlan struct {
+	Name    string            `json:"name"`
+	Image   string            `json:"image"`
+	Env     map[string]string `json:"env,omitempty"`
+	Options []string          `json:"options,omitempty"` // health-check docker flags only
 }
 
 // Edge is a dependency between plan jobs, kept for DAG rendering.

@@ -128,6 +128,7 @@ func (o *Orchestrator) StartRun(ctx context.Context, p store.CreateRunParams) (s
 			SplitN:          jp.SplitN,
 			SplitAuto:       jp.SplitAuto,
 			Inputs:          jp.Inputs,
+			Services:        serviceSeeds(jp.Services),
 		}
 		for _, sp := range jp.Steps {
 			seed.Steps = append(seed.Steps, store.StepSeed{Key: sp.ID, Name: sp.Name, Spec: sp})
@@ -438,6 +439,19 @@ func JobContext(job store.Job, run store.Run, project store.Project, byJobKey ma
 		"steps":   map[string]any{},
 	}
 	return ctx
+}
+
+func serviceSeeds(plans []workflows.ServicePlan) []store.ServiceSeed {
+	if len(plans) == 0 {
+		return nil
+	}
+	out := make([]store.ServiceSeed, 0, len(plans))
+	for _, p := range plans {
+		out = append(out, store.ServiceSeed{
+			Name: p.Name, Image: p.Image, Env: p.Env, Options: p.Options,
+		})
+	}
+	return out
 }
 
 // NeedsWithAliases exposes the alias expansion to the claim endpoint.

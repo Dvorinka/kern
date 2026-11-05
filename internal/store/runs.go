@@ -27,12 +27,21 @@ type JobSeed struct {
 	Priority        int
 	OutputsSpec     map[string]string
 	Inputs          map[string]string
+	Services        []ServiceSeed
 	Environment     string
 	EnvironmentURL  string
 	// SplitN and SplitAuto are consumed before insert. They are not columns.
 	SplitN    int
 	SplitAuto bool
 	Steps     []StepSeed
+}
+
+// ServiceSeed is a service container spec persisted with the job.
+type ServiceSeed struct {
+	Name    string            `json:"name"`
+	Image   string            `json:"image"`
+	Env     map[string]string `json:"env,omitempty"`
+	Options []string          `json:"options,omitempty"`
 }
 
 type StepSeed struct {
@@ -125,6 +134,10 @@ func (s *Store) createRunOnce(ctx context.Context, p CreateRunParams, jobs []Job
 		if err != nil {
 			return Run{}, err
 		}
+		services, err := json.Marshal(j.Services)
+		if err != nil {
+			return Run{}, err
+		}
 		if j.TimeoutSeconds <= 0 {
 			j.TimeoutSeconds = 3600
 		}
@@ -133,12 +146,12 @@ func (s *Store) createRunOnce(ctx context.Context, p CreateRunParams, jobs []Job
 			INSERT INTO jobs
 				(run_id, job_key, key, name, status, needs, runs_on, image, matrix, env,
 				 if_condition, timeout_seconds, continue_on_error, fail_fast, priority, outputs_spec,
-				 environment, environment_url, inputs)
-			VALUES ($1, $2, $3, $4, 'waiting', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+				 environment, environment_url, inputs, services)
+			VALUES ($1, $2, $3, $4, 'waiting', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 			RETURNING id`,
 			id, j.JobKey, j.Key, j.Name, j.Needs, j.RunsOn, j.Image, matrix, env,
 			j.IfCondition, j.TimeoutSeconds, j.ContinueOnError, j.FailFast, j.Priority, outputsSpec,
-			j.Environment, j.EnvironmentURL, inputs).Scan(&jobID)
+			j.Environment, j.EnvironmentURL, inputs, services).Scan(&jobID)
 		if err != nil {
 			return Run{}, fmt.Errorf("insert job %s: %w", j.Key, err)
 		}
@@ -227,7 +240,7 @@ func (s *Store) JobsForRun(ctx context.Context, runID uuid.UUID) ([]Job, error) 
 		SELECT id, run_id, job_key, key, name, status, conclusion, needs, runs_on, image, matrix, env,
 		       if_condition, timeout_seconds, continue_on_error, fail_fast, priority, attempt, runner_id,
 		       queued_at, started_at, completed_at, lease_expires_at, error, outputs, outputs_spec,
-		       environment, environment_url, inputs
+		       environment, environment_url, inputs, services
 		FROM jobs WHERE run_id = $1 ORDER BY queued_at, key`, runID)
 	if err != nil {
 		return nil, err
@@ -283,7 +296,7 @@ func scanJob(row pgx.Row) (Job, error) {
 		&j.RunsOn, &j.Image, &j.Matrix, &j.Env, &j.IfCondition, &j.TimeoutSeconds,
 		&j.ContinueOnError, &j.FailFast, &j.Priority, &j.Attempt, &j.RunnerID, &j.QueuedAt,
 		&j.StartedAt, &j.CompletedAt, &j.LeaseExpiresAt, &j.Error, &j.Outputs, &j.OutputsSpec,
-		&j.Environment, &j.EnvironmentURL, &j.Inputs)
+		&j.Environment, &j.EnvironmentURL, &j.Inputs, &j.Services)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Job{}, ErrNotFound
 	}
@@ -296,7 +309,7 @@ func (s *Store) Job(ctx context.Context, id uuid.UUID) (Job, error) {
 		       j.image, j.matrix, j.env, j.if_condition, j.timeout_seconds, j.continue_on_error,
 		       j.fail_fast, j.priority, j.attempt, j.runner_id, j.queued_at, j.started_at, j.completed_at,
 		       j.lease_expires_at, j.error, j.outputs, j.outputs_spec, j.environment, j.environment_url,
-		       j.inputs
+		       j.inputs, j.services
 		FROM jobs j WHERE j.id = $1`, id))
 	if err != nil {
 		return Job{}, err
