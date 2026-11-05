@@ -35,6 +35,10 @@ type Config struct {
 	// ImageMaxAge is how long a pulled job image may sit unused before the
 	// GC removes it (KERN_RUNNER_IMAGE_MAX_AGE). Zero disables collection.
 	ImageMaxAge time.Duration
+	// ActionsGitBase overrides the git host remote actions are fetched from
+	// (KERN_ACTIONS_GIT_BASE) — for GHES installs or action mirrors. Empty
+	// derives the host from the run's repo URL, else github.com.
+	ActionsGitBase string
 }
 
 type Agent struct {

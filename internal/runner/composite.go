@@ -1,0 +1,475 @@
+package runner
+
+// Composite action runtime. A `uses: ./path` step reads action.yml from the
+// checked-out workspace; `uses: owner/repo[/path]@ref` is fetched by the
+// runner into the job's actions dir (mounted read-only at /kern/actions).
+// runs.using: composite executes its steps inline through the same docker-exec
+// machinery as workflow steps; node*/docker runtimes fail with an explicit
+// diagnostic rather than being skipped.
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/dvorinka/kern/internal/actions"
+	"github.com/dvorinka/kern/internal/expressions"
+)
+
+const (
+	containerActionsDir = "/kern/actions"
+	maxCompositeDepth   = 10
+)
+
+// runAction executes a `uses` reference of any kind. evalCtx is the expression
+// context the step's `with:` values interpolate against — the runner context
+// for top-level steps, the composite context for nested ones.
+func (e *executor) runAction(ctx context.Context, step StepSpec, evalCtx map[string]any, depth int) (string, int) {
+	for k, v := range step.With {
+		if str, ok := v.(string); ok {
+			if nv, err := expressions.Interpolate(str, evalCtx); err == nil {
+				step.With[k] = nv
+			}
+		}
+	}
+	ref := strings.TrimSpace(step.Uses)
+	switch actions.Classify(ref) {
+	case actions.KindNative:
+		return e.runNativeAction(step, ref)
+	case actions.KindLocal:
+		if err := actions.ValidLocal(ref); err != nil {
+			e.logStep(step, "KERN: "+err.Error())
+			return "failure", 1
+		}
+		dir := strings.TrimPrefix(filepath.ToSlash(filepath.Clean(ref)), "./")
+		host := filepath.Join(e.workRoot(), "workspace", filepath.FromSlash(dir))
+		return e.runActionDir(ctx, step, host, containerWorkspace+"/"+dir, evalCtx, depth)
+	case actions.KindRemote:
+		r, err := actions.ParseRemote(ref)
+		if err != nil {
+			e.logStep(step, "KERN: "+err.Error())
+			return "failure", 1
+		}
+		host, container, err := e.fetchAction(ctx, step, r)
+		if err != nil {
+			e.logStep(step, "KERN: fetch action "+ref+": "+err.Error())
+			return "failure", 1
+		}
+		return e.runActionDir(ctx, step, host, container, evalCtx, depth)
+	case actions.KindDocker:
+		e.logStep(step, "KERN: docker action "+ref+" is not implemented by KERN yet")
+		return "failure", 1
+	}
+	e.logStep(step, "KERN: action reference "+ref+" is malformed")
+	return "failure", 1
+}
+
+// runNativeAction keeps the pre-M5 native actions behind their own switch.
+func (e *executor) runNativeAction(step StepSpec, ref string) (string, int) {
+	switch strings.ToLower(strings.SplitN(ref, "@", 2)[0]) {
+	case "actions/checkout":
+		// The workspace was checked out during prepare; an explicit step keeps that state.
+		return "success", 0
+	case "actions/upload-artifact":
+		return e.artifactUpload(step)
+	case "actions/download-artifact":
+		return e.artifactDownload(step)
+	case "actions/cache":
+		return e.cacheRestoreStep(step, true)
+	case "actions/cache/restore":
+		return e.cacheRestoreStep(step, false)
+	case "actions/cache/save":
+		return e.cacheSaveStep(step)
+	}
+	e.logStep(step, "KERN: action "+ref+" is not supported")
+	return "failure", 1
+}
+
+// runActionDir loads action.yml and dispatches on runs.using. actionPath is
+// the container-side directory exported as GITHUB_ACTION_PATH.
+func (e *executor) runActionDir(ctx context.Context, step StepSpec, hostDir, actionPath string, evalCtx map[string]any, depth int) (string, int) {
+	meta, err := readActionMeta(hostDir)
+	if err != nil {
+		e.logStep(step, "KERN: "+err.Error())
+		return "failure", 1
+	}
+	switch meta.Runs.Using {
+	case "composite":
+		return e.runComposite(ctx, step, meta, actionPath, evalCtx, depth)
+	case "node12", "node16", "node20", "node24":
+		e.logStep(step, fmt.Sprintf("KERN: %s is a JavaScript action (runs.using: %s); "+
+			"JavaScript action runtimes are not implemented by KERN yet — see docs/compatibility.md",
+			step.Uses, meta.Runs.Using))
+		return "failure", 1
+	case "docker":
+		e.logStep(step, "KERN: "+step.Uses+" is a Dockerfile action; docker action runtimes are not implemented by KERN yet")
+		return "failure", 1
+	default:
+		e.logStep(step, fmt.Sprintf("KERN: action %q has unsupported runs.using %q", step.Uses, meta.Runs.Using))
+		return "failure", 1
+	}
+}
+
+// readActionMeta parses action.yml (or action.yaml) from an action directory.
+func readActionMeta(dir string) (*actions.Meta, error) {
+	for _, name := range []string{"action.yml", "action.yaml"} {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err == nil {
+			return actions.ParseMeta(data)
+		}
+	}
+	return nil, fmt.Errorf("no action.yml in %s", dir)
+}
+
+// fetchAction clones an action repository at the requested ref into the job's
+// actions dir and returns the host and container paths of the action
+// directory. Fetches are memoised per job. Only public repositories over
+// https are supported.
+// ponytail: no credential support — the run's clone URL is never reused, so
+// private action repos fail loudly; upgrade if private actions are requested.
+func (e *executor) fetchAction(ctx context.Context, step StepSpec, r actions.RemoteRef) (string, string, error) {
+	key := nonIDRe.ReplaceAllString(r.Owner+"__"+r.Repo+"__"+r.Ref, "-")
+	if e.actionDirs == nil {
+		e.actionDirs = map[string]string{}
+	}
+	base, ok := e.actionDirs[key]
+	if !ok {
+		base = filepath.Join(e.workRoot(), "actions", key)
+		if err := os.MkdirAll(base, 0o755); err != nil {
+			return "", "", err
+		}
+		repoURL := e.actionRepoBase() + "/" + r.Owner + "/" + r.Repo
+		git := func(args ...string) error {
+			cmd := exec.CommandContext(ctx, "git", append([]string{"-C", base}, args...)...)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("git %s: %s", strings.Join(args, " "), tailStr(string(out), 300))
+			}
+			return nil
+		}
+		if err := git("init", "-q"); err != nil {
+			return "", "", err
+		}
+		if err := git("remote", "add", "origin", repoURL); err != nil {
+			return "", "", err
+		}
+		// fetch by name works for branches and tags; GitHub also serves
+		// reachable commit SHAs, which covers pinned actions.
+		if err := git("fetch", "--depth", "1", "origin", r.Ref); err != nil {
+			return "", "", fmt.Errorf("ref %s not fetchable from %s (public https only)", r.Ref, repoURL)
+		}
+		if err := git("checkout", "-q", "FETCH_HEAD"); err != nil {
+			return "", "", err
+		}
+		e.actionDirs[key] = base
+	}
+	host := filepath.Join(base, filepath.FromSlash(r.Path))
+	if _, err := os.Stat(host); err != nil {
+		return "", "", fmt.Errorf("action path %q not found in %s/%s@%s", r.Path, r.Owner, r.Repo, r.Ref)
+	}
+	container := containerActionsDir + "/" + key
+	if r.Path != "" {
+		container += "/" + r.Path
+	}
+	return host, container, nil
+}
+
+// actionRepoBase derives the git host for remote actions from the run's clone
+// URL (GHES-friendly), defaulting to github.com. Credentials are never
+// forwarded to other repositories.
+func (e *executor) actionRepoBase() string {
+	if b := strings.TrimRight(e.cfg.ActionsGitBase, "/"); b != "" {
+		return b
+	}
+	if u := e.claim.Run.RepoURL; u != "" {
+		if i := strings.Index(u, "://"); i >= 0 {
+			rest := u[i+3:]
+			if j := strings.IndexByte(rest, '/'); j > 0 {
+				host := rest[:j]
+				if k := strings.LastIndexByte(host, '@'); k >= 0 {
+					host = host[k+1:] // strip userinfo
+				}
+				if host != "" {
+					return u[:i+3] + host
+				}
+			}
+		}
+	}
+	return "https://github.com"
+}
+
+// resolveInputs merges declared inputs, their defaults and the step's `with:`
+// map into the `inputs` expression context. With-keys are matched
+// case-insensitively; undeclared keys still land in the context, and the
+// returned list names them for a warning.
+func resolveInputs(meta *actions.Meta, with map[string]any) (map[string]any, []string, error) {
+	inputs := map[string]any{}
+	undeclared := []string{}
+	for name, in := range meta.Inputs {
+		var v any
+		found := false
+		for k, w := range with {
+			if strings.EqualFold(k, name) {
+				v, found = w, true
+			}
+		}
+		if !found {
+			if in.Required && in.Default == "" {
+				return nil, nil, fmt.Errorf("required input %q was not supplied", name)
+			}
+			v = in.Default
+		}
+		inputs[name] = v
+	}
+	for k, w := range with {
+		declared := false
+		for name := range meta.Inputs {
+			if strings.EqualFold(k, name) {
+				declared = true
+			}
+		}
+		if !declared {
+			undeclared = append(undeclared, k)
+		}
+		if _, set := inputs[k]; !set {
+			inputs[k] = w
+		}
+	}
+	sort.Strings(undeclared)
+	return inputs, undeclared, nil
+}
+
+// compositeCtx builds the expression context for steps inside a composite
+// action: the caller's context plus inputs and a steps map that merges outer
+// step results with the composite's own.
+func compositeCtx(evalCtx map[string]any, inputs map[string]any, internal map[string]*stepOutcome, status string) map[string]any {
+	steps := map[string]any{}
+	if outer, ok := evalCtx["steps"].(map[string]any); ok {
+		for k, v := range outer {
+			steps[k] = v
+		}
+	}
+	for id, r := range internal {
+		outs := map[string]any{}
+		for k, v := range r.Outputs {
+			outs[k] = v
+		}
+		steps[id] = map[string]any{"outcome": r.Outcome, "conclusion": r.Conclusion, "outputs": outs}
+	}
+	ctx := map[string]any{}
+	for k, v := range evalCtx {
+		ctx[k] = v
+	}
+	ctx["inputs"] = inputs
+	ctx["steps"] = steps
+	ctx["__job_status"] = status
+	return ctx
+}
+
+// compositeShell maps GitHub's named shells to container interpreters. Named
+// shells we cannot honour (pwsh, python, cmd, powershell) fail loudly; absolute
+// paths pass through and fail naturally when the image lacks them.
+func compositeShell(name, jobShell string) (string, error) {
+	switch strings.ToLower(name) {
+	case "sh":
+		return "/bin/sh", nil
+	case "bash":
+		return jobShell, nil // bash when the image has it, sh otherwise — same fallback as run steps
+	case "pwsh", "python", "cmd", "powershell":
+		return "", fmt.Errorf("shell %q is not supported inside composite actions", name)
+	}
+	if strings.HasPrefix(name, "/") {
+		return name, nil
+	}
+	return "", fmt.Errorf("shell %q is not supported inside composite actions", name)
+}
+
+// runComposite executes a composite action's steps inline. Sub-step logs and
+// outputs fold into the parent step: log chunks post under the parent's step
+// number and declared outputs land in GITHUB_OUTPUT, which the caller reads.
+func (e *executor) runComposite(ctx context.Context, step StepSpec, meta *actions.Meta, actionPath string, evalCtx map[string]any, depth int) (string, int) {
+	if depth > maxCompositeDepth {
+		e.logStep(step, "KERN: composite actions nested deeper than "+itoa(maxCompositeDepth))
+		return "failure", 1
+	}
+	if step.TimeoutSeconds > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(step.TimeoutSeconds)*time.Second)
+		defer cancel()
+	}
+	inputs, undeclared, err := resolveInputs(meta, step.With)
+	if err != nil {
+		e.logStep(step, "KERN: "+err.Error())
+		return "failure", 1
+	}
+	for _, name := range undeclared {
+		e.logStep(step, "KERN: warning: unexpected input '"+name+"'")
+	}
+	if name := meta.Name; name != "" {
+		e.logStep(step, "KERN: running composite action "+name)
+	}
+
+	internal := map[string]*stepOutcome{}
+	status := e.jobStatusSoFar()
+	code := 0
+	for i, cs := range meta.Runs.Steps {
+		if e.cancelled.Load() {
+			return "cancelled", 1
+		}
+		subid := cs.ID
+		if subid == "" {
+			subid = "__composite_" + strconv.Itoa(i)
+		}
+		cctx := compositeCtx(evalCtx, inputs, internal, status)
+		label := cs.Name
+		if label == "" {
+			label = cs.Uses
+		}
+		if label == "" {
+			label = strings.TrimSpace(strings.SplitN(strings.TrimSpace(cs.Run), "\n", 2)[0])
+		}
+		if len(label) > 80 {
+			label = label[:77] + "..."
+		}
+		ok, cerr := expressions.EvaluateCondition(cs.If, cctx)
+		if cerr != nil {
+			e.logStep(step, "KERN: composite step condition: "+cerr.Error())
+			internal[subid] = &stepOutcome{Conclusion: "failure", Outcome: "failure"}
+			status, code = "failure", 1
+			break
+		}
+		if !ok {
+			internal[subid] = &stepOutcome{Conclusion: "skipped", Outcome: "skipped"}
+			continue
+		}
+		e.logStep(step, "KERN: ▸ "+label)
+
+		var outcome string
+		subEnv, envErr := e.compositeStepEnv(step, cs, actionPath, cctx)
+		if envErr != nil {
+			e.logStep(step, "KERN: composite step env: "+envErr.Error())
+			outcome, code = "failure", 1
+		} else if cs.Uses != "" {
+			if cs.Run != "" {
+				e.logStep(step, "KERN: composite step cannot define both 'run' and 'uses'")
+				outcome, code = "failure", 1
+			} else {
+				sub := StepSpec{Number: step.Number, ID: cs.ID, Name: label, Uses: cs.Uses, With: cs.With, Env: subEnv}
+				outcome, code = e.runAction(ctx, sub, cctx, depth+1)
+			}
+		} else {
+			switch {
+			case cs.Run == "":
+				e.logStep(step, "KERN: composite step must define 'run' or 'uses'")
+				outcome, code = "failure", 1
+			case cs.Shell == "":
+				e.logStep(step, "KERN: composite run steps must declare 'shell' (GitHub requires it)")
+				outcome, code = "failure", 1
+			default:
+				shell, shErr := compositeShell(cs.Shell, e.shell)
+				if shErr != nil {
+					e.logStep(step, "KERN: "+shErr.Error())
+					outcome, code = "failure", 1
+					break
+				}
+				wd, wdErr := expressions.Interpolate(cs.WorkingDirectory, cctx)
+				if wdErr != nil {
+					e.logStep(step, "KERN: composite step working-directory: "+wdErr.Error())
+					outcome, code = "failure", 1
+					break
+				}
+				sub := StepSpec{
+					Number: step.Number, ID: cs.ID, Name: label, Run: cs.Run, Shell: shell,
+					WorkingDirectory: wd, Env: subEnv,
+				}
+				var bodyErr error
+				e.exprCtx = cctx // run bodies interpolate against inputs/steps, not the job ctx
+				outcome, code, bodyErr = e.runStepBody(ctx, sub)
+				e.exprCtx = nil
+				if bodyErr != nil {
+					e.logStep(step, "KERN: "+bodyErr.Error())
+				}
+			}
+		}
+		// File-command drains: sub-step outputs belong to the sub-step id;
+		// summaries accumulate for the parent step to upload once.
+		outs, _ := e.drainFile("GITHUB_OUTPUT")
+		e.sumBuf.Write(e.drainSummary())
+		internal[subid] = &stepOutcome{Conclusion: outcome, Outcome: outcome, Outputs: outs}
+		if outcome == "cancelled" {
+			return "cancelled", code
+		}
+		if outcome == "failure" {
+			status = "failure" // code already holds the failing sub-step's exit code
+		}
+	}
+	if status == "failure" {
+		return "failure", code
+	}
+	// Declared outputs evaluate against the composite's internal steps and are
+	// appended to GITHUB_OUTPUT — the caller attributes them to this step's id.
+	for name, out := range meta.Outputs {
+		if strings.TrimSpace(out.Value) == "" {
+			e.logStep(step, "KERN: warning: output '"+name+"' has no value mapping")
+			continue
+		}
+		v, err := expressions.Interpolate(out.Value, compositeCtx(evalCtx, inputs, internal, status))
+		if err != nil {
+			e.logStep(step, "KERN: warning: output '"+name+"': "+err.Error())
+			continue
+		}
+		e.setStepOutput(name, v)
+	}
+	return "success", code
+}
+
+// compositeStepEnv merges the parent step's env with the composite step's own
+// (values interpolated) and stamps GITHUB_ACTION_PATH.
+func (e *executor) compositeStepEnv(step StepSpec, cs actions.CompositeStep, actionPath string, evalCtx map[string]any) (map[string]string, error) {
+	env := map[string]string{}
+	for k, v := range step.Env {
+		env[k] = v
+	}
+	for k, v := range cs.Env {
+		s, err := expressions.Interpolate(envString(v), evalCtx)
+		if err != nil {
+			return nil, fmt.Errorf("env %s: %w", k, err)
+		}
+		env[k] = s
+	}
+	env["GITHUB_ACTION_PATH"] = actionPath
+	return env, nil
+}
+
+func envString(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	default:
+		return fmt.Sprint(t)
+	}
+}
+
+// drainFile reads and removes a file-command target in the cmd dir.
+func (e *executor) drainFile(name string) (map[string]string, error) {
+	p := filepath.Join(e.cmdDir(), name)
+	defer os.Remove(p)
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return nil, err
+	}
+	return parseKeyValue(string(data))
+}
+
+func (e *executor) drainSummary() []byte {
+	p := filepath.Join(e.cmdDir(), "STEP_SUMMARY")
+	data, _ := os.ReadFile(p)
+	_ = os.Remove(p)
+	return data
+}

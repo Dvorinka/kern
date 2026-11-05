@@ -8,6 +8,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/dvorinka/kern/internal/actions"
 	"github.com/dvorinka/kern/internal/expressions"
 )
 
@@ -488,9 +489,23 @@ func validateStep(d *diagnostics, path string, s Step, seenIDs map[string]bool) 
 		seenIDs[s.ID] = true
 	}
 	if hasUses {
-		if !isSupportedAction(s.Uses) {
-			d.errorf("action-unsupported", path+".uses",
-				fmt.Sprintf("action %q is not implemented by KERN yet; supported: actions/checkout, actions/upload-artifact, actions/download-artifact, actions/cache", s.Uses))
+		switch actions.Classify(s.Uses) {
+		case actions.KindLocal:
+			if err := actions.ValidLocal(s.Uses); err != nil {
+				d.errorf("action-local", path+".uses", err.Error())
+			}
+		case actions.KindRemote:
+			if _, err := actions.ParseRemote(s.Uses); err != nil {
+				d.errorf("action-ref", path+".uses", err.Error())
+			} else {
+				d.warnf("action-remote", path+".uses",
+					fmt.Sprintf("action %q resolves at run time; only composite actions are supported by KERN yet", s.Uses))
+			}
+		case actions.KindDocker:
+			d.errorf("action-docker", path+".uses",
+				fmt.Sprintf("docker action %q is not implemented by KERN yet", s.Uses))
+		case actions.KindInvalid:
+			d.errorf("action-uses", path+".uses", fmt.Sprintf("action reference %q is malformed", s.Uses))
 		}
 		lname := strings.ToLower(strings.SplitN(s.Uses, "@", 2)[0])
 		if lname == "actions/upload-artifact" {
@@ -510,20 +525,6 @@ func validateStep(d *diagnostics, path string, s Step, seenIDs map[string]bool) 
 	if s.TimeoutMinutes < 0 {
 		d.errorf("step-timeout", path+".timeout-minutes", "timeout-minutes must not be negative")
 	}
-}
-
-// isSupportedAction allows checkout at any version; KERN performs the checkout itself.
-func isSupportedAction(uses string) bool {
-	name := uses
-	if i := strings.IndexByte(uses, '@'); i >= 0 {
-		name = uses[:i]
-	}
-	switch strings.ToLower(name) {
-	case "actions/checkout", "actions/upload-artifact", "actions/download-artifact",
-		"actions/cache", "actions/cache/restore", "actions/cache/save":
-		return true
-	}
-	return false
 }
 
 // detectCycle returns one cycle path, or nil when the graph is acyclic.

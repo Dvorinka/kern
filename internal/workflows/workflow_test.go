@@ -103,7 +103,7 @@ func TestUnknownAndUnsupportedConstructs(t *testing.T) {
 	if res.Valid {
 		t.Fatal("hostile workflow should not be valid")
 	}
-	wantCodes := []string{"unknown-key", "action-unsupported", "step-both", "no-steps", "services", "cycle"}
+	wantCodes := []string{"unknown-key", "action-docker", "step-both", "no-steps", "services", "cycle"}
 	for _, code := range wantCodes {
 		found := false
 		for _, d := range res.Diagnostics {
@@ -115,6 +115,42 @@ func TestUnknownAndUnsupportedConstructs(t *testing.T) {
 		if !found {
 			t.Errorf("missing diagnostic %q; got %+v", code, res.Diagnostics)
 		}
+	}
+}
+
+func TestUsesDiagnostics(t *testing.T) {
+	src := `on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ./.github/actions/local
+      - uses: owner/repo/path@v1
+      - uses: ./escape@v1
+      - uses: owner/repo
+`
+	res, err := Compile(src, testCompiler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Valid {
+		t.Fatal("refless remote and tagged local should invalidate")
+	}
+	codes := map[string]string{}
+	for _, d := range res.Diagnostics {
+		codes[d.Path] = d.Code
+	}
+	if c := codes["jobs.a.steps[1].uses"]; c != "action-remote" {
+		t.Errorf("remote uses should warn, got %q", c)
+	}
+	if c := codes["jobs.a.steps[2].uses"]; c != "action-local" {
+		t.Errorf("tagged local should error, got %q", c)
+	}
+	if c := codes["jobs.a.steps[3].uses"]; c != "action-ref" {
+		t.Errorf("refless remote should error, got %q", c)
+	}
+	if _, bad := codes["jobs.a.steps[0].uses"]; bad {
+		t.Error("local composite should produce no diagnostic")
 	}
 }
 
