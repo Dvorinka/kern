@@ -245,7 +245,7 @@ Implement compatibility for:
 - Event triggers.
 - push.
 - pull_request.
-- pull_request_target, with strict security handling.
+- pull_request_target: trusted default-branch workflow and checkout, synthesized from the pull_request webhook (GitHub Apps cannot subscribe to the event). Fork pull_request runs stay untrusted.
 - release.
 - workflow_dispatch.
 - workflow_call.

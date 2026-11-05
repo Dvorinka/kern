@@ -48,7 +48,7 @@ Invariants:
 - YAML is never executed as parsed. The compiler produces a static plan; runners only ever see a `ClaimedJob`.
 - The control plane never executes repository code.
 - A runner failure never corrupts a run: expired leases are reclaimed and retried with a bounded attempt count.
-- Untrusted (fork / `pull_request_target`) work never receives secrets or deployment credentials.
+- Untrusted fork `pull_request` work never receives secrets or deployment credentials. `pull_request_target` runs trusted default-branch code and may receive secrets.
 
 ## 4. Data model
 

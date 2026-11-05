@@ -27,7 +27,7 @@ container on a registered runner). See `plan.md` for the milestone ledger and
 
 ## Quickstart
 
-Requires Go 1.24+, Docker, PostgreSQL 16, and `just`.
+Requires Go 1.26+, Docker, PostgreSQL 16, and `just`.
 
 ```sh
 # 1. Postgres (any reachable instance; or use the compose file)
