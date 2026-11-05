@@ -5,7 +5,10 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/kern-runner ./cmd/runner
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build -trimpath \
+    -ldflags "-s -w -X github.com/dvorinka/kern/internal/version.Version=${VERSION}" \
+    -o /out/kern-runner ./cmd/runner
 
 FROM debian:bookworm-slim
 # docker.io on bookworm speaks API 1.41; dockerd 25+ wants >= 1.44. Ship the
