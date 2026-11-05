@@ -343,4 +343,13 @@ export interface UpdateInfo {
 	checked_at: string;
 	repo: string;
 	error?: string;
+	auto_update: string;
+	manifest_ok: boolean;
+	manifest_error?: string;
+	git_sha?: string;
+	runner_image?: string;
+	apply_block?: string;
+	updater: string;
+	updater_error?: string;
+	updater_at?: string;
 }

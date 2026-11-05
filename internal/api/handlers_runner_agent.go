@@ -82,17 +82,34 @@ func (s *Server) registerRunner(c *gin.Context) {
 
 func (s *Server) runnerHeartbeat(c *gin.Context) {
 	runner, _ := currentRunner(c)
-	var m store.HostMetrics
+	var body struct {
+		store.HostMetrics
+		ActiveJobs int  `json:"active_jobs"`
+		SelfUpdate bool `json:"self_update"`
+	}
 	// An empty body is legal (older runners); fields stay nil.
-	if err := c.ShouldBindJSON(&m); err != nil && err != io.EOF {
+	if err := c.ShouldBindJSON(&body); err != nil && err != io.EOF {
 		fail(c, http.StatusBadRequest, "invalid_body", "invalid heartbeat body")
 		return
 	}
-	if err := s.Store.Heartbeat(c.Request.Context(), runner.ID, m); err != nil {
+	if err := s.Store.Heartbeat(c.Request.Context(), runner.ID, body.HostMetrics); err != nil {
 		s.internalError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "draining": runner.Draining})
+	resp := gin.H{"ok": true, "draining": runner.Draining}
+	jobs, err := s.Store.RunnerActiveJobs(c.Request.Context(), runner.ID)
+	if err != nil {
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+	active := len(jobs)
+	if body.ActiveJobs > active {
+		active = body.ActiveJobs
+	}
+	if image, ver, ok := s.offerRunnerUpdate(c.Request.Context(), runner, body.SelfUpdate, active); ok {
+		resp["update"] = gin.H{"version": ver, "image": image}
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // claimJob long-polls for compatible work; it returns 204 when the wait expires.

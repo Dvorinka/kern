@@ -52,6 +52,37 @@ at `/opt/kern/work` for exactly this reason — keep the two paths identical.
 Verify: `curl -s localhost:8080/healthz` and log in at the web UI with the
 bootstrap admin.
 
+Set `KERN_VERSION` to the release you are deploying (`v0.3.0`, not `dev`)
+before the build. An unstamped binary reports `dev`, and automatic apply
+refuses to compare that.
+
+## 2a. Automatic updates
+
+The API container cannot replace itself. Apply is a second process.
+
+1. Settings → Automatic updates, or `kern settings set auto_update on`.
+   The default is off. Turning it on does nothing until a release carries
+   a signed `kern-update.json`.
+2. Start the sidecar once: `docker compose -f deployments/docker-compose.yml --env-file /opt/kern/.env --profile update up -d`.
+   It polls `GET /api/v1/update/plan` with the runner join token. When the
+   plan says apply, it `git fetch`es the manifest's commit, fast-forwards
+   `master` only, and runs `docker compose up -d --build --no-deps api runner`
+   from `deployments/` with `KERN_VERSION` set to the release tag. A dirty
+   checkout or a non-fast-forward is reported and not forced.
+3. External runners (not the compose service) opt in with
+   `KERN_RUNNER_UPDATE=1`. The heartbeat then offers
+   `ghcr.io/dvorinka/kern-runner@sha256:…` to one idle runner at a time.
+   That runner pulls the digest and replaces its own container. The compose
+   runner leaves the variable unset; the sidecar rebuilds it.
+
+The signature is ed25519. The public key is compiled into the API. The
+private key is the GitHub secret `KERN_UPDATE_SIGNING_KEY`, used by
+`release.yml` after the images are pushed. A release without that asset
+stays informational: the settings page shows it and nothing is applied.
+The first deploy of this mechanism is still the command above. Later
+releases apply themselves only after that sidecar is running and the
+running version is a real dotted triple.
+
 ## 3. GitHub App
 
 The App is the event source and the status poster.

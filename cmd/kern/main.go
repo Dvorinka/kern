@@ -45,6 +45,7 @@ Settings:
   settings get
   settings set self_heal off|auto|approve [--project S]
   settings set public_ci on|off
+  settings set auto_update on|off
   settings set fork_gate off|all|first-time --project S
 
 Runners:

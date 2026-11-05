@@ -1,11 +1,25 @@
 package runner
 
 import (
+	"os"
 	"strings"
 	"testing"
 
 	"go.uber.org/zap"
 )
+
+func TestJobCAMount(t *testing.T) {
+	got := jobCAMount()
+	if _, err := os.Stat(hostCABundle); err != nil {
+		if got != nil {
+			t.Fatal(got)
+		}
+		return
+	}
+	if len(got) != 2 || got[1] != hostCABundle+":"+hostCABundle+":ro" {
+		t.Fatal(got)
+	}
+}
 
 func TestImageValidation(t *testing.T) {
 	for _, img := range []string{"ubuntu:24.04", "ghcr.io/dvorinka/kern-runner", "alpine", "node:22-bookworm@sha256:abc-_.0"} {
@@ -33,6 +47,24 @@ func TestParseKeyValue(t *testing.T) {
 	}
 	if len(got) != len(want) {
 		t.Errorf("unexpected keys: %v", got)
+	}
+}
+
+func TestPathLinesTrailingNewline(t *testing.T) {
+	b := newEnvBuilder(&Claim{}, nil)
+	if got := b.pathLines(); got != "" {
+		t.Fatalf("empty: %q", got)
+	}
+	b.persistPaths([]string{"/kern/node/v20.18.1/bin"})
+	got := b.pathLines()
+	if got != "/kern/node/v20.18.1/bin\n" {
+		t.Fatalf("%q", got)
+	}
+	// @actions/core addPath appends "<dir>\n" onto this file.
+	appended := got + "/kern/cache/_toolcache/go/1.26.10/x64/bin\n"
+	lines := strings.Split(strings.TrimRight(appended, "\n"), "\n")
+	if len(lines) != 2 || lines[0] != "/kern/node/v20.18.1/bin" || lines[1] != "/kern/cache/_toolcache/go/1.26.10/x64/bin" {
+		t.Fatal(lines)
 	}
 }
 

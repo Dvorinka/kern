@@ -90,21 +90,28 @@ func TestOrgSettingWrites(t *testing.T) {
 	off := "off"
 	bad := "sometimes"
 	on := "on"
-	writes, msg := orgSettingWrites(&off, nil)
+	writes, msg := orgSettingWrites(&off, nil, nil)
 	if msg != "" || writes["self_heal"] != "off" || len(writes) != 1 {
 		t.Fatalf("self_heal only: %v %q", writes, msg)
 	}
-	writes, msg = orgSettingWrites(nil, &on)
+	writes, msg = orgSettingWrites(nil, &on, nil)
 	if msg != "" || writes["public_ci"] != "on" {
 		t.Fatalf("public only: %v %q", writes, msg)
 	}
-	if _, msg = orgSettingWrites(nil, nil); msg == "" {
+	writes, msg = orgSettingWrites(nil, nil, &on)
+	if msg != "" || writes["auto_update"] != "on" {
+		t.Fatalf("auto_update only: %v %q", writes, msg)
+	}
+	if _, msg = orgSettingWrites(nil, nil, nil); msg == "" {
 		t.Fatal("empty body must fail")
 	}
-	if _, msg = orgSettingWrites(&bad, nil); msg == "" {
+	if _, msg = orgSettingWrites(&bad, nil, nil); msg == "" {
 		t.Fatal("bad self_heal must fail")
 	}
-	if _, msg = orgSettingWrites(nil, &bad); msg == "" {
+	if _, msg = orgSettingWrites(nil, &bad, nil); msg == "" {
 		t.Fatal("bad public_ci must fail")
+	}
+	if _, msg = orgSettingWrites(nil, nil, &bad); msg == "" {
+		t.Fatal("bad auto_update must fail")
 	}
 }

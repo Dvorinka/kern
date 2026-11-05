@@ -38,6 +38,18 @@ func cacheDir(workRoot string) string {
 	return filepath.Join(workRoot, "_cache")
 }
 
+// hostCABundle is the trust store the job container does not ship.
+// ubuntu:24.04 has no CA bundle, and Go ignores its embedded roots when
+// the system store is missing. The daemon mounts this host path.
+const hostCABundle = "/etc/ssl/certs/ca-certificates.crt"
+
+func jobCAMount() []string {
+	if _, err := os.Stat(hostCABundle); err != nil {
+		return nil
+	}
+	return []string{"-v", hostCABundle + ":" + hostCABundle + ":ro"}
+}
+
 var (
 	imageRe     = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/:@-]*$`)
 	nonIDRe     = regexp.MustCompile(`[^a-zA-Z0-9_-]`)
@@ -156,6 +168,9 @@ func (e *executor) prepare(ctx context.Context) error {
 		e.goStop()
 		return fmt.Errorf("checkout: %w", err)
 	}
+	// Steps run as jobUID but checkout ran as the runner user; hand the
+	// workspace over so steps can write inside it (node_modules, dist).
+	chownTree(filepath.Join(e.workRoot(), "workspace"), jobUID)
 	if err := e.pull(ctx); err != nil {
 		e.goStop()
 		return fmt.Errorf("pull image: %w", err)
@@ -227,6 +242,9 @@ func (e *executor) startContainer(ctx context.Context) error {
 		"-v", filepath.Join(e.cfg.WorkRoot, "_node")+":"+containerNodeRoot+":ro",
 		"-v", cacheDir(e.cfg.WorkRoot)+":"+containerCacheDir,
 		"-v", filepath.Join(workRoot, "home")+":"+containerActionHome,
+	)
+	args = append(args, jobCAMount()...)
+	args = append(args,
 		"-e", "KERN_CACHE_DIR="+containerCacheDir,
 		// setup-* actions resolve @actions/tool-cache via RUNNER_TOOL_CACHE;
 		// pointing it at the persistent runner cache makes installed SDKs warm.
@@ -235,6 +253,8 @@ func (e *executor) startContainer(ctx context.Context) error {
 		// Actions resolve $HOME for tool state (setup-go GOPATH, npm config);
 		// images may carry no writable home for uid 1000 at all.
 		"-e", "HOME="+containerActionHome,
+		// Leave PATH to the image. golang:1.26 puts go on its own PATH, and
+		// replacing that hides the toolchain. Node is prepended per step.
 		"-e", "GITHUB_WORKSPACE="+containerWorkspace,
 		"-e", "GITHUB_REPOSITORY="+defaultStr(e.claim.Run.RepoFullName, e.claim.Run.Project),
 		"-e", "GITHUB_SHA="+e.claim.Run.SHA,
@@ -386,6 +406,20 @@ func (e *executor) cleanup() {
 	_ = exec.CommandContext(ctx, "docker", "rm", "-f", e.container).Run()
 	e.stopServices(ctx)
 	_ = os.RemoveAll(e.workRoot())
+}
+
+// chownTree gives every workspace entry to the job user. Best-effort: a
+// runner without chown rights leaves the files as they are and the step
+// surfaces its own EACCES diagnosis. Lchown keeps repository symlinks from
+// reaching outside the workspace.
+func chownTree(root string, uid int) {
+	_ = filepath.Walk(root, func(p string, _ os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		_ = os.Lchown(p, uid, uid)
+		return nil
+	})
 }
 
 func valueOr(v, def string) string {

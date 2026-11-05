@@ -13,6 +13,7 @@ export function SettingsPage() {
 			<PageHeader title="Settings" sub="Access tokens, automation policy, and instance information" />
 			<PublicCICard />
 			<SelfHealCard />
+			<AutoUpdateCard />
 			<TokensCard />
 			<UpdateCard />
 			<InstanceCard />
@@ -101,6 +102,49 @@ function SelfHealCard() {
 	);
 }
 
+function AutoUpdateCard() {
+	const qc = useQueryClient();
+	const { data } = useQuery({
+		queryKey: ["settings"],
+		queryFn: () => api.get<{ self_heal: string; public_ci: string; auto_update: string }>("/settings"),
+	});
+	const setAuto = useMutation({
+		mutationFn: (v: string) => api.put("/settings", { auto_update: v }),
+		onSuccess: () => {
+			qc.invalidateQueries({ queryKey: ["settings"] });
+			qc.invalidateQueries({ queryKey: ["update"] });
+		},
+	});
+	return (
+		<Card className="mb-4">
+			<CardHeader
+				title="Automatic updates"
+				sub="off by default. A signed release is the only thing this will apply"
+			/>
+			<Row>
+				<span className="min-w-0 flex-1 text-xs text-[var(--dim)]">
+					When on, the host updater fast-forwards the checkout and rebuilds the API. The API
+					process cannot replace its own container. Runners with <span className="font-mono">KERN_RUNNER_UPDATE=1</span> pull
+					the signed image and replace themselves, one at a time. An unsigned release is shown and not applied.
+				</span>
+				<select
+					className="fsel"
+					aria-label="Automatic updates"
+					value={data?.auto_update ?? "off"}
+					disabled={setAuto.isPending}
+					onChange={(e) => setAuto.mutate(e.target.value)}
+				>
+					<option value="off">off</option>
+					<option value="on">on</option>
+				</select>
+			</Row>
+			{setAuto.error && (
+				<div className="px-4 py-2 text-xs text-[var(--err)]">{setAuto.error.message}</div>
+			)}
+		</Card>
+	);
+}
+
 function UpdateCard() {
 	const qc = useQueryClient();
 	const { data } = useQuery({
@@ -126,33 +170,57 @@ function UpdateCard() {
 			/>
 			{!data ? (
 				<Spinner />
-			) : !data.ok ? (
-				<div className="px-4 py-3 text-xs text-[var(--faint)]">
-					Could not reach {data.repo} releases{data.error ? ` — ${data.error}` : ""}.
-				</div>
-			) : data.available ? (
-				<Row>
-					<span className="sq warn" style={{ width: 7, height: 7 }} />
-					<span className="min-w-0 flex-1 text-xs">
-						<span className="text-[var(--warn)]">{data.latest}</span> is available — you run{" "}
-						<span className="font-mono">{data.current}</span>
-					</span>
-					<a className="lnk text-xs" href={data.url} target="_blank" rel="noreferrer">
-						Download
-					</a>
-				</Row>
 			) : (
-				<Row>
-					<span className="sq ok" style={{ width: 7, height: 7 }} />
-					<span className="min-w-0 flex-1 text-xs text-[var(--dim)]">
-						Running <span className="font-mono">{data.current}</span> — latest release of{" "}
-						{data.repo} is{" "}
-						<a className="lnk" href={data.url} target="_blank" rel="noreferrer">
-							{data.latest}
-						</a>
-						.
-					</span>
-				</Row>
+				<>
+					{!data.ok ? (
+						<div className="px-4 py-3 text-xs text-[var(--faint)]">
+							Could not reach {data.repo} releases{data.error ? ` — ${data.error}` : ""}.
+						</div>
+					) : data.available ? (
+						<Row>
+							<span className="sq warn" style={{ width: 7, height: 7 }} />
+							<span className="min-w-0 flex-1 text-xs">
+								<span className="text-[var(--warn)]">{data.latest}</span> is available — you run{" "}
+								<span className="font-mono">{data.current}</span>
+							</span>
+							<a className="lnk text-xs" href={data.url} target="_blank" rel="noreferrer">
+								Release
+							</a>
+						</Row>
+					) : (
+						<Row>
+							<span className="sq ok" style={{ width: 7, height: 7 }} />
+							<span className="min-w-0 flex-1 text-xs text-[var(--dim)]">
+								Running <span className="font-mono">{data.current}</span> — latest release of{" "}
+								{data.repo} is{" "}
+								<a className="lnk" href={data.url} target="_blank" rel="noreferrer">
+									{data.latest}
+								</a>
+								.
+							</span>
+						</Row>
+					)}
+					<div className="border-t border-[var(--line)] px-4 py-2 text-xs text-[var(--dim)]">
+						{data.manifest_ok
+							? `Signed manifest for ${data.latest}${data.git_sha ? ` (${data.git_sha.slice(0, 7)})` : ""}.`
+							: data.manifest_error || "No signed manifest on this release."}
+						{data.auto_update === "on" &&
+						data.ok &&
+						data.apply_block &&
+						data.apply_block !== data.manifest_error
+							? ` ${data.apply_block}.`
+							: ""}
+						{data.auto_update === "on" && !data.apply_block && data.available
+							? " The host updater will fast-forward master and rebuild the API."
+							: ""}
+					</div>
+					<div className="px-4 pb-3 text-xs text-[var(--faint)]">
+						Host updater: {data.updater}
+						{data.updater_at ? ` · ${relTime(data.updater_at)}` : ""}
+						{data.updater_error ? ` — ${data.updater_error}` : ""}
+						{data.updater === "not_seen" ? ". Start it with compose profile update." : ""}
+					</div>
+				</>
 			)}
 		</Card>
 	);

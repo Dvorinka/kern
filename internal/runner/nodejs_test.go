@@ -6,6 +6,12 @@ import (
 	"github.com/dvorinka/kern/internal/actions"
 )
 
+func TestContainerNodeDir(t *testing.T) {
+	if got := containerNodeDir(); got != "/kern/node/v20.18.1/bin" {
+		t.Fatal(got)
+	}
+}
+
 func TestInputKey(t *testing.T) {
 	for in, want := range map[string]string{
 		"who":          "INPUT_WHO",

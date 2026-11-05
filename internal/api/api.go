@@ -187,6 +187,8 @@ func (s *Server) buildRouter() *gin.Engine {
 	}
 
 	r.POST("/api/v1/runners/register", s.registerRunner)
+	r.GET("/api/v1/update/plan", s.updatePlan)
+	r.POST("/api/v1/update/status", s.updateStatusReport)
 	runner := r.Group("/api/v1", s.requireRunner())
 	{
 		runner.POST("/runners/heartbeat", s.runnerHeartbeat)
