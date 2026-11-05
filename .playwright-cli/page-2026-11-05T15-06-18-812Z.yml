@@ -1,0 +1,11 @@
+- generic [ref=e5]:
+  - generic [ref=e7]:
+    - generic [ref=e8]: KERN
+    - generic [ref=e9]: Distributed CI/CD control plane
+  - generic [ref=e10]:
+    - generic [ref=e11]: Email
+    - textbox "Email" [ref=e12]: admin@kern.local
+  - generic [ref=e13]:
+    - generic [ref=e14]: Password
+    - textbox "Password" [active] [ref=e15]: kern-admin-password
+  - button "Sign in" [ref=e16] [cursor=pointer]
