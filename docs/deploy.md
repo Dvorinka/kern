@@ -20,7 +20,9 @@ Copy `.env.example` to `/opt/kern/.env` and fill in:
 - `KERN_SECRET_KEY` — exactly 32 bytes (AES-256 for stored secrets).
 - `KERN_RUNNER_JOIN_TOKEN` — random shared token the runner registers with.
 - `KERN_PUBLIC_URL` — the public URL, e.g. `https://kern.example.com`. Commit
-  statuses link back to runs at this URL.
+  statuses and check runs link back to runs at this URL. Those links open
+  without a login only when the org setting `public_ci` is `on` (Settings →
+  Public runs, default off).
 - `KERN_BOOTSTRAP_EMAIL` / `KERN_BOOTSTRAP_PASSWORD` — first admin login.
 - `KERN_GITHUB_APP_ID`, `KERN_GITHUB_APP_PRIVATE_KEY_FILE`,
   `KERN_GITHUB_WEBHOOK_SECRET` — see section 3.
@@ -54,8 +56,10 @@ The App is the event source and the status poster.
    homepage `https://kern.example.com`, webhook URL
    `https://kern.example.com/api/v1/webhooks/github`, webhook secret = the
    `KERN_GITHUB_WEBHOOK_SECRET` value, permissions: Contents read, Commit
-   statuses read/write, Pull requests read. Events: push, pull_request,
-   check_run, check_suite.
+   statuses read/write, Checks read/write, Pull requests read. Events: push,
+   pull_request, check_run, check_suite. Checks write is what lets GitHub
+   render the job table on the commit. Statuses still post if that permission
+   is missing.
 2. Download the private key; place it at the path in
    `KERN_GITHUB_APP_PRIVATE_KEY_FILE` and `chmod 0644` — the api container runs
    as a non-root user and must be able to read it. The compose file mounts

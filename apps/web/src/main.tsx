@@ -17,9 +17,11 @@ import { CachePage } from "./routes/cache";
 import { DeliveriesPage } from "./routes/deliveries";
 import { SettingsPage } from "./routes/settings";
 import { EnvironmentsPage } from "./routes/environments";
+import { PublicRunPage } from "./routes/public-run";
 
 const router = createBrowserRouter([
 	{ path: "/login", element: <LoginPage /> },
+	{ path: "/ci/:id", element: <PublicRunPage /> },
 	{
 		path: "/",
 		element: <Layout />,

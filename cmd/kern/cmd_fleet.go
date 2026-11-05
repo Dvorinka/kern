@@ -206,6 +206,7 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 	case "get":
 		var out struct {
 			SelfHeal string `json:"self_heal"`
+			PublicCI string `json:"public_ci"`
 		}
 		if err := c.api().get(ctx, path, nil, &out); err != nil {
 			return err
@@ -214,16 +215,38 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 			printJSON(out)
 		} else {
 			fmt.Println("self_heal:", out.SelfHeal)
+			if path == "/settings" {
+				v := out.PublicCI
+				if v == "" {
+					v = "off"
+				}
+				fmt.Println("public_ci:", v)
+			}
 		}
 	case "set":
-		if len(pos) < 2 || pos[0] != "self_heal" {
-			return fmt.Errorf("usage: kern settings set self_heal off|auto|approve [--project S]")
+		if len(pos) < 2 {
+			return fmt.Errorf("usage: kern settings set self_heal off|auto|approve [--project S] | public_ci on|off")
+		}
+		body := map[string]any{}
+		switch pos[0] {
+		case "self_heal":
+			body["self_heal"] = pos[1]
+		case "public_ci":
+			if path != "/settings" {
+				return fmt.Errorf("public_ci is an org setting")
+			}
+			if pos[1] != "on" && pos[1] != "off" {
+				return fmt.Errorf("usage: kern settings set public_ci on|off")
+			}
+			body["public_ci"] = pos[1]
+		default:
+			return fmt.Errorf("usage: kern settings set self_heal off|auto|approve [--project S] | public_ci on|off")
 		}
 		var out map[string]string
-		if err := c.api().put(ctx, path, map[string]any{"self_heal": pos[1]}, &out); err != nil {
+		if err := c.api().put(ctx, path, body, &out); err != nil {
 			return err
 		}
-		fmt.Println("self_heal =", pos[1])
+		fmt.Println(pos[0], "=", pos[1])
 	default:
 		return fmt.Errorf("unknown settings subcommand %q", args[0])
 	}

@@ -73,8 +73,9 @@ never silently ignored.
 | Inbound `pull_request` webhooks | done | head-SHA runs compiled at the head SHA on the base repo; checkout comes from the head repo so forks work; default action set + `types`/`branches` filters honoured |
 | GitHub App auth | done | RS256 JWT → installation access tokens (cached); repo → installation resolved via API; preferred over `KERN_GITHUB_TOKEN` when `KERN_GITHUB_APP_ID` + key are set; `KERN_GITHUB_APP_PRIVATE_KEY_FILE` for pem paths |
 | Workflow discovery from GitHub | done | contents/tree API via `repo_full_name`; App token or `KERN_GITHUB_TOKEN` for private repos |
-| Commit statuses | done | `pending` at run creation, terminal state on completion; context `kern/<workflow>`; posted as the App installation when configured |
-| Check-runs | no | commit statuses only for now |
+| Commit statuses | done | `pending` at run creation, terminal state on completion; context `kern/<workflow>`; description includes the job tally; posted as the App installation when configured |
+| Check-runs | done | one check per run, name `kern/<workflow>`, `external_id` is the run id, output is a job and step table; `details_url` matches the commit status target |
+| Public run page | optional | org setting `public_ci`, default `off`. When `on`, GitHub links open `/ci/:id` (no login) backed by `GET /api/v1/public/runs/:id`. Payload is status, jobs, and step names. Logs, env, scripts, and email actors stay private. When `off`, links stay on `/runs/:id` and the public route 404s |
 
 ## Secrets and trust
 

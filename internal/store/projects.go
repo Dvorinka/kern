@@ -75,6 +75,17 @@ func (s *Store) ProjectsByRepoFullName(ctx context.Context, fullName string) ([]
 	return out, rows.Err()
 }
 
+// ProjectOrg is the owning org of a project. Public run pages use it to
+// read the org toggle without a session.
+func (s *Store) ProjectOrg(ctx context.Context, projectID uuid.UUID) (uuid.UUID, error) {
+	var id uuid.UUID
+	err := s.pool.QueryRow(ctx, `SELECT org_id FROM projects WHERE id = $1`, projectID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, ErrNotFound
+	}
+	return id, err
+}
+
 func (s *Store) Project(ctx context.Context, orgID uuid.UUID, id string) (Project, error) {
 	uid, err := uuid.Parse(id)
 	if err != nil {

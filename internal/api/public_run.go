@@ -1,0 +1,217 @@
+package api
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+
+	"github.com/dvorinka/kern/internal/store"
+)
+
+// getPublicRun serves a reduced run view with no session. The org setting
+// public_ci must be "on"; otherwise the response is the same 404 as a missing
+// run. Logs, env, scripts, and step specs stay on the authenticated route.
+func (s *Server) getPublicRun(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		fail(c, http.StatusBadRequest, "invalid_id", "run id must be a uuid")
+		return
+	}
+	run, err := s.Store.Run(c.Request.Context(), id)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	if !s.publicCIEnabled(c.Request.Context(), run.ProjectID) {
+		fail(c, http.StatusNotFound, "not_found", "resource not found")
+		return
+	}
+	jobs, err := s.Store.JobsForRun(c.Request.Context(), run.ID)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	view, pjobs := publicView(run, jobs)
+	c.JSON(http.StatusOK, gin.H{"run": view, "jobs": pjobs})
+}
+
+func (s *Server) publicCIEnabled(ctx context.Context, projectID uuid.UUID) bool {
+	orgID, err := s.Store.ProjectOrg(ctx, projectID)
+	if err != nil {
+		return false
+	}
+	raw, err := s.Store.OrgSettings(ctx, orgID)
+	if err != nil {
+		return false
+	}
+	return settingsValue(raw, "public_ci", "off") == "on"
+}
+
+// runPageURL is the page GitHub should open for this run. Public links are
+// used only while the org toggle is on.
+func (s *Server) runPageURL(ctx context.Context, run store.Run) string {
+	return s.Cfg.PublicBaseURL + runPagePath(s.publicCIEnabled(ctx, run.ProjectID), run.ID.String())
+}
+
+func runPagePath(public bool, id string) string {
+	if public {
+		return "/ci/" + id
+	}
+	return "/runs/" + id
+}
+
+type publicRun struct {
+	ID          string     `json:"id"`
+	Number      int        `json:"run_number"`
+	Workflow    string     `json:"workflow_name"`
+	Event       string     `json:"event"`
+	Ref         string     `json:"ref"`
+	SHA         string     `json:"sha"`
+	Commit      string     `json:"commit_message"`
+	Actor       string     `json:"actor,omitempty"`
+	Status      string     `json:"status"`
+	Conclusion  string     `json:"conclusion"`
+	Project     string     `json:"project_slug"`
+	StartedAt   *time.Time `json:"started_at"`
+	CompletedAt *time.Time `json:"completed_at"`
+}
+
+type publicJob struct {
+	Name        string       `json:"name"`
+	Status      string       `json:"status"`
+	Conclusion  string       `json:"conclusion"`
+	StartedAt   *time.Time   `json:"started_at"`
+	CompletedAt *time.Time   `json:"completed_at"`
+	Steps       []publicStep `json:"steps"`
+}
+
+type publicStep struct {
+	Number      int        `json:"number"`
+	Name        string     `json:"name"`
+	Status      string     `json:"status"`
+	Conclusion  string     `json:"conclusion"`
+	StartedAt   *time.Time `json:"started_at"`
+	CompletedAt *time.Time `json:"completed_at"`
+}
+
+func publicView(run store.Run, jobs []store.Job) (publicRun, []publicJob) {
+	msg := run.CommitMessage
+	if i := strings.IndexByte(msg, '\n'); i >= 0 {
+		msg = msg[:i]
+	}
+	actor := run.Actor
+	if strings.Contains(actor, "@") {
+		actor = ""
+	}
+	view := publicRun{
+		ID: run.ID.String(), Number: run.RunNumber, Workflow: run.WorkflowName,
+		Event: run.Event, Ref: run.Ref, SHA: run.SHA, Commit: msg, Actor: actor,
+		Status: run.Status, Conclusion: run.Conclusion, Project: run.ProjectSlug,
+		StartedAt: run.StartedAt, CompletedAt: run.CompletedAt,
+	}
+	out := make([]publicJob, 0, len(jobs))
+	for _, j := range jobs {
+		pj := publicJob{
+			Name: j.Name, Status: j.Status, Conclusion: j.Conclusion,
+			StartedAt: j.StartedAt, CompletedAt: j.CompletedAt,
+			Steps: make([]publicStep, 0, len(j.Steps)),
+		}
+		for _, st := range j.Steps {
+			pj.Steps = append(pj.Steps, publicStep{
+				Number: st.Number, Name: st.Name, Status: st.Status, Conclusion: st.Conclusion,
+				StartedAt: st.StartedAt, CompletedAt: st.CompletedAt,
+			})
+		}
+		out = append(out, pj)
+	}
+	return view, out
+}
+
+// githubCheck maps a commit-status state onto the Checks API.
+func githubCheck(state string, run store.Run) (status, conclusion string) {
+	if state == "pending" {
+		return "in_progress", ""
+	}
+	switch run.Conclusion {
+	case "success", "failure", "cancelled", "skipped", "timed_out", "neutral", "action_required":
+		return "completed", run.Conclusion
+	case "":
+		if state == "success" {
+			return "completed", "success"
+		}
+		return "completed", "failure"
+	default:
+		return "completed", "failure"
+	}
+}
+
+func statusDescription(run store.Run, state string, jobs []store.Job) string {
+	if len(jobs) == 0 {
+		return "KERN " + run.WorkflowName + ": " + state
+	}
+	failed := 0
+	for _, j := range jobs {
+		if j.Conclusion == "failure" {
+			failed++
+		}
+	}
+	if failed > 0 {
+		return fmt.Sprintf("KERN %s: %s (%d/%d jobs failed)", run.WorkflowName, state, failed, len(jobs))
+	}
+	return fmt.Sprintf("KERN %s: %s (%d jobs)", run.WorkflowName, state, len(jobs))
+}
+
+func checkTitle(run store.Run, state string) string {
+	label := state
+	if run.Conclusion != "" {
+		label = run.Conclusion
+	}
+	return fmt.Sprintf("%s #%d %s", run.WorkflowName, run.RunNumber, label)
+}
+
+func checkSummary(run store.Run, jobs []store.Job) string {
+	var b strings.Builder
+	sha := run.SHA
+	if len(sha) > 7 {
+		sha = sha[:7]
+	}
+	fmt.Fprintf(&b, "%s #%d · %s · `%s`\n\n", run.WorkflowName, run.RunNumber, run.Event, sha)
+	if len(jobs) == 0 {
+		b.WriteString("No jobs yet.\n")
+		return b.String()
+	}
+	b.WriteString("| Job | Status |\n| --- | --- |\n")
+	for _, j := range jobs {
+		st := j.Conclusion
+		if st == "" {
+			st = j.Status
+		}
+		fmt.Fprintf(&b, "| %s | %s |\n", mdCell(j.Name), mdCell(st))
+		for _, step := range j.Steps {
+			sst := step.Conclusion
+			if sst == "" {
+				sst = step.Status
+			}
+			fmt.Fprintf(&b, "| %s | %s |\n", mdCell("↳ "+step.Name), mdCell(sst))
+		}
+	}
+	s := b.String()
+	if len(s) > 6000 {
+		return s[:6000]
+	}
+	return s
+}
+
+func mdCell(s string) string {
+	s = strings.ReplaceAll(s, "|", "/")
+	s = strings.ReplaceAll(s, "\n", " ")
+	if len(s) > 80 {
+		s = s[:80]
+	}
+	return s
+}
