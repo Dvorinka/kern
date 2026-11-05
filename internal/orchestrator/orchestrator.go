@@ -179,8 +179,13 @@ func (o *Orchestrator) Tick(ctx context.Context) {
 				}
 			}
 		}
-		if o.LogRetention > 0 && time.Since(o.lastRetentionSweep) > time.Hour {
-			o.lastRetentionSweep = time.Now()
+	}
+	// One clock for every hourly prune. Log pruning used to stamp the clock
+	// and the webhook prune, checked second, never ran while log retention
+	// was enabled (the default).
+	if time.Since(o.lastRetentionSweep) > time.Hour && (o.LogRetention > 0 || o.WebhookRetention > 0) {
+		o.lastRetentionSweep = time.Now()
+		if o.Blobs != nil && o.LogRetention > 0 {
 			if refs, err := o.Store.PruneStepBlobs(ctx, o.LogRetention); err != nil {
 				o.Log.Error("prune step blobs", zap.Error(err))
 			} else {
@@ -192,13 +197,12 @@ func (o *Orchestrator) Tick(ctx context.Context) {
 				}
 			}
 		}
-	}
-	if o.WebhookRetention > 0 && time.Since(o.lastRetentionSweep) > time.Hour {
-		o.lastRetentionSweep = time.Now()
-		if n, err := o.Store.PruneWebhookDeliveries(ctx, o.WebhookRetention); err != nil {
-			o.Log.Error("prune webhook deliveries", zap.Error(err))
-		} else if n > 0 {
-			o.Log.Info("webhook retention pruned deliveries", zap.Int64("rows", n))
+		if o.WebhookRetention > 0 {
+			if n, err := o.Store.PruneWebhookDeliveries(ctx, o.WebhookRetention); err != nil {
+				o.Log.Error("prune webhook deliveries", zap.Error(err))
+			} else if n > 0 {
+				o.Log.Info("webhook retention pruned deliveries", zap.Int64("rows", n))
+			}
 		}
 	}
 	ids, err := o.Store.ActiveRunIDs(ctx, 200)
