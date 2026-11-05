@@ -184,19 +184,27 @@ PERF/RELIABILITY PASS (2026-11-04, commits 4a4e10a + 9c68fbf + aca8ffc):
   digest stability, store tests now refuse non-kern_test DSNs (was truncating
   dev DB).
 
+GITHUB HARDENING (2026-11-05, PR #20 `feat/github-hardening`, open):
+- `pull_request_target` done: base default-branch head for workflow+checkout,
+  github.head_ref/head_sha exposed; App manifest subscribes new installs —
+  EXISTING installations must enable the event in GitHub app settings.
+- Fork gate: project `fork_gate` off|all|first-time → `awaiting_approval` run
+  status (migration 0010); approve via POST /runs/:id/approve, `kern runs
+  approve`, or run-page button; cancel rejects.
+- `KERN_WEBHOOK_RETENTION` (30d) prunes webhook_deliveries hourly.
+- Merge-ref divergence kept as documented (head SHA, not refs/pull/N/merge).
+
 Remaining work, ordered by value:
 
-1. Check-runs as the App (currently commit statuses only); pull_request_target
-   strict semantics; first-time-contributor approval gate for fork PRs.
-2. PR merge-ref semantics (refs/pull/N/merge) if wanted — head SHA is the
-   current documented choice.
-3. Security — fork-PR isolation policy, secret masking breadth test, webhook
-   replay window.
-4. Ops — artifact/run-row retention knobs beyond logs, backup story, metrics
+1. Merge PR #20 after review; deploy to CT 908 + enable pull_request_target on
+   the existing App installation, then verify a real fork PR end-to-end.
+2. Security — secret masking breadth test, webhook replay window.
+3. Ops — artifact/run-row retention knobs beyond logs, backup story, metrics
    alerting rules.
-5. Frontend — artifact browsing, webhook delivery viewer, run cancel coverage.
+4. Frontend — artifact browsing, webhook delivery viewer, run cancel coverage.
    NEXT PHASE IS USER-DIRECTED UI REDESIGN — hand back, do not restyle.
-6. Tests — webhook processing integration tests, testcontainers e2e.
+5. Tests — webhook HTTP-level integration tests (HMAC→dedupe→process),
+   testcontainers e2e.
 
 Traps unchanged: pkill -f kills your shell; /tmp tmpfs 512m in job containers;
 docker bind-mounts only under $HOME; rebuild .data/kern-* before trusting
