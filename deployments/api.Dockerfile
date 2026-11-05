@@ -6,7 +6,10 @@ RUN go mod download
 COPY cmd/ cmd/
 COPY internal/ internal/
 COPY migrations/ migrations/
-RUN CGO_ENABLED=0 go build -trimpath -o /out/kern-api ./cmd/api
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build -trimpath \
+    -ldflags "-X github.com/dvorinka/kern/internal/version.Version=${VERSION}" \
+    -o /out/kern-api ./cmd/api
 
 FROM node:22-alpine AS web
 WORKDIR /web

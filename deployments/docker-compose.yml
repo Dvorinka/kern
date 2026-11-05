@@ -21,6 +21,9 @@ services:
     build:
       context: ..
       dockerfile: deployments/api.Dockerfile
+      args:
+        # Stamp the binary with the deployed tag; unset falls back to "dev".
+        VERSION: ${KERN_VERSION:-dev}
     image: kern-api:local
     environment:
       KERN_ENV: production
@@ -54,6 +57,8 @@ services:
     build:
       context: ..
       dockerfile: deployments/runner.Dockerfile
+      args:
+        VERSION: ${KERN_VERSION:-dev}
     image: kern-runner:local
     environment:
       KERN_RUNNER_JOIN_TOKEN: ${KERN_RUNNER_JOIN_TOKEN:?set KERN_RUNNER_JOIN_TOKEN}
