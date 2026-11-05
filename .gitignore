@@ -12,3 +12,4 @@ dist/
 coverage/
 *.tsbuildinfo
 .playwright-mcp/
+.playwright-cli/

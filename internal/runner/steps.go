@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -124,6 +125,7 @@ func (e *executor) runStepUnit(ctx context.Context, step StepSpec) (string, int,
 		return outcome, code, stepErr
 	}
 	if step.Uses != "" {
+		e.logStep(step, usesStepHeader(step))
 		outcome, code = e.runUsesStep(ctx, step)
 	}
 	return outcome, code, nil
@@ -161,6 +163,9 @@ func (e *executor) runStepBody(ctx context.Context, step StepSpec) (string, int,
 
 	pump := newLogPump(e.c, e.jobID, step.Number)
 	defer pump.close()
+	if hdr := runStepHeader(step); hdr != "" {
+		pump.write([]byte(hdr))
+	}
 
 	cmd := exec.CommandContext(stepCtx, "docker", "exec",
 		"--user", fmt.Sprintf("%d:%d", jobUID, jobUID),
@@ -591,4 +596,45 @@ func parseKeyValue(s string) (map[string]string, error) {
 // shellQuote applies minimal POSIX shell quoting to a parameter.
 func shellQuote(v string) string {
 	return "'" + strings.ReplaceAll(v, "'", `'"'"'`) + "'"
+}
+
+// runStepHeader renders the GitHub-style group block shown above a `run:`
+// step's output. Without it a silent successful step (go build, mkdir)
+// produces zero log bytes and the UI shows "No log output yet" — which reads
+// as broken rather than as a quiet success. step.Run is the raw YAML script;
+// expressions stay literal, matching what GitHub echoes, and secret values
+// are masked server-side at ingestion.
+func runStepHeader(step StepSpec) string {
+	script := strings.TrimSpace(step.Run)
+	if script == "" {
+		return ""
+	}
+	return fmt.Sprintf("##[group]Run %s\n%s\n##[endgroup]\n", firstLine(script), script)
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
+
+// usesStepHeader renders the same group block for native `uses:` steps so
+// checkout/cache/artifact steps show what ran, matching `run:` steps.
+func usesStepHeader(step StepSpec) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "##[group]Run %s\n", step.Uses)
+	if len(step.With) > 0 {
+		b.WriteString("with:\n")
+		keys := make([]string, 0, len(step.With))
+		for k := range step.With {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			fmt.Fprintf(&b, "  %s: %v\n", k, step.With[k])
+		}
+	}
+	b.WriteString("##[endgroup]\n")
+	return b.String()
 }
