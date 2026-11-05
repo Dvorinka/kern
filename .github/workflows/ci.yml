@@ -7,8 +7,8 @@ jobs:
   go:
     runs-on: [self-hosted, linux, x64]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.26"
       - run: gofmt -l cmd internal migrations | tee /dev/stderr | test ! -s /dev/stdin
@@ -21,7 +21,7 @@ jobs:
       run:
         working-directory: apps/web
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v5
         with:
           version: "12.15.0"
