@@ -45,6 +45,12 @@ func containerNodeBin() string {
 	return containerNodeRoot + "/" + nodeRelease + "/bin/node"
 }
 
+// containerNodeDir is that binary's directory. Actions start with an absolute
+// node path, but scripts they spawn (pnpm's preinstall) call `node` on PATH.
+func containerNodeDir() string {
+	return filepath.Dir(containerNodeBin())
+}
+
 // nodeArchive maps the host platform to the dist tarball name.
 func nodeArchive() (string, error) {
 	if runtime.GOOS != "linux" {
@@ -205,6 +211,7 @@ func (e *executor) runNodeAction(ctx context.Context, step StepSpec, meta *actio
 	if meta.Runs.Using != "node20" {
 		e.logStep(step, fmt.Sprintf("KERN: runs.using %s executes on the bundled %s runtime", meta.Runs.Using, nodeRelease))
 	}
+	e.enc.persistPaths([]string{containerNodeDir()})
 	env := map[string]string{}
 	for k, v := range step.Env {
 		env[k] = v

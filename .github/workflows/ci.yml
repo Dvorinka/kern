@@ -6,8 +6,16 @@ on:
 jobs:
   go:
     runs-on: [self-hosted, linux, x64]
+    env:
+      # /tmp is a 512m noexec tmpfs and counts against the job memory limit.
+      # Go's work dir and caches live on the runner's disk mount instead.
+      GOCACHE: /kern/cache/gocache
+      GOMODCACHE: /kern/cache/gomod
+      GOPATH: /kern/cache/gopath
+      GOTMPDIR: /kern/cache/gotmp
     steps:
       - uses: actions/checkout@v7
+      - run: mkdir -p "$GOTMPDIR" "$GOCACHE" "$GOMODCACHE" "$GOPATH"
       - uses: actions/setup-go@v7
         with:
           go-version: "1.26"
