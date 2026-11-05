@@ -67,4 +67,6 @@ just migrate  # apply migrations only
 ```
 
 Docs: `docs/architecture.md` (design + ADRs), `docs/compatibility.md`
-(GitHub Actions feature matrix), `plan.md` (milestones), `project.md` (spec).
+(GitHub Actions feature matrix), `docs/connect.md` (bind a repo to the
+fleet), `docs/deploy.md` (production), `plan.md` (milestones),
+`project.md` (spec).

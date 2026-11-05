@@ -1,0 +1,65 @@
+# Connecting a repository
+
+KERN does not work like a GitHub-hosted runner pool. Nothing needs to change
+inside the workflow file beyond the `runs-on` labels — and even that is only a
+label match, not an image selection. Three pieces have to line up:
+
+## 1. The GitHub App is installed on the repo
+
+The App (`kern-ci` on the production instance, or a per-org App created via
+**Projects → Connect GitHub**) is the event source. It watches `push` and
+`pull_request` on every repo it can see and delivers them to
+`POST /api/v1/webhooks/github`. If the App is not installed on the repo,
+nothing reaches the control plane.
+
+## 2. A KERN project is bound to the repo
+
+```sh
+kern projects create --slug myrepo --repo-full-name Dvorinka/myrepo
+```
+
+`repo_full_name` (`owner/name`) is the binding key. When a push arrives for
+`Dvorinka/myrepo`, the control plane finds the project, reads
+`.github/workflows/` at the pushed SHA through the contents API, compiles each
+workflow, and queues a run.
+
+For repos on the same host you can bind `local_path` instead and sync
+manually, but webhook-driven runs need `repo_full_name`.
+
+## 3. `runs-on` must match a runner's labels — usually zero YAML changes
+
+Every registered KERN runner implicitly carries `self-hosted` and `kern`, plus
+whatever `--labels` it was enrolled with. A job is claimable when its
+`runs-on` set is a subset of some online runner's labels.
+
+On this fleet every runner is also enrolled with `ubuntu-latest` and
+`ubuntu-24.04`, so an unmodified GitHub workflow claiming `ubuntu-latest`
+matches verbatim — the file does not need to change at all. If your runners
+lack that label, point `runs-on` at `self-hosted` (or `kern`) instead, or add
+the label at enroll time: `kern-runner join --labels ubuntu-latest,linux,x64`.
+
+Two things people trip on:
+
+- **`runs-on` is label-matching, not image selection.** The OS/toolchain
+  comes from the job's `container:` (or `KERN_DEFAULT_IMAGE`, and the
+  compiler's label→image map for common GitHub labels). `ubuntu-latest` as a
+  *label* says "any self-hosted box answers this," nothing more.
+- **KERN does not emulate GitHub's runner images.** Pick the toolchain image
+  you want (`container: golang:1.26`); don't rely on a preinstalled
+  `ubuntu-latest` toolcache — there isn't one.
+
+## What does NOT change
+
+- `on:` triggers, `needs`, matrices, `if`, expressions, `env`, secrets
+  scoping, `actions/checkout`, `actions/cache`, artifacts — the compiler
+  handles the YAML as written. The honest feature matrix lives in
+  `docs/compatibility.md`; unsupported constructs produce diagnostics, never
+  silent passes.
+- Secrets stay server-side. Fork PRs run with `trust_level=fork`: no secrets,
+  their own cache scope, and (when `fork_gate` is set) an approval hold before
+  the first job claims.
+
+## tl;dr
+
+Install the App, create the project, done. On this fleet `runs-on` needs no
+edit at all — `ubuntu-latest` already resolves to a live runner.

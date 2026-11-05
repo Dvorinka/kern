@@ -34,6 +34,9 @@ type Config struct {
 	AllowedOrigins   []string
 	DefaultImage     string
 	WebDir           string
+	// ReleaseRepo is the "owner/name" slug checked for newer releases on the
+	// settings page. Empty disables nothing — the endpoint just falls back.
+	ReleaseRepo string
 }
 
 type GitHubConfig struct {
@@ -78,6 +81,7 @@ func Load() (*Config, error) {
 		AllowedOrigins:   splitList(env("KERN_ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:8081")),
 		DefaultImage:     env("KERN_DEFAULT_IMAGE", "ubuntu:24.04"),
 		WebDir:           env("KERN_WEB_DIR", ""),
+		ReleaseRepo:      env("KERN_RELEASE_REPO", "Dvorinka/kern"),
 	}
 
 	if f := env("KERN_GITHUB_APP_PRIVATE_KEY_FILE", ""); f != "" {

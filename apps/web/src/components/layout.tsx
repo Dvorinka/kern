@@ -1,6 +1,7 @@
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
 	Activity,
+	BarChart3,
 	Database,
 	FolderGit2,
 	KeyRound,
@@ -16,7 +17,8 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import type { Project, Run, Runner } from "../lib/types";
+import type { Project, Run, Runner, UpdateInfo } from "../lib/types";
+import { NotificationsBell } from "./notifications";
 import { cn } from "./ui";
 
 const NAV: {
@@ -29,6 +31,7 @@ const NAV: {
 			{ to: "/projects", label: "Projects", icon: FolderGit2 },
 			{ to: "/runs", label: "Runs", icon: Activity },
 			{ to: "/runners", label: "Runners", icon: Server },
+			{ to: "/usage", label: "Usage", icon: BarChart3 },
 		],
 	},
 	{
@@ -76,6 +79,12 @@ export function Layout() {
 		queryFn: () => api.get<{ runners: Runner[] }>("/runners"),
 		refetchInterval: 10000,
 	});
+	const { data: update } = useQuery({
+		queryKey: ["update"],
+		queryFn: () => api.get<UpdateInfo>("/instance/update"),
+		staleTime: 30 * 60_000,
+		retry: 0,
+	});
 
 	useEffect(() => {
 		if (!loading && !user) nav("/login", { replace: true });
@@ -110,9 +119,10 @@ export function Layout() {
 				<div className="flex items-center gap-2.5 border-b border-[var(--line)] px-[18px] pb-3.5 pt-[15px]">
 					<img src="/logo.svg" alt="" className="size-[18px] rounded-[5px]" />
 					<span className="text-[13px] font-semibold tracking-[0.22em]">KERN</span>
-					<span className="ml-auto font-mono text-[11px] text-[var(--faint)]">
+					<NavLink to="/settings" className="verlink ml-auto" title="Instance settings">
+						{update?.available && <span className="udot" title={`${update.latest} available`} />}
 						{meta?.version ?? ""}
-					</span>
+					</NavLink>
 				</div>
 				<nav className="flex flex-1 flex-col gap-px overflow-y-auto p-2">
 					{NAV.map((g, gi) => (
@@ -160,6 +170,18 @@ export function Layout() {
 				</div>
 			</aside>
 			<main className="console-bg min-w-0 flex-1 overflow-y-auto">
+				<nav className="mnav">
+					{NAV.flatMap((g) => g.items).map((n) => (
+						<NavLink
+							key={n.to}
+							to={n.to}
+							end={n.end}
+							className={({ isActive }) => cn(isActive && "on")}
+						>
+							{n.label}
+						</NavLink>
+					))}
+				</nav>
 				<div className="flex h-11 items-center gap-[9px] border-b border-[var(--line)] px-[22px] text-xs text-[var(--dim)]">
 					{parts.map((p, i) => (
 						<span key={i} className="contents">
@@ -190,6 +212,7 @@ export function Layout() {
 							Search…
 						</button>
 						<span className="kbd">⌘K</span>
+						<NotificationsBell />
 						<span className="av" title={user.email}>
 							{initial}
 						</span>

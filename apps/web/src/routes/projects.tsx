@@ -138,10 +138,14 @@ export function ProjectDetailPage() {
 	});
 	const { data: psettings } = useQuery({
 		queryKey: ["project-settings", slug],
-		queryFn: () => api.get<{ self_heal: string }>(`/projects/${slug}/settings`),
+		queryFn: () => api.get<{ self_heal: string; fork_gate: string }>(`/projects/${slug}/settings`),
 	});
 	const setHeal = useMutation({
 		mutationFn: (v: string) => api.put(`/projects/${slug}/settings`, { self_heal: v }),
+		onSuccess: () => qc.invalidateQueries({ queryKey: ["project-settings", slug] }),
+	});
+	const setGate = useMutation({
+		mutationFn: (v: string) => api.put(`/projects/${slug}/settings`, { fork_gate: v }),
 		onSuccess: () => qc.invalidateQueries({ queryKey: ["project-settings", slug] }),
 	});
 	const sync = useMutation({
@@ -198,6 +202,21 @@ export function ProjectDetailPage() {
 								<option value="off">off</option>
 								<option value="auto">auto</option>
 								<option value="approve">approve</option>
+							</select>
+						}
+					/>
+					<KV
+						k="Fork gate"
+						v={
+							<select
+								className="rounded border border-[var(--line)] bg-transparent px-2 py-0.5 text-xs"
+								value={psettings?.fork_gate ?? "off"}
+								disabled={setGate.isPending}
+								onChange={(e) => setGate.mutate(e.target.value)}
+							>
+								<option value="off">off</option>
+								<option value="all">all</option>
+								<option value="first-time">first-time</option>
 							</select>
 						}
 					/>

@@ -67,6 +67,9 @@ export function OverviewPage() {
 	const todayStart = new Date();
 	todayStart.setHours(0, 0, 0, 0);
 	const runsToday = runs.filter((r) => Date.parse(r.created_at) >= todayStart.getTime()).length;
+	const failsToday = runs.filter(
+		(r) => r.conclusion === "failure" && Date.parse(r.created_at) >= todayStart.getTime(),
+	).length;
 	const successRate = o.runs_total ? Math.round((o.runs_success / o.runs_total) * 100) : null;
 
 	const kpis = [
@@ -100,12 +103,12 @@ export function OverviewPage() {
 				sub={`self-hosted · ${o.runners_online} runner${o.runners_online === 1 ? "" : "s"} · every push runs on contact`}
 				actions={
 					<>
-						<span className={o.runs_failure === 0 && o.runs_total > 0 ? "tag ok" : "tag"}>
+						<span className={failsToday === 0 && runsToday > 0 ? "tag ok" : "tag"}>
 							<span
-								className={`sq ${o.runs_failure === 0 && o.runs_total > 0 ? "ok" : "dim"}`}
+								className={`sq ${failsToday === 0 && runsToday > 0 ? "ok" : "dim"}`}
 								style={{ width: 7, height: 7 }}
 							/>
-							{o.runs_failure === 0 && o.runs_total > 0 ? "healthy" : "watching"}
+							{failsToday === 0 && runsToday > 0 ? "healthy" : "watching"}
 						</span>
 						<span className="text-[11px] text-[var(--faint)]">
 							updated {relTime(new Date(dataUpdatedAt).toISOString())}
@@ -262,9 +265,6 @@ export function OverviewPage() {
 						<div className="flex justify-between text-xs">
 							<span className="pt">Stored</span>
 							<span className="mono text-[var(--dim)]">{bytes(data.cache.bytes)}</span>
-						</div>
-						<div className="meter mt-2.5">
-							<i style={{ width: "100%" }} />
 						</div>
 					</div>
 					<div className="kv">

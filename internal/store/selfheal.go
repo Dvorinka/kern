@@ -82,36 +82,61 @@ func (s *Store) PutProjectSetting(ctx context.Context, projectID uuid.UUID, key,
 // ApproveRemediation flips a step's remediation proposal to approved and puts
 // the job back on the queue so the fix can run. Steps the job already finished
 // keep their results — only non-terminal steps reset, matching lease reaping.
-func (s *Store) ApproveRemediation(ctx context.Context, jobID uuid.UUID, stepNumber int) error {
+func (s *Store) ApproveRemediation(ctx context.Context, jobID uuid.UUID, stepNumber int) ([]string, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer tx.Rollback(ctx)
-	tag, err := tx.Exec(ctx, `
+	var fixJSON []byte
+	err = tx.QueryRow(ctx, `
 		UPDATE steps SET diagnosis = jsonb_set(diagnosis, '{remediation,approved}', 'true')
 		WHERE job_id = $1 AND number = $2
-		  AND diagnosis->'remediation' IS NOT NULL`, jobID, stepNumber)
+		  AND diagnosis->'remediation' IS NOT NULL
+		  AND coalesce(diagnosis->'remediation'->>'approved', 'false') <> 'true'
+		  AND coalesce(diagnosis->'remediation'->>'applied', 'false') <> 'true'
+		  AND coalesce(diagnosis->'remediation'->>'dismissed', 'false') <> 'true'
+		RETURNING diagnosis->'remediation'->'fix'`, jobID, stepNumber).Scan(&fixJSON)
+	if err != nil {
+		return nil, fmt.Errorf("no remediation proposal on step %d", stepNumber)
+	}
+	var fix []string
+	_ = json.Unmarshal(fixJSON, &fix)
+	tag, err := tx.Exec(ctx, `
+		UPDATE jobs SET status = 'queued', queued_at = now(), runner_id = NULL,
+			lease_expires_at = NULL, completed_at = NULL, conclusion = '',
+			error = 'requeued: remediation approved'
+		WHERE id = $1 AND status <> 'in_progress'`, jobID)
+	if err != nil {
+		return nil, err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, fmt.Errorf("job is in progress; cannot requeue for remediation")
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE steps SET status = 'queued', conclusion = '', started_at = NULL,
+			completed_at = NULL, exit_code = NULL
+		WHERE job_id = $1 AND status <> 'completed'`, jobID); err != nil {
+		return nil, err
+	}
+	return fix, tx.Commit(ctx)
+}
+
+// DismissRemediation marks a proposal dismissed so it stops appearing in the
+// attention feed. The step's diagnosis stays; only the offer is withdrawn.
+func (s *Store) DismissRemediation(ctx context.Context, jobID uuid.UUID, stepNumber int) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE steps SET diagnosis = jsonb_set(diagnosis, '{remediation,dismissed}', 'true')
+		WHERE job_id = $1 AND number = $2
+		  AND diagnosis->'remediation' IS NOT NULL
+		  AND coalesce(diagnosis->'remediation'->>'applied', 'false') <> 'true'`, jobID, stepNumber)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("no remediation proposal on step %d", stepNumber)
 	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE jobs SET status = 'queued', queued_at = now(), runner_id = NULL,
-			lease_expires_at = NULL, completed_at = NULL, conclusion = '',
-			attempt = 0, error = 'requeued: remediation approved'
-		WHERE id = $1`, jobID); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE steps SET status = 'queued', conclusion = '', started_at = NULL,
-			completed_at = NULL, exit_code = NULL
-		WHERE job_id = $1 AND status <> 'completed'`, jobID); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 // ApprovedFixes returns step number → fix commands for remediations an

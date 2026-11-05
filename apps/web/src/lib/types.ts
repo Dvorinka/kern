@@ -80,7 +80,7 @@ export interface Step {
 		suggestion: string;
 		agent_prompt: string;
 		fixable: boolean;
-		remediation?: { fix: string[]; applied?: boolean; approved?: boolean; result?: string };
+		remediation?: { fix: string[]; applied?: boolean; approved?: boolean; dismissed?: boolean; result?: string };
 	} | null;
 }
 
@@ -280,4 +280,65 @@ export interface WebhookDelivery {
 	error: string;
 	received_at: string;
 	processed_at: string | null;
+}
+
+export interface UsageReport {
+	totals: {
+		runner_seconds: number;
+		billable_minutes: number;
+		jobs: number;
+		runs: number;
+		runs_success: number;
+		queue_median_seconds: number;
+		job_median_seconds: number;
+	};
+	days: {
+		date: string;
+		seconds: number;
+		billable_minutes: number;
+		jobs: number;
+		failed_jobs: number;
+	}[];
+	projects: { slug: string; name: string; seconds: number; runs: number }[];
+	runners: { name: string; seconds: number; jobs: number }[];
+}
+
+export interface UsageResponse {
+	usage: UsageReport;
+	days: number;
+	rate_usd_per_min: number;
+	hosted_equiv_usd: number;
+}
+
+export interface Notification {
+	id: string;
+	kind: "run_approval" | "remediation" | "run_failed" | "runner_offline" | "webhook_failed";
+	title: string;
+	sub: string;
+	href: string;
+	job_id?: string;
+	step?: number;
+	fix?: string[];
+	created_at: string;
+}
+
+export interface AuditEvent {
+	id: string;
+	action: string;
+	target: string;
+	actor: string;
+	metadata: Record<string, unknown>;
+	created_at: string;
+}
+
+export interface UpdateInfo {
+	ok: boolean;
+	current: string;
+	latest: string;
+	url: string;
+	published_at?: string;
+	available: boolean;
+	checked_at: string;
+	repo: string;
+	error?: string;
 }
