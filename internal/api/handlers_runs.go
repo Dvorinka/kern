@@ -95,6 +95,28 @@ func (s *Server) cancelRun(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"run": run})
 }
 
+// approveRun releases a run parked in awaiting_approval (fork-PR gate).
+// Rejecting is the existing cancel endpoint.
+func (s *Server) approveRun(c *gin.Context) {
+	user, _ := currentUser(c)
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		fail(c, http.StatusBadRequest, "invalid_id", "run id must be a uuid")
+		return
+	}
+	if err := s.Store.ApproveRunHold(c.Request.Context(), id); err != nil {
+		fail(c, http.StatusConflict, "not_awaiting", err.Error())
+		return
+	}
+	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "run.approve", id.String())
+	run, err := s.Store.Run(c.Request.Context(), id)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"run": run})
+}
+
 func (s *Server) rerunRun(c *gin.Context) {
 	user, _ := currentUser(c)
 	id, err := uuid.Parse(c.Param("id"))

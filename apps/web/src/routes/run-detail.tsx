@@ -36,6 +36,10 @@ export function RunDetailPage() {
 	const rerun = useMutation({
 		mutationFn: () => api.post(`/runs/${id}/rerun`),
 	});
+	const approve = useMutation({
+		mutationFn: () => api.post(`/runs/${id}/approve`),
+		onSuccess: () => qc.invalidateQueries({ queryKey: ["run", id] }),
+	});
 
 	const [jobId, setJobId] = useState<string | null>(null);
 	const [stepN, setStepN] = useState<number | null>(null);
@@ -44,7 +48,8 @@ export function RunDetailPage() {
 
 	if (isLoading || !data) return <Spinner />;
 	const { run, jobs } = data;
-	const live = run.status === "in_progress" || run.status === "queued";
+	const live =
+		run.status === "in_progress" || run.status === "queued" || run.status === "awaiting_approval";
 	const title = run.commit_message?.split("\n")[0] || `${run.workflow_name} #${run.run_number}`;
 	const job =
 		jobs.find((j) => j.id === jobId) ?? jobs.find((j) => j.status === "in_progress") ?? jobs[0];
@@ -73,6 +78,16 @@ export function RunDetailPage() {
 				actions={
 					<>
 						<StatusPill status={run.status} conclusion={run.conclusion} className="normal-case" />
+						{run.status === "awaiting_approval" && (
+							<Button
+								variant="primary"
+								size="sm"
+								onClick={() => approve.mutate()}
+								disabled={approve.isPending}
+							>
+								Approve
+							</Button>
+						)}
 						{live && (
 							<Button
 								variant="danger"

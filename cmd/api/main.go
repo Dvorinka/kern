@@ -93,6 +93,7 @@ func run() int {
 	orch.MaxAttempts = cfg.MaxJobAttempts
 	orch.CacheMaxAge = cfg.CacheMaxAge
 	orch.LogRetention = cfg.LogRetention
+	orch.WebhookRetention = cfg.WebhookRetention
 	orch.Blobs = blobStore
 	srv := api.New(cfg, st, orch, blobStore, cipher, log)
 

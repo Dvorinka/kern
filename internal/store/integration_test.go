@@ -540,3 +540,54 @@ func TestFleetSlots(t *testing.T) {
 		t.Fatalf("gpu slots = %d, want 0", n)
 	}
 }
+
+// A held run must not promote while awaiting approval; approving releases it
+// into the normal queued → in_progress path, and a second approve is an error.
+func TestRunApprovalHold(t *testing.T) {
+	s, ctx := testStore(t)
+	p, wf, v := fixture(t, ctx, s)
+
+	held, err := s.CreateRun(ctx, CreateRunParams{
+		ProjectID: p, WorkflowID: wf, WorkflowVersionID: v,
+		Event: "pull_request", Ref: "refs/pull/1/head", SHA: "abc",
+		TrustLevel: "fork", HoldForApproval: true,
+	}, []JobSeed{{
+		Key: "j1", JobKey: "build", RunsOn: []string{"ubuntu-latest"}, Needs: []string{},
+		Image: "ubuntu:24.04", TimeoutSeconds: 60,
+	}})
+	if err != nil {
+		t.Fatalf("create held run: %v", err)
+	}
+	if held.Status != "awaiting_approval" {
+		t.Fatalf("held run status = %q", held.Status)
+	}
+	if n, err := s.PromoteQueuedRuns(ctx); err != nil || n != 0 {
+		t.Fatalf("promote while held = %d, %v; want 0", n, err)
+	}
+	if got, _ := s.Run(ctx, held.ID); got.Status != "awaiting_approval" {
+		t.Fatalf("status after promote attempt = %q", got.Status)
+	}
+
+	// Approving a run that is not held must fail.
+	if err := s.ApproveRunHold(ctx, uuid.New()); err == nil {
+		t.Fatal("approve of unknown run should fail")
+	}
+
+	if err := s.ApproveRunHold(ctx, held.ID); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if err := s.ApproveRunHold(ctx, held.ID); err == nil {
+		t.Fatal("second approve should fail")
+	}
+	if n, err := s.PromoteQueuedRuns(ctx); err != nil || n != 1 {
+		t.Fatalf("promote after approve = %d, %v; want 1", n, err)
+	}
+	if got, _ := s.Run(ctx, held.ID); got.Status != "in_progress" {
+		t.Fatalf("status after approve+promote = %q", got.Status)
+	}
+
+	// A held run still counts as active for capacity purposes.
+	if n, err := s.ActiveRuns(ctx); err != nil || n != 1 {
+		t.Fatalf("active runs = %d, %v; want 1", n, err)
+	}
+}

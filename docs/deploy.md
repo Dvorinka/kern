@@ -104,7 +104,8 @@ commit status on the pushed SHA.
 - `/api/v1/metrics` exposes Prometheus text format; `/healthz`/`/readyz` for
   probes.
 - Retention: `KERN_LOG_RETENTION` sweeps step logs/summaries,
-  `KERN_CACHE_MAX_AGE` evicts actions/cache entries, artifacts expire after
+  `KERN_CACHE_MAX_AGE` evicts actions/cache entries,
+  `KERN_WEBHOOK_RETENTION` prunes `webhook_deliveries` rows, artifacts expire after
   90 days, `KERN_RUNNER_IMAGE_MAX_AGE` GCs pulled job images on the runner.
 - Postgres lives in the `kern-db` volume — back it up with `docker exec
   <pg> pg_dump -U kern kern`.

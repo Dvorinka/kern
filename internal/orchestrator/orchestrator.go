@@ -32,7 +32,10 @@ type Orchestrator struct {
 	CacheMaxAge time.Duration
 	// LogRetention drops step log and summary blobs of runs completed longer
 	// ago than this (KERN_LOG_RETENTION). Zero disables pruning.
-	LogRetention       time.Duration
+	LogRetention time.Duration
+	// WebhookRetention drops webhook_deliveries rows older than this
+	// (KERN_WEBHOOK_RETENTION). Zero disables pruning.
+	WebhookRetention   time.Duration
 	lastRetentionSweep time.Time
 	// PostStatus, when set, reports a run's GitHub commit status. It is called
 	// with "pending" at run creation and a terminal state on completion.
@@ -176,8 +179,13 @@ func (o *Orchestrator) Tick(ctx context.Context) {
 				}
 			}
 		}
-		if o.LogRetention > 0 && time.Since(o.lastRetentionSweep) > time.Hour {
-			o.lastRetentionSweep = time.Now()
+	}
+	// One clock for every hourly prune. Log pruning used to stamp the clock
+	// and the webhook prune, checked second, never ran while log retention
+	// was enabled (the default).
+	if time.Since(o.lastRetentionSweep) > time.Hour && (o.LogRetention > 0 || o.WebhookRetention > 0) {
+		o.lastRetentionSweep = time.Now()
+		if o.Blobs != nil && o.LogRetention > 0 {
 			if refs, err := o.Store.PruneStepBlobs(ctx, o.LogRetention); err != nil {
 				o.Log.Error("prune step blobs", zap.Error(err))
 			} else {
@@ -187,6 +195,13 @@ func (o *Orchestrator) Tick(ctx context.Context) {
 				if len(refs) > 0 {
 					o.Log.Info("log retention pruned step blobs", zap.Int("blobs", len(refs)))
 				}
+			}
+		}
+		if o.WebhookRetention > 0 {
+			if n, err := o.Store.PruneWebhookDeliveries(ctx, o.WebhookRetention); err != nil {
+				o.Log.Error("prune webhook deliveries", zap.Error(err))
+			} else if n > 0 {
+				o.Log.Info("webhook retention pruned deliveries", zap.Int64("rows", n))
 			}
 		}
 	}
@@ -464,6 +479,17 @@ func githubContext(run store.Run, project store.Project, job store.Job) map[stri
 		"api_url":          "https://api.github.com",
 		"workspace":        "/github/workspace",
 		"token":            "",
+	}
+	// github.head_ref is the PR head branch for pull_request deliveries —
+	// the documented way pull_request_target jobs filter on the PR branch.
+	var src map[string]any
+	if json.Unmarshal(run.Source, &src) == nil {
+		if ref, ok := src["head_ref"].(string); ok && ref != "" {
+			ctx["head_ref"] = ref
+		}
+		if sha, ok := src["head_sha"].(string); ok && sha != "" {
+			ctx["head_sha"] = sha
+		}
 	}
 	if run.Ref == "" {
 		ctx["ref"] = "refs/heads/" + project.DefaultBranch

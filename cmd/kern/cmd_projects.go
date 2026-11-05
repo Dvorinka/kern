@@ -151,7 +151,7 @@ func (c *cli) cmdProjects(ctx context.Context, args []string) error {
 
 func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: kern runs list|show|trigger|cancel|rerun|logs")
+		return fmt.Errorf("usage: kern runs list|show|trigger|cancel|approve|rerun|logs")
 	}
 	if err := c.requireAuth(); err != nil {
 		return err
@@ -230,7 +230,7 @@ func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 		} else {
 			fmt.Printf("run %s (#%d) triggered\n", out.Run.ID, out.Run.RunNumber)
 		}
-	case "cancel", "rerun":
+	case "cancel", "approve", "rerun":
 		id, err := strarg(rest, 0, "run id")
 		if err != nil {
 			return err

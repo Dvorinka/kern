@@ -16,7 +16,8 @@ import (
 )
 
 // ghTrigger is one webhook delivery normalised into "start runs for these
-// projects/workflows". push and pull_request share the run-start loop.
+// projects/workflows". push and the pull-request family share the run-start
+// loop.
 type ghTrigger struct {
 	event    string
 	repoName string // base repo: workflow discovery + commit statuses land here
@@ -26,8 +27,16 @@ type ghTrigger struct {
 	message  string
 	actor    string
 	trust    string
-	extra    map[string]any
-	matches  func(*workflows.Plan) (bool, string)
+	// association is the PR author's author_association (OWNER, MEMBER,
+	// CONTRIBUTOR, FIRST_TIME_CONTRIBUTOR, FIRST_TIMER, NONE); the fork gate
+	// reads it. headRef feeds github.head_ref in expressions.
+	association   string
+	headRef       string
+	headSHA       string
+	defaultBranch string
+	baseSHA       string
+	extra         map[string]any
+	matches       func(*workflows.Plan) (bool, string)
 }
 
 // processGithubDelivery acts on a persisted webhook delivery. push and
@@ -38,13 +47,20 @@ func (s *Server) processGithubDelivery(c *gin.Context, delivery, event string, b
 	switch event {
 	case "push":
 		t, status, detail = parsePushTrigger(body)
-	case "pull_request":
-		t, status, detail = parsePRTrigger(body)
+	case "pull_request", "pull_request_target":
+		t, status, detail = parsePRTrigger(body, event)
 	default:
 		return "ignored", "event type " + event + " is recorded but not acted on"
 	}
 	if t == nil {
 		return status, detail
+	}
+	if t.defaultBranch != "" {
+		// pull_request_target runs in the default-branch context: the workflow
+		// file and the checkout both come from the base repo's default head.
+		if err := s.resolvePRTargetSHA(c, t); err != nil {
+			return "failed", err.Error()
+		}
 	}
 	projects, err := s.Store.ProjectsByRepoFullName(c.Request.Context(), t.repoName)
 	if err != nil {
@@ -56,6 +72,15 @@ func (s *Server) processGithubDelivery(c *gin.Context, delivery, event string, b
 	var started []string
 	var skipped []string
 	for _, proj := range projects {
+		// Fork gate: a project can require operator approval before untrusted
+		// fork runs start. Held runs sit in awaiting_approval until released.
+		hold := false
+		if t.trust == "fork" {
+			if raw, err := s.Store.ProjectSettings(c.Request.Context(), proj.ID); err == nil &&
+				forkGateHold(settingsValue(raw, "fork_gate", "off"), t.association) {
+				hold = true
+			}
+		}
 		wfs, err := s.Store.Workflows(c.Request.Context(), proj.ID)
 		if err != nil {
 			return "failed", err.Error()
@@ -98,6 +123,7 @@ func (s *Server) processGithubDelivery(c *gin.Context, delivery, event string, b
 				Actor:             t.actor,
 				TrustLevel:        t.trust,
 				Source:            source,
+				HoldForApproval:   hold,
 			})
 			if err != nil {
 				skipped = append(skipped, wf.Name+" (start failed: "+err.Error()+")")
@@ -150,42 +176,67 @@ func parsePushTrigger(body []byte) (*ghTrigger, string, string) {
 	}, "", ""
 }
 
-// parsePRTrigger normalises a pull_request delivery. Fork heads run untrusted
-// (trust "fork": no secrets, own cache scope) and check out from the head repo,
-// while statuses and workflow discovery stay on the base repo.
-func parsePRTrigger(body []byte) (*ghTrigger, string, string) {
-	var p struct {
-		Action      string `json:"action"`
-		Number      int    `json:"number"`
-		PullRequest struct {
-			Title string `json:"title"`
-			Head  struct {
-				SHA  string `json:"sha"`
-				Ref  string `json:"ref"`
-				Repo struct {
-					FullName string `json:"full_name"`
-					CloneURL string `json:"clone_url"`
-					Fork     bool   `json:"fork"`
-				} `json:"repo"`
-			} `json:"head"`
-			Base struct {
-				Ref string `json:"ref"`
-			} `json:"base"`
-		} `json:"pull_request"`
-		Sender struct {
-			Login string `json:"login"`
-		} `json:"sender"`
-		Repository struct {
-			FullName string `json:"full_name"`
-			CloneURL string `json:"clone_url"`
-		} `json:"repository"`
-	}
+// prPayload is the shared webhook body for pull_request and
+// pull_request_target — GitHub sends the same object for both.
+type prPayload struct {
+	Action      string `json:"action"`
+	Number      int    `json:"number"`
+	PullRequest struct {
+		Title string `json:"title"`
+		Head  struct {
+			SHA  string `json:"sha"`
+			Ref  string `json:"ref"`
+			Repo struct {
+				FullName string `json:"full_name"`
+				CloneURL string `json:"clone_url"`
+				Fork     bool   `json:"fork"`
+			} `json:"repo"`
+		} `json:"head"`
+		Base struct {
+			Ref string `json:"ref"`
+			SHA string `json:"sha"`
+		} `json:"base"`
+		AuthorAssociation string `json:"author_association"`
+	} `json:"pull_request"`
+	Sender struct {
+		Login string `json:"login"`
+	} `json:"sender"`
+	Repository struct {
+		FullName      string `json:"full_name"`
+		CloneURL      string `json:"clone_url"`
+		DefaultBranch string `json:"default_branch"`
+	} `json:"repository"`
+}
+
+// parsePRTrigger normalises a pull_request or pull_request_target delivery.
+// pull_request runs the head SHA: fork heads get trust "fork" (no secrets, own
+// cache scope) and check out from the head repo, while statuses and workflow
+// discovery stay on the base repo. pull_request_target runs in the base
+// repo's default-branch context instead — trusted code, secrets allowed —
+// with sha/ref resolved later by resolvePRTargetSHA.
+func parsePRTrigger(body []byte, event string) (*ghTrigger, string, string) {
+	var p prPayload
 	if err := json.Unmarshal(body, &p); err != nil {
-		return nil, "failed", "payload is not a pull_request event: " + err.Error()
+		return nil, "failed", "payload is not a " + event + " event: " + err.Error()
 	}
 	pr := p.PullRequest
 	if pr.Head.SHA == "" {
-		return nil, "ignored", "pull_request payload has no head sha"
+		return nil, "ignored", "pull request payload has no head sha"
+	}
+	if event == "pull_request_target" {
+		if p.Repository.DefaultBranch == "" {
+			return nil, "ignored", "pull_request_target payload has no default branch"
+		}
+		return &ghTrigger{
+			event: event, repoName: p.Repository.FullName, cloneURL: p.Repository.CloneURL,
+			sha: "", ref: "", message: pr.Title, actor: p.Sender.Login, trust: "trusted",
+			association: pr.AuthorAssociation, headRef: pr.Head.Ref, headSHA: pr.Head.SHA,
+			defaultBranch: p.Repository.DefaultBranch, baseSHA: pr.Base.SHA,
+			extra: map[string]any{"pr_number": p.Number, "head_ref": pr.Head.Ref, "head_sha": pr.Head.SHA},
+			matches: func(plan *workflows.Plan) (bool, string) {
+				return pullRequestMatchesPlan(plan, event, p.Action, pr.Base.Ref)
+			},
+		}, "", ""
 	}
 	if pr.Head.Repo.FullName == "" {
 		return nil, "ignored", "head repository is gone (deleted fork?); nothing to check out"
@@ -194,34 +245,73 @@ func parsePRTrigger(body []byte) (*ghTrigger, string, string) {
 	if pr.Head.Repo.Fork || pr.Head.Repo.FullName != p.Repository.FullName {
 		trust = "fork"
 	}
-	action := p.Action
-	baseRef := pr.Base.Ref
 	return &ghTrigger{
-		event: "pull_request", repoName: p.Repository.FullName,
+		event: event, repoName: p.Repository.FullName,
 		cloneURL: pr.Head.Repo.CloneURL,
 		sha:      pr.Head.SHA, ref: fmt.Sprintf("refs/pull/%d/head", p.Number),
 		message: pr.Title, actor: p.Sender.Login, trust: trust,
-		extra: map[string]any{"pr_number": p.Number},
+		association: pr.AuthorAssociation, headRef: pr.Head.Ref, headSHA: pr.Head.SHA,
+		extra: map[string]any{"pr_number": p.Number, "head_ref": pr.Head.Ref, "head_sha": pr.Head.SHA},
 		matches: func(plan *workflows.Plan) (bool, string) {
-			return pullRequestMatchesPlan(plan, action, baseRef)
+			return pullRequestMatchesPlan(plan, event, p.Action, pr.Base.Ref)
 		},
 	}, "", ""
 }
 
-// pullRequestMatchesPlan applies on:pull_request trigger semantics. Without a
-// types filter GitHub defaults to opened/synchronize/reopened; with one, the
-// delivered action must be listed. branches filters match the base branch.
-func pullRequestMatchesPlan(plan *workflows.Plan, action, baseBranch string) (bool, string) {
+// resolvePRTargetSHA pins a pull_request_target trigger to the base repo's
+// default-branch head, falling back to the PR's recorded base sha when the
+// ref cannot be resolved.
+func (s *Server) resolvePRTargetSHA(c *gin.Context, t *ghTrigger) error {
+	ctx := c.Request.Context()
+	gh, err := s.githubClient(ctx, t.repoName)
+	if err == nil {
+		if sha, herr := gh.HeadSHA(ctx, t.repoName, t.defaultBranch); herr == nil && sha != "" {
+			t.sha = sha
+		}
+	}
+	if t.sha == "" {
+		t.sha = t.baseSHA
+	}
+	if t.sha == "" {
+		return fmt.Errorf("cannot resolve default branch %s head for pull_request_target", t.defaultBranch)
+	}
+	t.ref = "refs/heads/" + t.defaultBranch
+	return nil
+}
+
+// forkGateHold reports whether a fork-trust run must wait for operator
+// approval under the project's fork_gate setting: "all" holds every fork
+// run; "first-time" holds authors GitHub marks as new (FIRST_TIME_CONTRIBUTOR,
+// FIRST_TIMER) or unaffiliated (NONE, or a payload without the field).
+func forkGateHold(gate, association string) bool {
+	switch gate {
+	case "all":
+		return true
+	case "first-time":
+		switch association {
+		case "OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR", "MANNEQUIN":
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+// pullRequestMatchesPlan applies on:pull_request / on:pull_request_target
+// trigger semantics — identical for both events. Without a types filter
+// GitHub defaults to opened/synchronize/reopened; with one, the delivered
+// action must be listed. branches filters match the base branch.
+func pullRequestMatchesPlan(plan *workflows.Plan, event, action, baseBranch string) (bool, string) {
 	subscribed := false
 	for _, e := range plan.Events {
-		if e == "pull_request" {
+		if e == event {
 			subscribed = true
 		}
 	}
 	if !subscribed {
 		return false, ""
 	}
-	cfg, _ := plan.Triggers["pull_request"].(map[string]any)
+	cfg, _ := plan.Triggers[event].(map[string]any)
 	for key, v := range cfg {
 		switch key {
 		case "types", "branches", "branches-ignore":

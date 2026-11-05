@@ -198,6 +198,7 @@ func (s *Server) getOrgSettings(c *gin.Context) {
 
 type settingsRequest struct {
 	SelfHeal string `json:"self_heal"`
+	ForkGate string `json:"fork_gate"`
 }
 
 // orgSettingsRequest accepts either key. A self_heal-only body, which the
@@ -261,7 +262,19 @@ func (s *Server) getProjectSettings(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"settings": raw, "self_heal": settingsValue(raw, "self_heal", "inherit")})
+	c.JSON(http.StatusOK, gin.H{
+		"settings":  raw,
+		"self_heal": settingsValue(raw, "self_heal", "inherit"),
+		"fork_gate": settingsValue(raw, "fork_gate", "off"),
+	})
+}
+
+func validForkGate(v string) bool {
+	switch v {
+	case "off", "all", "first-time":
+		return true
+	}
+	return false
 }
 
 func (s *Server) putProjectSettings(c *gin.Context) {
@@ -272,20 +285,52 @@ func (s *Server) putProjectSettings(c *gin.Context) {
 		return
 	}
 	var req settingsRequest
-	if err := c.ShouldBindJSON(&req); err != nil || !validSelfHeal(req.SelfHeal, true) {
-		fail(c, http.StatusBadRequest, "invalid_body", "self_heal must be off, auto, approve or inherit")
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "invalid_body", "invalid JSON body")
 		return
 	}
-	value := req.SelfHeal
-	if value == "inherit" {
-		value = "" // deleting the key falls back to the org setting
-	}
-	if err := s.Store.PutProjectSetting(c.Request.Context(), p.ID, "self_heal", value); err != nil {
-		s.internalError(c, err)
+	if req.SelfHeal == "" && req.ForkGate == "" {
+		fail(c, http.StatusBadRequest, "invalid_body", "self_heal or fork_gate is required")
 		return
 	}
-	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "settings.self_heal", p.Slug+"="+req.SelfHeal)
-	c.JSON(http.StatusOK, gin.H{"self_heal": req.SelfHeal})
+	writes := map[string]string{}
+	if req.SelfHeal != "" {
+		if !validSelfHeal(req.SelfHeal, true) {
+			fail(c, http.StatusBadRequest, "invalid_body", "self_heal must be off, auto, approve or inherit")
+			return
+		}
+		value := req.SelfHeal
+		if value == "inherit" {
+			value = "" // deleting the key falls back to the org setting
+		}
+		writes["self_heal"] = value
+	}
+	if req.ForkGate != "" {
+		if !validForkGate(req.ForkGate) {
+			fail(c, http.StatusBadRequest, "invalid_body", "fork_gate must be off, all or first-time")
+			return
+		}
+		if req.ForkGate == "off" {
+			writes["fork_gate"] = "" // deleting the key restores the default
+		} else {
+			writes["fork_gate"] = req.ForkGate
+		}
+	}
+	for k, v := range writes {
+		if err := s.Store.PutProjectSetting(c.Request.Context(), p.ID, k, v); err != nil {
+			s.internalError(c, err)
+			return
+		}
+		s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "settings."+k, p.Slug+"="+v)
+	}
+	resp := map[string]string{}
+	if _, ok := writes["self_heal"]; ok {
+		resp["self_heal"] = req.SelfHeal
+	}
+	if _, ok := writes["fork_gate"]; ok {
+		resp["fork_gate"] = req.ForkGate
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 func settingsValue(raw json.RawMessage, key, def string) string {

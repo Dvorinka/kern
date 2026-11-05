@@ -375,7 +375,8 @@ func (e *executor) runnerContext() map[string]any {
 		"actor": e.claim.Run.Actor, "run_id": e.claim.Run.ID,
 		"run_number": float64(e.claim.Run.Number), "workspace": containerWorkspace,
 		"repository": e.claim.Run.RepoFullName, "job": e.claim.Job.Key,
-		"workflow": e.claim.Run.Workflow,
+		"workflow": e.claim.Run.Workflow, "head_ref": e.claim.Run.HeadRef,
+		"head_sha": e.claim.Run.HeadSHA,
 	}
 	needs := e.claim.Job.Needs
 	if needs == nil {
