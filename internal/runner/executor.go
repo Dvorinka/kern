@@ -250,9 +250,8 @@ func (e *executor) startContainer(ctx context.Context) error {
 		// Actions resolve $HOME for tool state (setup-go GOPATH, npm config);
 		// images may carry no writable home for uid 1000 at all.
 		"-e", "HOME="+containerActionHome,
-		// The job image has no node. Scripts spawned by JavaScript actions
-		// (pnpm's preinstall) call `node` on PATH, not the absolute binary.
-		"-e", "PATH="+containerNodeDir()+":/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		// Leave PATH to the image. golang:1.26 puts go on its own PATH, and
+		// replacing that hides the toolchain. Node is prepended per step.
 		"-e", "GITHUB_WORKSPACE="+containerWorkspace,
 		"-e", "GITHUB_REPOSITORY="+defaultStr(e.claim.Run.RepoFullName, e.claim.Run.Project),
 		"-e", "GITHUB_SHA="+e.claim.Run.SHA,
