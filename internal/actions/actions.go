@@ -126,6 +126,17 @@ type Output struct {
 type Runs struct {
 	Using string          `yaml:"using"`
 	Steps []CompositeStep `yaml:"steps"`
+	// JavaScript actions (using: node*)
+	Main string `yaml:"main"`
+	Pre  string `yaml:"pre"`
+	Post string `yaml:"post"`
+	// Docker actions (using: docker)
+	Image          string         `yaml:"image"`
+	Entrypoint     string         `yaml:"entrypoint"`
+	Args           []string       `yaml:"args"`
+	Env            map[string]any `yaml:"env"`
+	PreEntrypoint  string         `yaml:"pre-entrypoint"`
+	PostEntrypoint string         `yaml:"post-entrypoint"`
 }
 
 // CompositeStep is one entry of a composite action's runs.steps.
