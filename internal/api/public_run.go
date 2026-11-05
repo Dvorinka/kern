@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -97,6 +98,16 @@ type publicStep struct {
 	Conclusion  string     `json:"conclusion"`
 	StartedAt   *time.Time `json:"started_at"`
 	CompletedAt *time.Time `json:"completed_at"`
+	// Diagnosis exposes the KERN-authored parts of the step's failure
+	// diagnosis — kind, summary and suggestion. The detail field carries log
+	// content and stays private.
+	Diagnosis *publicDiagnosis `json:"diagnosis,omitempty"`
+}
+
+type publicDiagnosis struct {
+	Kind       string `json:"kind"`
+	Summary    string `json:"summary"`
+	Suggestion string `json:"suggestion"`
 }
 
 func publicView(run store.Run, jobs []store.Job) (publicRun, []publicJob) {
@@ -125,11 +136,29 @@ func publicView(run store.Run, jobs []store.Job) (publicRun, []publicJob) {
 			pj.Steps = append(pj.Steps, publicStep{
 				Number: st.Number, Name: st.Name, Status: st.Status, Conclusion: st.Conclusion,
 				StartedAt: st.StartedAt, CompletedAt: st.CompletedAt,
+				Diagnosis: publicDiagnosisOf(st.Diagnosis),
 			})
 		}
 		out = append(out, pj)
 	}
 	return view, out
+}
+
+// publicDiagnosisOf trims a stored step diagnosis to the fields safe for an
+// unauthenticated page.
+func publicDiagnosisOf(raw json.RawMessage) *publicDiagnosis {
+	if len(raw) == 0 {
+		return nil
+	}
+	var d struct {
+		Kind       string `json:"kind"`
+		Summary    string `json:"summary"`
+		Suggestion string `json:"suggestion"`
+	}
+	if json.Unmarshal(raw, &d) != nil || d.Kind == "" {
+		return nil
+	}
+	return &publicDiagnosis{Kind: d.Kind, Summary: d.Summary, Suggestion: d.Suggestion}
 }
 
 // githubCheck maps a commit-status state onto the Checks API.
