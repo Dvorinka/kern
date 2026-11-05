@@ -16,7 +16,7 @@ RUN pnpm install --frozen-lockfile
 COPY apps/web/ ./
 RUN pnpm build
 
-FROM alpine:3.20
+FROM alpine:3.24
 RUN addgroup -S kern && adduser -S kern -G kern && mkdir -p /data/blobs && chown -R kern:kern /data
 COPY --from=build /out/kern-api /usr/local/bin/kern-api
 COPY --from=web /web/dist /app/web
