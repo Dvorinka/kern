@@ -103,7 +103,7 @@ func TestUnknownAndUnsupportedConstructs(t *testing.T) {
 	if res.Valid {
 		t.Fatal("hostile workflow should not be valid")
 	}
-	wantCodes := []string{"unknown-key", "action-docker", "step-both", "no-steps", "services", "cycle"}
+	wantCodes := []string{"unknown-key", "action-ref", "step-both", "no-steps", "services", "cycle"}
 	for _, code := range wantCodes {
 		found := false
 		for _, d := range res.Diagnostics {

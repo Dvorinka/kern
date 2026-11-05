@@ -499,11 +499,8 @@ func validateStep(d *diagnostics, path string, s Step, seenIDs map[string]bool) 
 				d.errorf("action-ref", path+".uses", err.Error())
 			} else {
 				d.warnf("action-remote", path+".uses",
-					fmt.Sprintf("action %q resolves at run time; only composite actions are supported by KERN yet", s.Uses))
+					fmt.Sprintf("action %q resolves at run time; KERN does not validate it at compile time", s.Uses))
 			}
-		case actions.KindDocker:
-			d.errorf("action-docker", path+".uses",
-				fmt.Sprintf("docker action %q is not implemented by KERN yet", s.Uses))
 		case actions.KindInvalid:
 			d.errorf("action-uses", path+".uses", fmt.Sprintf("action reference %q is malformed", s.Uses))
 		}
