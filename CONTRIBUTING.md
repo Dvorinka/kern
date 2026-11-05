@@ -5,7 +5,7 @@ written in Go — the bar for contributions is production quality, not prototype
 
 ## Setup
 
-Requires Go 1.24+, Docker, PostgreSQL 16, `just`, and Node/pnpm for `apps/web`.
+Requires Go 1.26+, Docker, PostgreSQL 16, `just`, and Node/pnpm for `apps/web`.
 
 ```sh
 just dev      # control plane on :8080 (migrations + bootstrap run at boot)

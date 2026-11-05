@@ -9,7 +9,7 @@ in the repo. Work autonomously; the user trusts verification over claims.
 ## Environment
 
 - Repo: `~/Desktop/PROG+HTML/KERN` — public remote `github.com/Dvorinka/kern` (origin,
-  MIT). Module `github.com/dvorinka/kern`, Go 1.24.
+  MIT). Module `github.com/dvorinka/kern`, Go 1.26 (`go.mod` `go 1.26.0`).
 - Voice: J.A.R.V.I.S. — polite, dry, brief. Ponytail restraint: smallest correct diff,
   stdlib before deps, no speculative abstractions, no scaffolding "for later".
 - Subagents: none by default; if unavoidable use only `subagent_explore`/`subagent_general`.
@@ -42,7 +42,7 @@ in the repo. Work autonomously; the user trusts verification over claims.
 - Three kern runners: `ci-runner-901-kern`, `ci-runner-902-kern` (in /opt/gha/kern on
   CTs 901/902), `ci-runner-903-kern` (CT 903 proxmox-nab9, tarball install same dir).
   systemd units `actions.runner.Dvorinka-kern.ci-runner-<ct>-kern.service`.
-- SSH: `ssh -i ~/.ssh/proxmox_devin root@10.0.0.10` (LAN; netbird path dead). `pct exec <ct> -- bash -lc ...`.
+- SSH: alias `nab9` is NetBird `100.77.51.73` (key `~/.ssh/proxmox_devin`). LAN `10.0.0.10` is unreachable from this workstation (`No route to host`). `pct exec <ct> -- bash -lc ...` (bare pct PATH is minimal). Do not hardcode CT 908's DHCP address.
 - Runner gotchas: `.env` in runner dir needs `HOME=/root` (else go env fails) + PATH;
   `.runner_migrated`/`.service` files = configured marker; relay dir copy leaves absolute
   symlinks + migrated state — rebuild, don't copy blindly. svc.sh: install→start.
@@ -184,27 +184,44 @@ PERF/RELIABILITY PASS (2026-11-04, commits 4a4e10a + 9c68fbf + aca8ffc):
   digest stability, store tests now refuse non-kern_test DSNs (was truncating
   dev DB).
 
-GITHUB HARDENING (2026-11-05, PR #20 `feat/github-hardening`, open):
-- `pull_request_target` done: base default-branch head for workflow+checkout,
-  github.head_ref/head_sha exposed; App manifest subscribes new installs —
-  EXISTING installations must enable the event in GitHub app settings.
-- Fork gate: project `fork_gate` off|all|first-time → `awaiting_approval` run
-  status (migration 0010); approve via POST /runs/:id/approve, `kern runs
-  approve`, or run-page button; cancel rejects.
-- `KERN_WEBHOOK_RETENTION` (30d) prunes webhook_deliveries hourly.
-- Merge-ref divergence kept as documented (head SHA, not refs/pull/N/merge).
+GITHUB HARDENING (2026-11-05, PR #20 merged, merge `4756b91`, production
+redeployed on CT 908 at master `b949aae`):
+- `pull_request_target` runs the base default-branch head (workflow and
+  checkout), with github.head_ref/head_sha. GitHub Apps cannot subscribe to
+  that event: the permissions form has no checkbox, and GET /app never lists
+  it. A `pull_request` delivery synthesizes the target pass. Do not tell the
+  operator to toggle it.
+- Fork gate: project `fork_gate` off|all|first-time → `awaiting_approval`
+  (migration 0010); approve via POST /runs/:id/approve, `kern runs approve`,
+  or the run-page button; cancel rejects. Audit `run.approve`.
+- Webhook prune shares one hourly clock with log prune (`KERN_WEBHOOK_RETENTION`
+  default 30d). An earlier version stamped the clock in the log sweep and
+  never pruned deliveries.
+- Merge-ref divergence kept (head SHA, not refs/pull/N/merge).
+- CI `go-version` is `1.26`. setup-go v7 sets `GOTOOLCHAIN=local`; a 1.24 pin
+  breaks the job. App id 5607782, slug `kern-ci`, installation 178470896.
+  Subscribed events: check_run, check_suite, pull_request, push.
+- Frontend already has artifacts, webhook deliveries, run cancel, and approve.
+  Do not restyle. The next UI phase is user-directed.
+- Masker: longer-first exact substring, drops empty values. No base64 or
+  cross-chunk masking.
 
 Remaining work, ordered by value:
 
-1. Merge PR #20 after review; deploy to CT 908 + enable pull_request_target on
-   the existing App installation, then verify a real fork PR end-to-end.
-2. Security — secret masking breadth test, webhook replay window.
-3. Ops — artifact/run-row retention knobs beyond logs, backup story, metrics
-   alerting rules.
-4. Frontend — artifact browsing, webhook delivery viewer, run cancel coverage.
-   NEXT PHASE IS USER-DIRECTED UI REDESIGN — hand back, do not restyle.
-5. Tests — webhook HTTP-level integration tests (HMAC→dedupe→process),
-   testcontainers e2e.
+1. Verify a real fork PR end to end once a fork delivery hits production
+   (pull_request run untrusted, pull_request_target run trusted on the
+   default-branch head).
+2. PR #21 (checkout v7 + setup-go v7, go pin stays 1.26) merges when GitHub
+   Actions `go` and `web` are green. Workflow-only; no second CT rebuild
+   required for that diff alone.
+3. Webhook replay window that still allows operator redelivery (same body,
+   new X-GitHub-Delivery). Run-row retention knob that does not default to
+   deleting history. HTTP webhook test (HMAC, dedupe, process) against
+   `kern_test`.
+4. Compatibility ceiling still absent: composite/JS/Docker actions, reusable
+   workflows, service containers, container options beyond `image`, OIDC,
+   some expression functions. That is M5. Do not mark it done.
+5. NEXT PHASE IS USER-DIRECTED UI REDESIGN. Do not restyle.
 
 Traps unchanged: pkill -f kills your shell; /tmp tmpfs 512m in job containers;
 docker bind-mounts only under $HOME; rebuild .data/kern-* before trusting

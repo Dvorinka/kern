@@ -42,7 +42,45 @@ type ghTrigger struct {
 // processGithubDelivery acts on a persisted webhook delivery. push and
 // pull_request events trigger matching workflows; other events are recorded
 // and ignored.
+//
+// pull_request_target is an Actions trigger, not a GitHub App webhook.
+// The app permissions form has no checkbox for it, and a subscribed app
+// only receives pull_request. That delivery also starts pull_request_target
+// workflows. A delivery that already names pull_request_target is not
+// expanded, so it cannot run twice.
 func (s *Server) processGithubDelivery(c *gin.Context, delivery, event string, body []byte) (status, detail string) {
+	events := deliveryEvents(event)
+	status, detail = s.actOnGithubEvent(c, delivery, events[0], body)
+	if len(events) == 1 {
+		return status, detail
+	}
+	st2, det2 := s.actOnGithubEvent(c, delivery, events[1], body)
+	return mergeWebhookStatus(status, st2), detail + "; " + events[1] + ": " + det2
+}
+
+// deliveryEvents lists the workflow triggers one inbound webhook starts.
+func deliveryEvents(event string) []string {
+	if event == "pull_request" {
+		return []string{"pull_request", "pull_request_target"}
+	}
+	return []string{event}
+}
+
+// mergeWebhookStatus prefers a failure, then a run that actually started.
+func mergeWebhookStatus(a, b string) string {
+	if a == "failed" || b == "failed" {
+		return "failed"
+	}
+	if a == "processed" || b == "processed" {
+		return "processed"
+	}
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+func (s *Server) actOnGithubEvent(c *gin.Context, delivery, event string, body []byte) (status, detail string) {
 	var t *ghTrigger
 	switch event {
 	case "push":

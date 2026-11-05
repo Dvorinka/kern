@@ -40,6 +40,34 @@ func TestPullRequestMatchesPlan(t *testing.T) {
 	}
 }
 
+func TestDeliveryEventsSynthesizesPullRequestTarget(t *testing.T) {
+	got := deliveryEvents("pull_request")
+	if len(got) != 2 || got[0] != "pull_request" || got[1] != "pull_request_target" {
+		t.Fatalf("pull_request delivery events = %v", got)
+	}
+	if ev := deliveryEvents("pull_request_target"); len(ev) != 1 || ev[0] != "pull_request_target" {
+		t.Fatalf("named target delivery must not be doubled: %v", ev)
+	}
+	if ev := deliveryEvents("push"); len(ev) != 1 || ev[0] != "push" {
+		t.Fatalf("push = %v", ev)
+	}
+}
+
+func TestMergeWebhookStatus(t *testing.T) {
+	if mergeWebhookStatus("processed", "ignored") != "processed" {
+		t.Fatal("a started run must win over an ignored sibling")
+	}
+	if mergeWebhookStatus("ignored", "processed") != "processed" {
+		t.Fatal("target runs must surface when the pull_request pass starts nothing")
+	}
+	if mergeWebhookStatus("processed", "failed") != "failed" {
+		t.Fatal("a failed pass must not be hidden")
+	}
+	if mergeWebhookStatus("ignored", "ignored") != "ignored" {
+		t.Fatal("two ignores stay ignored")
+	}
+}
+
 func TestPullRequestTargetMatchesOnlyItsOwnEvent(t *testing.T) {
 	plan := &workflows.Plan{
 		Events:   []string{"pull_request_target"},
