@@ -314,7 +314,13 @@ func (e *executor) renderScript(step StepSpec) (string, error) {
 	if wd := strings.TrimSpace(step.WorkingDirectory); wd != "" {
 		wrapper += "cd " + shellQuote(wd) + "\n"
 	}
-	wrapper += shell + " -e " + shellQuote(filepath.Join(containerScriptDir, body)) + "\n"
+	// The body is a new shell, so the wrapper's pipefail does not cover it.
+	// Without it, `gofmt | test` stays green when gofmt is missing.
+	bodyFlags := " -e "
+	if filepath.Base(shell) == "bash" {
+		bodyFlags = " -eo pipefail "
+	}
+	wrapper += shell + bodyFlags + shellQuote(filepath.Join(containerScriptDir, body)) + "\n"
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(wrapper), 0o755); err != nil {
 		return "", err
 	}
@@ -575,11 +581,16 @@ func (b *envBuilder) persistPaths(paths []string) {
 }
 
 // pathLines renders the accumulated PATH additions oldest-first; the step
-// wrapper prepends each line, so the newest entry ends up first.
+// wrapper prepends each line, so the newest entry ends up first. A trailing
+// newline is required: actions append to this file, and a missing newline
+// glues the next directory onto the previous one.
 func (b *envBuilder) pathLines() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return strings.Join(b.paths, "\n")
+	if len(b.paths) == 0 {
+		return ""
+	}
+	return strings.Join(b.paths, "\n") + "\n"
 }
 
 // render returns the env-file content for a step.

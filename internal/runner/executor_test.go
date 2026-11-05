@@ -50,6 +50,24 @@ func TestParseKeyValue(t *testing.T) {
 	}
 }
 
+func TestPathLinesTrailingNewline(t *testing.T) {
+	b := newEnvBuilder(&Claim{}, nil)
+	if got := b.pathLines(); got != "" {
+		t.Fatalf("empty: %q", got)
+	}
+	b.persistPaths([]string{"/kern/node/v20.18.1/bin"})
+	got := b.pathLines()
+	if got != "/kern/node/v20.18.1/bin\n" {
+		t.Fatalf("%q", got)
+	}
+	// @actions/core addPath appends "<dir>\n" onto this file.
+	appended := got + "/kern/cache/_toolcache/go/1.26.10/x64/bin\n"
+	lines := strings.Split(strings.TrimRight(appended, "\n"), "\n")
+	if len(lines) != 2 || lines[0] != "/kern/node/v20.18.1/bin" || lines[1] != "/kern/cache/_toolcache/go/1.26.10/x64/bin" {
+		t.Fatal(lines)
+	}
+}
+
 func TestEnvBuilderRender(t *testing.T) {
 	claim := &Claim{}
 	claim.Job.Env = map[string]string{"V_JOB": "1"}
