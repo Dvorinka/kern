@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useMemo } from "react";
 import { api } from "../lib/api";
 import type { OverviewResponse, Run, Runner } from "../lib/types";
@@ -235,10 +235,10 @@ export function OverviewPage() {
 					{recent.map((r, i) => {
 						const live = r.status === "in_progress" || r.status === "queued";
 						return (
-							<div
+							<Link
 								key={r.id}
-								onClick={() => nav(`/runs/${r.id}`)}
-								className="grid cursor-pointer grid-cols-[14px_44px_1fr_76px_52px] items-center gap-3 border-b border-[var(--line)] px-4 py-[9px] last:border-0"
+								to={`/runs/${r.id}`}
+								className="rowlink grid grid-cols-[14px_44px_minmax(0,1fr)_76px_52px] items-center gap-3 border-b border-[var(--line)] px-4 py-[9px] last:border-0"
 							>
 								<StatusSq status={r.status} conclusion={r.conclusion} />
 								<span className="font-mono text-xs text-[var(--faint)]">#{r.run_number}</span>
@@ -249,7 +249,7 @@ export function OverviewPage() {
 								<span className="text-right text-[11px] text-[var(--faint)]">
 									{live ? "now" : relTime(r.created_at)}
 								</span>
-							</div>
+							</Link>
 						);
 					})}
 				</div>

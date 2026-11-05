@@ -717,7 +717,7 @@ select.fsel {
 	flex: 1;
 	position: relative;
 }
-.grid {
+.ggrid {
 	position: absolute;
 	inset: 0;
 	top: 30px;
@@ -1058,9 +1058,54 @@ button:focus-visible {
 	}
 }
 
+/* Run list. The fingerprint stays on the shared 8m axis. On a phone the
+   bar drops to its own row so the fixed columns do not overflow. */
+.runrow,
+.runscale {
+	display: grid;
+	grid-template-columns: 20px minmax(0, 1fr) 150px 90px 60px;
+	gap: 14px;
+}
+.runrow {
+	align-items: center;
+	border-bottom: 1px solid var(--line);
+	padding: 11px 0;
+	color: inherit;
+	text-decoration: none;
+}
+.runscale {
+	padding-top: 7px;
+}
+.runscale .labs {
+	grid-column: 3;
+	display: flex;
+	justify-content: space-between;
+	font-family: var(--mono);
+	font-size: 11px;
+	color: var(--faint);
+}
+.rowlink {
+	color: inherit;
+	text-decoration: none;
+}
+
 @media (max-width: 760px) {
 	.rail {
 		display: none;
+	}
+	.runrow {
+		grid-template-columns: 20px minmax(0, 1fr) auto auto;
+		row-gap: 6px;
+	}
+	.runrow .fp {
+		grid-column: 1 / -1;
+		grid-row: 2;
+	}
+	.runscale {
+		grid-template-columns: 1fr;
+	}
+	.runscale .labs {
+		grid-column: 1;
 	}
 	.sbody {
 		grid-template-columns: 1fr;

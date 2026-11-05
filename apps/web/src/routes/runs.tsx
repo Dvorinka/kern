@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useMemo, useState, type ReactNode } from "react";
 import { api } from "../lib/api";
 import type { OverviewResponse, Run, Runner } from "../lib/types";
@@ -26,7 +26,6 @@ const TABS: { key: Tab; label: string; match: (r: Run) => boolean }[] = [
 ];
 
 export function RunsPage() {
-	const nav = useNavigate();
 	const [params, setParams] = useSearchParams();
 	const tab = (params.get("tab") ?? "") as Tab;
 	const [branch, setBranch] = useState("");
@@ -96,11 +95,7 @@ export function RunsPage() {
 							{visible.map((r, i) => {
 								const live = r.status === "in_progress" || r.status === "queued";
 								return (
-									<div
-										key={r.id}
-										onClick={() => nav(`/runs/${r.id}`)}
-										className="grid cursor-pointer grid-cols-[20px_1fr_150px_90px_60px] items-center gap-3.5 border-b border-[var(--line)] py-[11px]"
-									>
+									<Link key={r.id} to={`/runs/${r.id}`} className="runrow" data-testid="run-row">
 										<StatusSq status={r.status} conclusion={r.conclusion} />
 										<div className="min-w-0">
 											<div className="truncate text-[13px] font-medium text-[var(--ink)]">
@@ -121,8 +116,8 @@ export function RunsPage() {
 												{r.workflow_name}
 											</div>
 										</div>
-										<Fingerprint run={r} jobs={details[i]?.data?.jobs} small />
-										<div className="text-right font-mono text-xs text-[var(--dim)]">
+										<Fingerprint run={r} jobs={details[i]?.data?.jobs} small className="fp" />
+										<div className="dur text-right font-mono text-xs text-[var(--dim)]">
 											{duration(r.started_at, r.completed_at)}
 											{live && (
 												<small className="block text-[11px] text-[var(--faint)]">elapsed</small>
@@ -134,14 +129,14 @@ export function RunsPage() {
 												<small className="block text-[11px] text-[var(--faint)]">cancelled</small>
 											)}
 										</div>
-										<div className="text-right text-[11px] text-[var(--faint)]">
+										<div className="when text-right text-[11px] text-[var(--faint)]">
 											{live ? "now" : relTime(r.created_at)}
 										</div>
-									</div>
+									</Link>
 								);
 							})}
-							<div className="grid grid-cols-[20px_1fr_150px_90px_60px] gap-3.5 pt-[7px]">
-								<div className="col-start-3 flex justify-between font-mono text-[11px] text-[var(--faint)]">
+							<div className="runscale">
+								<div className="labs">
 									<span>0</span>
 									<span>2m</span>
 									<span>4m</span>
