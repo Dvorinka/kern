@@ -341,6 +341,10 @@ func (a *Agent) runSteps(ctx context.Context, log *zap.Logger, claim *Claim) (st
 		return "", nil, err
 	}
 
+	// GitHub's job-setup phase: every declared pre hook runs before the first
+	// step. Remote actions download now — the "prepare required actions" pass.
+	exec.runPreHooks(ctx)
+
 	jobStatus := "success"
 	for _, step := range claim.Steps {
 		if ctx.Err() != nil {
@@ -368,6 +372,11 @@ func (a *Agent) runSteps(ctx context.Context, log *zap.Logger, claim *Claim) (st
 	// Deferred actions/cache saves run at job end (GitHub's post-job phase) so
 	// every step has contributed to the workspace. Cancellation skips them.
 	if jobStatus != "cancelled" {
+		// Registered post hooks pop LIFO first — a failed post fails the job
+		// but never stops the remaining hooks.
+		if !exec.runPostHooks(ctx) {
+			jobStatus = "failure"
+		}
 		exec.saveCaches()
 	}
 

@@ -127,9 +127,11 @@ type Runs struct {
 	Using string          `yaml:"using"`
 	Steps []CompositeStep `yaml:"steps"`
 	// JavaScript actions (using: node*)
-	Main string `yaml:"main"`
-	Pre  string `yaml:"pre"`
-	Post string `yaml:"post"`
+	Main   string `yaml:"main"`
+	Pre    string `yaml:"pre"`
+	Post   string `yaml:"post"`
+	PreIf  string `yaml:"pre-if"`
+	PostIf string `yaml:"post-if"`
 	// Docker actions (using: docker)
 	Image          string         `yaml:"image"`
 	Entrypoint     string         `yaml:"entrypoint"`

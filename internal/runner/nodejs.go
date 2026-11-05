@@ -191,27 +191,9 @@ func inputKey(name string) string {
 	return "INPUT_" + strings.ToUpper(strings.ReplaceAll(name, " ", "_"))
 }
 
-// runNodeAction executes a JavaScript action inside the job container on the
-// runner-provisioned Node runtime.
-// ponytail: pre/post entrypoints are ignored (logged once); upgrade when a
-// pre/post-capable action is actually needed.
-func (e *executor) runNodeAction(ctx context.Context, step StepSpec, meta *actions.Meta, actionPath string) (string, int) {
-	if err := e.ensureNode(ctx); err != nil {
-		e.logStep(step, "KERN: node runtime: "+err.Error())
-		return "failure", 1
-	}
-	main := strings.TrimSpace(meta.Runs.Main)
-	if main == "" {
-		e.logStep(step, "KERN: "+step.Uses+" declares no runs.main")
-		return "failure", 1
-	}
-	if meta.Runs.Pre != "" || meta.Runs.Post != "" {
-		e.logStep(step, "KERN: warning: pre/post entrypoints are not executed yet")
-	}
-	if meta.Runs.Using != "node20" {
-		e.logStep(step, fmt.Sprintf("KERN: runs.using %s executes on the bundled %s runtime", meta.Runs.Using, nodeRelease))
-	}
-	e.enc.persistPaths([]string{containerNodeDir()})
+// nodeActionEnv builds the env shared by an action's pre/main/post scripts:
+// step env, GITHUB_ACTION_PATH, INPUT_* and any saved STATE_* values.
+func (e *executor) nodeActionEnv(step StepSpec, meta *actions.Meta, actionPath string, state map[string]string) map[string]string {
 	env := map[string]string{}
 	for k, v := range step.Env {
 		env[k] = v
@@ -220,18 +202,55 @@ func (e *executor) runNodeAction(ctx context.Context, step StepSpec, meta *actio
 	for k, v := range inputEnv(meta, step.With) {
 		env[k] = v
 	}
+	for k, v := range state {
+		env["STATE_"+k] = v
+	}
+	return env
+}
+
+// runNodeScript executes one JavaScript entrypoint (pre/main/post) of a node
+// action inside the job container on the bundled Node runtime.
+func (e *executor) runNodeScript(ctx context.Context, step StepSpec, meta *actions.Meta, actionPath, script string, state map[string]string) (string, int) {
+	if err := e.ensureNode(ctx); err != nil {
+		e.logStep(step, "KERN: node runtime: "+err.Error())
+		return "failure", 1
+	}
+	e.enc.persistPaths([]string{containerNodeDir()})
 	sub := StepSpec{
 		Number:         step.Number,
 		ID:             step.ID,
 		Name:           step.Name,
-		Run:            shellQuote(containerNodeBin()) + " " + shellQuote(actionPath+"/"+main),
+		Run:            shellQuote(containerNodeBin()) + " " + shellQuote(actionPath+"/"+script),
 		Shell:          e.shell,
-		Env:            env,
+		Env:            e.nodeActionEnv(step, meta, actionPath, state),
 		TimeoutSeconds: step.TimeoutSeconds,
 	}
 	outcome, code, err := e.runStepBody(ctx, sub)
 	if err != nil {
 		e.logStep(step, "KERN: "+err.Error())
+	}
+	return outcome, code
+}
+
+// runNodeAction executes a JavaScript action's main entrypoint inside the job
+// container. The post hook arms before main runs; GITHUB_STATE is drained
+// into it afterwards so the post phase sees the saved STATE_* values.
+func (e *executor) runNodeAction(ctx context.Context, step StepSpec, meta *actions.Meta, actionPath string) (string, int) {
+	main := strings.TrimSpace(meta.Runs.Main)
+	if main == "" {
+		e.logStep(step, "KERN: "+step.Uses+" declares no runs.main")
+		return "failure", 1
+	}
+	if meta.Runs.Using != "node20" {
+		e.logStep(step, fmt.Sprintf("KERN: runs.using %s executes on the bundled %s runtime", meta.Runs.Using, nodeRelease))
+	}
+	if !e.runNestedPre(ctx, step, meta, actionPath, "") {
+		return "failure", 1
+	}
+	h := e.armPostHook(step, meta, actionPath, "")
+	outcome, code := e.runNodeScript(ctx, step, meta, actionPath, main, nil)
+	if h != nil {
+		mergeState(h, e.drainState())
 	}
 	return outcome, code
 }
