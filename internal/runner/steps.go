@@ -144,7 +144,7 @@ func (e *executor) runStepUnit(ctx context.Context, step StepSpec) (string, int,
 
 // runStepBody renders the script, launches docker exec and streams output.
 func (e *executor) runStepBody(ctx context.Context, step StepSpec) (string, int, error) {
-	script, err := e.renderScript(step)
+	script, shell, err := e.renderScript(step)
 	if err != nil {
 		return "failure", 1, err
 	}
@@ -188,12 +188,21 @@ func (e *executor) runStepBody(ctx context.Context, step StepSpec) (string, int,
 		pump.write([]byte(hdr))
 	}
 
-	cmd := exec.CommandContext(stepCtx, "docker", "exec",
+	execArgs := []string{"exec",
 		"--user", fmt.Sprintf("%d:%d", e.execUID(), e.execUID()),
 		"-w", containerWorkspace,
 		"--env-file", e.stepEnvPath(step),
-		e.container, e.shell, script,
-	)
+	}
+	extraKeys := make([]string, 0, len(e.stepEnvExtra))
+	for k := range e.stepEnvExtra {
+		extraKeys = append(extraKeys, k)
+	}
+	sort.Strings(extraKeys)
+	for _, k := range extraKeys {
+		execArgs = append(execArgs, "-e", k+"="+e.stepEnvExtra[k])
+	}
+	execArgs = append(execArgs, e.container, shell, script)
+	cmd := exec.CommandContext(stepCtx, "docker", execArgs...)
 	stdout, perr := cmd.StdoutPipe()
 	if perr != nil {
 		return "failure", 1, fmt.Errorf("stdout pipe: %w", perr)
@@ -284,17 +293,18 @@ func (e *executor) stepCondition(step StepSpec) (bool, error) {
 	return expressions.EvaluateCondition(step.If, e.runnerContext())
 }
 
-// renderScript writes the bash wrapper and body; returns the wrapper path inside the
-// container (/kern/scripts is mounted read-only). Names carry a sequence so
-// composite sub-steps sharing a step number never clobber each other.
-func (e *executor) renderScript(step StepSpec) (string, error) {
+// renderScript writes the bash wrapper and body; returns the wrapper path
+// inside the container (/kern/scripts is mounted read-only) plus the resolved
+// interpreter. Names carry a sequence so composite sub-steps sharing a step
+// number never clobber each other.
+func (e *executor) renderScript(step StepSpec) (string, string, error) {
 	e.scriptSeq++
 	tag := fmt.Sprintf("step-%d-%d", step.Number, e.scriptSeq)
 	name := tag + ".sh"
 	body := tag + ".body.sh"
 	dir := filepath.Join(e.workRoot(), "scripts")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
+		return "", "", err
 	}
 	shell := e.shell
 	if shell == "" {
@@ -332,7 +342,7 @@ func (e *executor) renderScript(step StepSpec) (string, error) {
 	}
 	wrapper += shell + bodyFlags + shellQuote(filepath.Join(containerScriptDir, body)) + "\n"
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(wrapper), 0o755); err != nil {
-		return "", err
+		return "", "", err
 	}
 	ctx := e.exprCtx
 	if ctx == nil {
@@ -340,19 +350,21 @@ func (e *executor) renderScript(step StepSpec) (string, error) {
 	}
 	bodyText, err := expressions.Interpolate(step.Run, ctx)
 	if err != nil {
-		return "", fmt.Errorf("interpolate run script: %w", err)
+		return "", "", fmt.Errorf("interpolate run script: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, body), []byte(bodyText), 0o644); err != nil {
-		return "", err
+		return "", "", err
 	}
-	return filepath.Join(containerScriptDir, name), nil
+	return filepath.Join(containerScriptDir, name), shell, nil
 }
 
 // writeStepEnv builds the per-step --env-file with job env, secrets, step env and
 // persisted state. It returns the host path used by docker exec.
 func (e *executor) writeStepEnv(step StepSpec) string {
 	path := e.stepEnvPath(step)
-	if err := os.WriteFile(path, []byte(e.enc.render(step)), 0o600); err != nil {
+	content, extra := e.enc.render(step)
+	e.stepEnvExtra = extra
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		return ""
 	}
 	return path
@@ -603,16 +615,25 @@ func (b *envBuilder) pathLines() string {
 	return strings.Join(b.paths, "\n") + "\n"
 }
 
-// render returns the env-file content for a step.
-func (b *envBuilder) render(step StepSpec) string {
+// render returns the env-file content for a step plus the vars that must ride
+// `docker exec -e` instead: docker's --env-file parser treats every line as
+// KEY=value, so multi-line values would corrupt the file. Secrets keep to the
+// file (single-line by convention); multi-line values are visible in the
+// container's inspect output, matching GitHub's own visibility.
+func (b *envBuilder) render(step StepSpec) (string, map[string]string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	var out strings.Builder
+	extra := map[string]string{}
 	writeKV := func(k, v string) {
 		if k == "" || strings.ContainsAny(k, " =\n") {
 			return
 		}
-		v = strings.TrimRight(v, "\n") // multi-line values are valid env-file content
+		v = strings.TrimRight(v, "\n")
+		if strings.Contains(v, "\n") {
+			extra[k] = v
+			return
+		}
 		fmt.Fprintf(&out, "%s=%s\n", k, v)
 	}
 	for k, v := range b.jobEnv {
@@ -627,7 +648,7 @@ func (b *envBuilder) render(step StepSpec) string {
 	for k, v := range step.Env {
 		writeKV(k, v)
 	}
-	return out.String()
+	return out.String(), extra
 }
 
 // parseKeyValue reads `KEY=value` lines (the file-command format).

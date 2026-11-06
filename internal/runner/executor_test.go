@@ -75,8 +75,8 @@ func TestEnvBuilderRender(t *testing.T) {
 	e := newEnvBuilder(claim, map[string]string{"SECRET_TOKEN": "hunter2", "BAD KEY": "x"})
 	e.persistKV("PERSISTED", "yes")
 	e.persistPaths([]string{"/first", " ", "/second"})
-	step := StepSpec{Env: map[string]string{"V_STEP": "2"}}
-	content := e.render(step)
+	step := StepSpec{Env: map[string]string{"V_STEP": "2", "MULTI": "a\nb"}}
+	content, extra := e.render(step)
 
 	for _, want := range []string{"V_JOB=1", "PERSISTED=yes", "SECRET_TOKEN=hunter2", "V_STEP=2"} {
 		if !strings.Contains(content, want) {
@@ -85,6 +85,9 @@ func TestEnvBuilderRender(t *testing.T) {
 	}
 	if strings.Contains(content, "BAD KEY=") {
 		t.Errorf("env key with space produced invalid line:\n%s", content)
+	}
+	if strings.Contains(content, "MULTI=") || extra["MULTI"] != "a\nb" {
+		t.Errorf("multi-line values must ride -e args, not the env file: %q %v", content, extra)
 	}
 }
 

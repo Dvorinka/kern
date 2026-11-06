@@ -29,8 +29,24 @@ type remediation struct {
 var (
 	cmdNotFoundRe  = regexp.MustCompile(`(?:bash|sh|dash|zsh|ash):[^\n]*?([a-zA-Z0-9._+\-/]+): (?:command )?not found`)
 	execNotFoundRe = regexp.MustCompile(`executable file not found`)
+	sharedLibRe    = regexp.MustCompile(`error while loading shared libraries: ([a-zA-Z0-9._+\-]+\.so[0-9.]*)`)
 	pkgNameRe      = regexp.MustCompile(`^[a-zA-Z0-9._+-]{1,64}$`)
 )
+
+// libPackage maps the shared libraries job images most often lack onto their
+// Debian package. Not derivable in general — kept deliberately small.
+var libPackage = map[string]string{
+	"libatomic.so.1":       "libatomic1",
+	"libstdc++.so.6":       "libstdc++6",
+	"libgcc_s.so.1":        "libgcc-s1",
+	"libz.so.1":            "zlib1g",
+	"libssl.so.3":          "libssl3",
+	"libcrypto.so.3":       "libssl3",
+	"libncursesw.so.6":     "libncursesw6",
+	"libncurses.so.6":      "libncurses6",
+	"libpython3.11.so.1.0": "libpython3.11",
+	"libpython3.12.so.1.0": "libpython3.12",
+}
 
 // diagnose maps a step failure onto a rule. Order matters: runner-side errors
 // first, then exit-code signatures, then log patterns, then generic.
@@ -70,6 +86,17 @@ func diagnose(step StepSpec, exitCode int, logTail, stepErr string) *diagnosis {
 		strings.Contains(lower, "tls handshake timeout"):
 		return fail("network", "A network call failed in the step",
 			"verify outbound connectivity from the runner host; retry if transient")
+	case sharedLibRe.MatchString(logTail):
+		lib := sharedLibRe.FindStringSubmatch(logTail)[1]
+		d = fail("missing_library",
+			"Shared library `"+lib+"` is missing in the job image",
+			"install the package that provides it, or use an image that ships it")
+		if pkg := libPackage[lib]; pkg != "" {
+			d.Suggestion = "install `" + pkg + "` in a prior step or use an image that ships it"
+			d.Fixable = true
+			d.Remediation = &remediation{Fix: installCommands(pkg)}
+		}
+		return d
 	case exitCode == 127 || cmdNotFoundRe.MatchString(logTail) || execNotFoundRe.MatchString(logTail):
 		pkg := missingBinary(logTail)
 		d = fail("missing_binary", "A required command is missing in the job image",
