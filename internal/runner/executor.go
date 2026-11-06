@@ -94,6 +94,9 @@ type executor struct {
 	// stepEnvExtra holds the multi-line vars docker's env-file cannot carry;
 	// set per step by writeStepEnv and passed as -e args.
 	stepEnvExtra map[string]string
+	// eventPayload is the github.event expression context, built once at
+	// container start and shared with the GITHUB_EVENT_PATH file.
+	eventPayload map[string]any
 
 	cancelled    atomic.Bool
 	stepResults  map[string]*stepOutcome
@@ -205,9 +208,11 @@ func (e *executor) prepare(ctx context.Context) error {
 		e.goStop()
 		return fmt.Errorf("pull image: %w", err)
 	}
-	if err := e.ensureServiceNet(ctx); err != nil {
-		e.goStop()
-		return fmt.Errorf("service network: %w", err)
+	if !e.privileged() {
+		if err := e.ensureServiceNet(ctx); err != nil {
+			e.goStop()
+			return fmt.Errorf("service network: %w", err)
+		}
 	}
 	if err := e.startContainer(ctx); err != nil {
 		e.goStop()
@@ -263,18 +268,35 @@ func (e *executor) imageExists(ctx context.Context, image string) bool {
 // startContainer creates and starts the idle job container.
 func (e *executor) startContainer(ctx context.Context) error {
 	workRoot := e.workRoot()
+	// GITHUB_EVENT_PATH: third-party actions read github.event.* from this
+	// file. A write failure degrades to today's behaviour (no payload), so
+	// log and continue rather than fail the job.
+	eventPath := ""
+	e.eventPayload = e.eventPayloadMap()
+	if p, err := e.writeEventPayload(); err != nil {
+		e.log.Warn("event payload write failed; GITHUB_EVENT_PATH unset", zap.Error(err))
+	} else {
+		eventPath = p
+	}
 	cmdHome := filepath.Join(workRoot, "cmd")
 	scriptDir := filepath.Join(workRoot, "scripts")
 	args := []string{
 		"create", "--rm", "--name", e.container,
 	}
-	if len(e.networkedServices()) > 0 {
+	// Trusted jobs run with GitHub parity: the job container shares the host
+	// network namespace, so `docker run -p` inside steps publishes where the
+	// job's localhost can reach it — the VM-runner model GitHub-hosted jobs
+	// get for free. Untrusted jobs keep the isolated bridge.
+	hostNet := e.privileged()
+	if hostNet {
+		args = append(args, "--network", "host")
+	} else if len(e.networkedServices()) > 0 {
 		args = append(args, "--network", e.serviceNet())
 	}
 	for _, svc := range e.claim.Job.Services {
-		if len(svc.Ports) > 0 {
-			// Localhost-mode service shares this container's netns; keep the
-			// service name resolvable so both addressing styles work.
+		// On host networking every service shares the job netns, so the name
+		// always maps to localhost; on the bridge only ported services do.
+		if len(svc.Ports) > 0 || hostNet {
 			args = append(args, "--add-host", svc.Name+":127.0.0.1")
 		}
 	}
@@ -317,6 +339,9 @@ func (e *executor) startContainer(ctx context.Context) error {
 	)
 	args = append(args, jobCAMount()...)
 	args = append(args, caEnv()...)
+	if eventPath != "" {
+		args = append(args, "-v", eventPath+":"+containerEventPath+":ro")
+	}
 	args = append(args,
 		"-e", "KERN_CACHE_DIR="+containerCacheDir,
 		// setup-* actions resolve @actions/tool-cache via RUNNER_TOOL_CACHE;
@@ -360,6 +385,11 @@ func (e *executor) startContainer(ctx context.Context) error {
 		"-e", "GIT_CONFIG_COUNT=1",
 		"-e", "GIT_CONFIG_KEY_0=safe.directory",
 		"-e", "GIT_CONFIG_VALUE_0=*",
+	)
+	if eventPath != "" {
+		args = append(args, "-e", "GITHUB_EVENT_PATH="+containerEventPath)
+	}
+	args = append(args,
 		"--entrypoint", "/bin/sh",
 		e.claim.Job.Image, "-c", "while true; do sleep 30; done",
 	)

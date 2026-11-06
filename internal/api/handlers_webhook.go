@@ -182,6 +182,7 @@ func (s *Server) actOnGithubEvent(c *gin.Context, delivery, event string, body [
 func parsePushTrigger(body []byte) (*ghTrigger, string, string) {
 	var p struct {
 		Ref        string `json:"ref"`
+		Before     string `json:"before"`
 		After      string `json:"after"`
 		HeadCommit struct {
 			Message string `json:"message"`
@@ -210,6 +211,7 @@ func parsePushTrigger(body []byte) (*ghTrigger, string, string) {
 	return &ghTrigger{
 		event: "push", repoName: p.Repository.FullName, cloneURL: p.Repository.CloneURL,
 		sha: p.After, ref: p.Ref, message: p.HeadCommit.Message, actor: actor, trust: "trusted",
+		extra:   map[string]any{"before": p.Before},
 		matches: func(plan *workflows.Plan) (bool, string) { return pushMatchesPlan(plan, p.Ref) },
 	}, "", ""
 }
@@ -270,7 +272,11 @@ func parsePRTrigger(body []byte, event string) (*ghTrigger, string, string) {
 			sha: "", ref: "", message: pr.Title, actor: p.Sender.Login, trust: "trusted",
 			association: pr.AuthorAssociation, headRef: pr.Head.Ref, headSHA: pr.Head.SHA,
 			defaultBranch: p.Repository.DefaultBranch, baseSHA: pr.Base.SHA,
-			extra: map[string]any{"pr_number": p.Number, "head_ref": pr.Head.Ref, "head_sha": pr.Head.SHA},
+			extra: map[string]any{
+				"pr_number": p.Number, "head_ref": pr.Head.Ref, "head_sha": pr.Head.SHA,
+				"action": p.Action, "base_ref": pr.Base.Ref, "base_sha": pr.Base.SHA,
+				"head_repo": pr.Head.Repo.FullName, "base_clone_url": p.Repository.CloneURL,
+			},
 			matches: func(plan *workflows.Plan) (bool, string) {
 				return pullRequestMatchesPlan(plan, event, p.Action, pr.Base.Ref)
 			},
@@ -289,7 +295,11 @@ func parsePRTrigger(body []byte, event string) (*ghTrigger, string, string) {
 		sha:      pr.Head.SHA, ref: fmt.Sprintf("refs/pull/%d/head", p.Number),
 		message: pr.Title, actor: p.Sender.Login, trust: trust,
 		association: pr.AuthorAssociation, headRef: pr.Head.Ref, headSHA: pr.Head.SHA,
-		extra: map[string]any{"pr_number": p.Number, "head_ref": pr.Head.Ref, "head_sha": pr.Head.SHA},
+		extra: map[string]any{
+			"pr_number": p.Number, "head_ref": pr.Head.Ref, "head_sha": pr.Head.SHA,
+			"action": p.Action, "base_ref": pr.Base.Ref, "base_sha": pr.Base.SHA,
+			"head_repo": pr.Head.Repo.FullName, "base_clone_url": p.Repository.CloneURL,
+		},
 		matches: func(plan *workflows.Plan) (bool, string) {
 			return pullRequestMatchesPlan(plan, event, p.Action, pr.Base.Ref)
 		},
