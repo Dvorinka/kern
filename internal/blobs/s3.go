@@ -31,8 +31,8 @@ type S3Config struct {
 // structural cost: Append is read-modify-write, because S3 objects are
 // immutable and multipart parts are invisible until the upload completes —
 // live log streaming needs a readable object after every flush.
-// shortcut: full-object rewrite per append; upgrade to a parts-manifest
-// scheme if individual logs regularly exceed tens of MB.
+// shortcut: full-object rewrite per append, bounded by s3MaxAppendObject;
+// upgrade to a parts-manifest scheme if individual logs regularly exceed it.
 type S3 struct {
 	client *minio.Client
 	bucket string
@@ -91,6 +91,12 @@ func isNoSuchKey(err error) bool {
 	return minio.ToErrorResponse(err).Code == "NoSuchKey"
 }
 
+// s3MaxAppendObject bounds the read-modify-write Append path: beyond it the
+// driver refuses rather than buffering an unbounded object in api memory.
+// 32 MiB covers CI logs comfortably; anything larger needs the parts-manifest
+// upgrade noted on S3.
+const s3MaxAppendObject = 32 << 20
+
 func (s *S3) Append(key string, data []byte) (int64, error) {
 	k, err := s.key(key)
 	if err != nil {
@@ -105,13 +111,16 @@ func (s *S3) Append(key string, data []byte) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	body, err = io.ReadAll(obj)
+	body, err = io.ReadAll(io.LimitReader(obj, s3MaxAppendObject+1))
 	obj.Close()
 	if err != nil {
 		if !isNoSuchKey(err) {
 			return 0, err
 		}
 		body = nil
+	}
+	if int64(len(body))+int64(len(data)) > s3MaxAppendObject {
+		return 0, fmt.Errorf("blob %q exceeds the %d MiB append ceiling", key, s3MaxAppendObject>>20)
 	}
 	body = append(body, data...)
 	_, err = s.client.PutObject(ctx, s.bucket, k, bytes.NewReader(body), int64(len(body)), minio.PutObjectOptions{})
