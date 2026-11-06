@@ -448,7 +448,7 @@ func serviceSeeds(plans []workflows.ServicePlan) []store.ServiceSeed {
 	out := make([]store.ServiceSeed, 0, len(plans))
 	for _, p := range plans {
 		out = append(out, store.ServiceSeed{
-			Name: p.Name, Image: p.Image, Env: p.Env, Options: p.Options,
+			Name: p.Name, Image: p.Image, Env: p.Env, Options: p.Options, Ports: p.Ports,
 		})
 	}
 	return out

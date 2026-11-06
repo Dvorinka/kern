@@ -224,6 +224,11 @@ type ServicePlan struct {
 	Image   string            `json:"image"`
 	Env     map[string]string `json:"env,omitempty"`
 	Options []string          `json:"options,omitempty"` // health-check docker flags only
+	// Ports carries the service's container-side published ports. A service
+	// that declares ports shares the job container's network namespace, so
+	// localhost:<port> works exactly as it does on a GitHub VM runner; the
+	// service name also resolves to 127.0.0.1 inside the job.
+	Ports []string `json:"ports,omitempty"`
 }
 
 // Edge is a dependency between plan jobs, kept for DAG rendering.

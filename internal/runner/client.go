@@ -28,6 +28,9 @@ type ClaimService struct {
 	Image   string            `json:"image"`
 	Env     map[string]string `json:"env,omitempty"`
 	Options []string          `json:"options,omitempty"`
+	// Ports marks the service as localhost-mode: it shares the job
+	// container's network namespace so localhost:<port> resolves.
+	Ports []string `json:"ports,omitempty"`
 }
 
 // Claim mirrors the control plane's claim payload. It is the runner's only view of a job.
