@@ -29,6 +29,7 @@ const (
 	containerCmdDir    = "/github/cmd"
 	containerScriptDir = "/kern/scripts"
 	containerCacheDir  = "/kern/cache"
+	containerTmpDir    = "/kern/tmp"
 	jobUID             = 1000 // container process runs unprivileged
 )
 
@@ -106,7 +107,7 @@ func newJobExecutor(cfg Config, c *client, claim *Claim, secrets map[string]stri
 		return nil, fmt.Errorf("job id is empty")
 	}
 	workRoot := filepath.Join(cfg.WorkRoot, id)
-	for _, dir := range []string{"workspace", "cmd", "scripts", "actions", "home"} {
+	for _, dir := range []string{"workspace", "cmd", "scripts", "actions", "home", "tmp"} {
 		p := filepath.Join(workRoot, dir)
 		if err := os.MkdirAll(p, 0o755); err != nil {
 			return nil, fmt.Errorf("create %s dir: %w", dir, err)
@@ -265,7 +266,10 @@ func (e *executor) startContainer(ctx context.Context) error {
 		// setup-* actions resolve @actions/tool-cache via RUNNER_TOOL_CACHE;
 		// pointing it at the persistent runner cache makes installed SDKs warm.
 		"-e", "RUNNER_TOOL_CACHE="+containerCacheDir+"/_toolcache",
-		"-e", "RUNNER_TEMP=/tmp",
+		// RUNNER_TEMP must be exec-allowed: setup-* actions extract and run
+		// installers there, and the container's /tmp tmpfs is noexec.
+		"-e", "RUNNER_TEMP="+containerTmpDir,
+		"-v", filepath.Join(workRoot, "tmp")+":"+containerTmpDir,
 		// Actions resolve $HOME for tool state (setup-go GOPATH, npm config);
 		// images may carry no writable home for uid 1000 at all.
 		"-e", "HOME="+containerActionHome,
