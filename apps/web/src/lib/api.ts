@@ -42,6 +42,9 @@ export const api = {
 	put: <T>(path: string, body?: unknown) =>
 		request<T>(`${base}${path}`, { method: "PUT", body: body ? JSON.stringify(body) : undefined }),
 	patch: <T>(path: string, body?: unknown) =>
-		request<T>(`${base}${path}`, { method: "PATCH", body: body ? JSON.stringify(body) : undefined }),
+		request<T>(`${base}${path}`, {
+			method: "PATCH",
+			body: body ? JSON.stringify(body) : undefined,
+		}),
 	del: <T>(path: string) => request<T>(`${base}${path}`, { method: "DELETE" }),
 };

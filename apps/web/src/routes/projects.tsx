@@ -4,7 +4,17 @@ import { useState, type FormEvent } from "react";
 import { Play, RefreshCw } from "lucide-react";
 import { api } from "../lib/api";
 import type { Project, Workflow } from "../lib/types";
-import { Button, Card, EmptyState, ErrorNote, Input, KV, PageHeader, SkeletonRows, Spinner } from "../components/ui";
+import {
+	Button,
+	Card,
+	EmptyState,
+	ErrorNote,
+	Input,
+	KV,
+	PageHeader,
+	SkeletonRows,
+	Spinner,
+} from "../components/ui";
 import { Row } from "../components/layout";
 import { relTime } from "../lib/format";
 
@@ -27,7 +37,8 @@ export function ProjectsPage() {
 	// the manifest, then submit it to github.com so the app is created under
 	// the user's own account.
 	const connect = useMutation({
-		mutationFn: () => api.get<{ url: string; manifest: Record<string, unknown> }>("/github-app/manifest"),
+		mutationFn: () =>
+			api.get<{ url: string; manifest: Record<string, unknown> }>("/github-app/manifest"),
 		onSuccess: (data) => {
 			const form = document.createElement("form");
 			form.method = "post";
@@ -52,7 +63,9 @@ export function ProjectsPage() {
 						<Button size="sm" onClick={() => connect.mutate()} disabled={connect.isPending}>
 							Connect GitHub
 						</Button>
-						<Button size="sm" variant="primary" onClick={() => setCreating((c) => !c)}>New project</Button>
+						<Button size="sm" variant="primary" onClick={() => setCreating((c) => !c)}>
+							New project
+						</Button>
 					</div>
 				}
 			/>
@@ -178,7 +191,8 @@ export function ProjectDetailPage() {
 							Environments
 						</Button>
 						<Button size="sm" onClick={() => sync.mutate()} disabled={sync.isPending}>
-							<RefreshCw size={13} className={sync.isPending ? "animate-spin" : ""} /> Sync workflows
+							<RefreshCw size={13} className={sync.isPending ? "animate-spin" : ""} /> Sync
+							workflows
 						</Button>
 					</>
 				}
@@ -225,23 +239,35 @@ export function ProjectDetailPage() {
 				</div>
 			</Card>
 			{sync.data != null && (
-				<SyncResult result={sync.data as { sha: string; workflows: { path: string; valid: boolean; diagnostics: { level: string; message: string }[] | null }[] }} />
+				<SyncResult
+					result={
+						sync.data as {
+							sha: string;
+							workflows: {
+								path: string;
+								valid: boolean;
+								diagnostics: { level: string; message: string }[] | null;
+							}[];
+						}
+					}
+				/>
 			)}
 			{sync.error && <p className="mb-3 text-xs text-[var(--err)]">{sync.error.message}</p>}
 			<h2 className="mb-2 text-[13px] font-semibold">Workflows</h2>
 			<Card>
 				{workflows.length === 0 ? (
-					<EmptyState title="No workflows" hint="Run sync to discover .github/workflows in the project source." />
+					<EmptyState
+						title="No workflows"
+						hint="Run sync to discover .github/workflows in the project source."
+					/>
 				) : (
 					workflows.map((w) => (
 						<Row key={w.id}>
 							<span className="min-w-0 flex-1 truncate font-medium">{w.name}</span>
-							<span className="font-mono flex-1 truncate text-xs text-[var(--faint)]">{w.path}</span>
-							<Button
-								size="sm"
-								onClick={() => trigger.mutate(w.id)}
-								disabled={trigger.isPending}
-							>
+							<span className="font-mono flex-1 truncate text-xs text-[var(--faint)]">
+								{w.path}
+							</span>
+							<Button size="sm" onClick={() => trigger.mutate(w.id)} disabled={trigger.isPending}>
 								<Play size={12} /> Run
 							</Button>
 						</Row>
@@ -255,7 +281,14 @@ export function ProjectDetailPage() {
 function SyncResult({
 	result,
 }: {
-	result: { sha: string; workflows: { path: string; valid: boolean; diagnostics: { level: string; message: string }[] | null }[] };
+	result: {
+		sha: string;
+		workflows: {
+			path: string;
+			valid: boolean;
+			diagnostics: { level: string; message: string }[] | null;
+		}[];
+	};
 }) {
 	return (
 		<Card className="mb-4 p-4">
@@ -264,7 +297,9 @@ function SyncResult({
 			</div>
 			{result.workflows.map((w) => (
 				<div key={w.path} className="text-xs">
-					<span className={w.valid ? "text-[var(--ok)]" : "text-[var(--err)]"}>{w.valid ? "valid" : "invalid"}</span>
+					<span className={w.valid ? "text-[var(--ok)]" : "text-[var(--err)]"}>
+						{w.valid ? "valid" : "invalid"}
+					</span>
 					<span className="font-mono ml-2 text-[var(--dim)]">{w.path}</span>
 					{(w.diagnostics ?? []).map((d, i) => (
 						<div key={i} className="ml-4 text-[var(--warn)]">

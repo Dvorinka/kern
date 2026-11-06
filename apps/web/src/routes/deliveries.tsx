@@ -43,7 +43,9 @@ function DeliveryRow({ d }: { d: WebhookDelivery }) {
 		enabled: open,
 	});
 	return (
-		<div className={cn("border-b border-[var(--line)] last:border-0", open && "bg-[var(--raise2)]/50")}>
+		<div
+			className={cn("border-b border-[var(--line)] last:border-0", open && "bg-[var(--raise2)]/50")}
+		>
 			<button
 				onClick={() => setOpen((o) => !o)}
 				className="flex w-full cursor-pointer items-center gap-3 px-4 py-2 text-left hover:bg-[var(--raise2)]"

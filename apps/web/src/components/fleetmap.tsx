@@ -260,7 +260,9 @@ export function FleetMap({ data }: { data: FleetMapResponse }) {
 					const lx = shared && dx > 2 ? 7 : shared && dx < -2 ? -7 : 0;
 					const ly = shared ? (Math.abs(dx) > 2 ? 3 : dy > 0 ? 15 : -8) : 13;
 					const anchor = lx > 0 ? "start" : lx < 0 ? "end" : "middle";
-					const hue = r.jobs.length ? HUE_VAR[jobHue(r.jobs[0]!.key || r.jobs[0]!.name)] : undefined;
+					const hue = r.jobs.length
+						? HUE_VAR[jobHue(r.jobs[0]!.key || r.jobs[0]!.name)]
+						: undefined;
 					const cls = r.jobs.length ? "fm-run busy" : `fm-run ${r.status}`;
 					return (
 						<g key={r.id} transform={`translate(${x + dx} ${y + dy})`}>
@@ -289,10 +291,18 @@ export function FleetMap({ data }: { data: FleetMapResponse }) {
 				})}
 			</svg>
 			<div className="fm-zoom">
-				<button type="button" title="Zoom in" onClick={() => zoomAt(vb.x + vb.w / 2, vb.y + vb.h / 2, 1 / 1.45)}>
+				<button
+					type="button"
+					title="Zoom in"
+					onClick={() => zoomAt(vb.x + vb.w / 2, vb.y + vb.h / 2, 1 / 1.45)}
+				>
 					+
 				</button>
-				<button type="button" title="Zoom out" onClick={() => zoomAt(vb.x + vb.w / 2, vb.y + vb.h / 2, 1.45)}>
+				<button
+					type="button"
+					title="Zoom out"
+					onClick={() => zoomAt(vb.x + vb.w / 2, vb.y + vb.h / 2, 1.45)}
+				>
 					−
 				</button>
 				<button type="button" title="Fit fleet" onClick={refit}>
@@ -345,9 +355,15 @@ export function FleetMap({ data }: { data: FleetMapResponse }) {
 				)}
 			</div>
 			{unlocated > 0 && (
-				<span className="fm-note" title={data.runners.filter((r) => r.lat == null || r.lng == null).map((r) => r.name).join(", ")}>
-					{unlocated} runner{unlocated === 1 ? "" : "s"} without a location — resolves on next heartbeat or edit
-					manually on the runners page
+				<span
+					className="fm-note"
+					title={data.runners
+						.filter((r) => r.lat == null || r.lng == null)
+						.map((r) => r.name)
+						.join(", ")}
+				>
+					{unlocated} runner{unlocated === 1 ? "" : "s"} without a location — resolves on next
+					heartbeat or edit manually on the runners page
 				</span>
 			)}
 		</div>
