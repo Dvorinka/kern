@@ -223,10 +223,21 @@ func (e *executor) pull(ctx context.Context) error {
 		return fmt.Errorf("docker binary not found on runner host")
 	}
 	if err := e.docker(ctx, "pull", "-q", e.claim.Job.Image); err != nil {
-		return err
+		// A registry hiccup or an unauthenticated private ref must not kill a
+		// job whose image is already on the host; the daemon resolves the local
+		// tag when create runs. Only a genuinely absent image fails the job.
+		if !e.imageExists(ctx, e.claim.Job.Image) {
+			return err
+		}
+		e.log.Warn("image pull failed; using the locally cached image",
+			zap.String("image", e.claim.Job.Image), zap.Error(err))
 	}
 	recordImageUse(e.cfg.WorkRoot, e.claim.Job.Image)
 	return nil
+}
+
+func (e *executor) imageExists(ctx context.Context, image string) bool {
+	return exec.CommandContext(ctx, "docker", "image", "inspect", image).Run() == nil
 }
 
 // startContainer creates and starts the idle job container.

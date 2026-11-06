@@ -16,6 +16,7 @@ func TestDiagnose(t *testing.T) {
 	}{
 		{"command not found bash", 127, "bash: line 2: jq: command not found\n", "", "missing_binary", true},
 		{"command not found sh", 127, "sh: curl: not found\n", "", "missing_binary", true},
+		{"command not found script header", 1, "/kern/scripts/step-6-9.body.sh: line 3: curl: command not found\n/kern/scripts/step-6-9.body.sh: line 3: curl: command not found\n", "", "missing_binary", true},
 		{"shared lib", 127, "node: error while loading shared libraries: libatomic.so.1: cannot open shared object file\n", "", "missing_library", true},
 		{"timeout", 124, "", "step timed out after 30 seconds", "step_timeout", false},
 		{"permission", 1, "touch: cannot touch '/etc/x': Permission denied\n", "", "permission_denied", false},

@@ -80,6 +80,17 @@ jobs:
           tags: |
             ghcr.io/dvorinka/kern-runner:${{ github.ref_name }}
             ghcr.io/dvorinka/kern-runner:latest
+      # Baseline job image: ubuntu:24.04 + the toolset GitHub-hosted runners
+      # ship. Only rebuilt when the Dockerfile (or this workflow) changes, so a
+      # normal release reuses the cached layers.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deployments/ubuntu.Dockerfile
+          push: true
+          tags: |
+            ghcr.io/dvorinka/kern-ubuntu:24.04
+            ghcr.io/dvorinka/kern-ubuntu:latest
     outputs:
       runner_digest: ${{ steps.runner.outputs.digest }}
   manifest:

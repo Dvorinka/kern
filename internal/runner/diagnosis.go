@@ -27,7 +27,9 @@ type remediation struct {
 }
 
 var (
-	cmdNotFoundRe  = regexp.MustCompile(`(?:bash|sh|dash|zsh|ash):[^\n]*?([a-zA-Z0-9._+\-/]+): (?:command )?not found`)
+	// Matches both `bash: foo: command not found` and a script header form:
+	// `/kern/scripts/step-6-9.body.sh: line 3: curl: command not found`.
+	cmdNotFoundRe  = regexp.MustCompile(`(?m)(?:^|[\s:])([a-zA-Z0-9._+\-/]+): (?:command )?not found`)
 	execNotFoundRe = regexp.MustCompile(`executable file not found`)
 	sharedLibRe    = regexp.MustCompile(`error while loading shared libraries: ([a-zA-Z0-9._+\-]+\.so[0-9.]*)`)
 	pkgNameRe      = regexp.MustCompile(`^[a-zA-Z0-9._+-]{1,64}$`)
@@ -79,13 +81,6 @@ func diagnose(step StepSpec, exitCode int, logTail, stepErr string) *diagnosis {
 	case strings.Contains(lower, "permission denied"):
 		return fail("permission_denied", "A file or operation returned permission denied",
 			"check file ownership in the workspace or run the command with the right user")
-	case strings.Contains(lower, "could not resolve host") ||
-		strings.Contains(lower, "connection refused") ||
-		strings.Contains(lower, "network is unreachable") ||
-		strings.Contains(lower, "i/o timeout") ||
-		strings.Contains(lower, "tls handshake timeout"):
-		return fail("network", "A network call failed in the step",
-			"verify outbound connectivity from the runner host; retry if transient")
 	case sharedLibRe.MatchString(logTail):
 		lib := sharedLibRe.FindStringSubmatch(logTail)[1]
 		d = fail("missing_library",
@@ -98,6 +93,8 @@ func diagnose(step StepSpec, exitCode int, logTail, stepErr string) *diagnosis {
 		}
 		return d
 	case exitCode == 127 || cmdNotFoundRe.MatchString(logTail) || execNotFoundRe.MatchString(logTail):
+		// Checked before the network signatures: a missing command makes every
+		// downstream call fail, and the app log that follows it is noise.
 		pkg := missingBinary(logTail)
 		d = fail("missing_binary", "A required command is missing in the job image",
 			"install it in a prior step or switch to an image that ships it")
@@ -110,6 +107,13 @@ func diagnose(step StepSpec, exitCode int, logTail, stepErr string) *diagnosis {
 			d.Remediation = &remediation{Fix: installCommands(pkg)}
 		}
 		return d
+	case strings.Contains(lower, "could not resolve host") ||
+		strings.Contains(lower, "connection refused") ||
+		strings.Contains(lower, "network is unreachable") ||
+		strings.Contains(lower, "i/o timeout") ||
+		strings.Contains(lower, "tls handshake timeout"):
+		return fail("network", "A network call failed in the step",
+			"verify outbound connectivity from the runner host; retry if transient")
 	default:
 		return fail("script_failure",
 			"Step exited with code "+itoa(exitCode),

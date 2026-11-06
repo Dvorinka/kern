@@ -38,6 +38,10 @@ services:
       KERN_RUNNER_JOIN_TOKEN: ${KERN_RUNNER_JOIN_TOKEN:?set KERN_RUNNER_JOIN_TOKEN}
       KERN_PUBLIC_URL: ${KERN_PUBLIC_URL:-http://localhost:8080}
       KERN_ALLOWED_ORIGINS: ${KERN_ALLOWED_ORIGINS:-}
+      # Job image for `runs-on: ubuntu-latest` / no container:. The published
+      # base image carries the GitHub-parity toolset; a bare ubuntu:24.04 is
+      # the fallback when the image is not reachable.
+      KERN_DEFAULT_IMAGE: ${KERN_DEFAULT_IMAGE:-ubuntu:24.04}
       KERN_GITHUB_APP_ID: ${KERN_GITHUB_APP_ID:-}
       KERN_GITHUB_APP_PRIVATE_KEY_FILE: ${KERN_GITHUB_APP_PRIVATE_KEY_FILE:-}
       KERN_GITHUB_WEBHOOK_SECRET: ${KERN_GITHUB_WEBHOOK_SECRET:-}
@@ -65,6 +69,7 @@ services:
       KERN_RUNNER_CONCURRENCY: ${KERN_RUNNER_CONCURRENCY:-1}
       KERN_RUNNER_LOAD_GATE: ${KERN_RUNNER_LOAD_GATE:-0}
       KERN_RUNNER_IMAGE_MAX_AGE: ${KERN_RUNNER_IMAGE_MAX_AGE:-168h}
+      KERN_RUNNER_LABELS: ${KERN_RUNNER_LABELS:-}
       KERN_JOB_CPUS: ${KERN_JOB_CPUS:-}
       KERN_JOB_MEMORY: ${KERN_JOB_MEMORY:-}
     command:
