@@ -33,6 +33,12 @@ Copy `.env.example` to `/opt/kern/.env` and fill in:
   `KERN_JOB_MEMORY`, `KERN_LOG_RETENTION`, `KERN_CACHE_MAX_AGE`. A job opts
   into several runners with `strategy.split` (a count, or `auto` for the sum
   of online CPUs that match `runs-on`). Each shard is a full checkout.
+- `KERN_GEOIP_URL` — egress-IP lookup for the dashboard fleet map (default
+  `https://ipwho.is/{ip}`; ipapi.co-shaped endpoints also parse). The API
+  resolves each runner's connecting
+  IP plus its own egress once; both are coarse city-level fixes the operator
+  can override on the runners page. Set to `off` to disable — lookups are the
+  only traffic that sends runner IPs to a third party.
 
 ## 2. Bring the stack up
 

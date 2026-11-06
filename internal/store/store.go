@@ -235,6 +235,13 @@ type Runner struct {
 	MemUsedBytes    *int64     `json:"mem_used_bytes"`
 	DiskFreeBytes   *int64     `json:"disk_free_bytes"`
 	MetricsAt       *time.Time `json:"metrics_at"`
+	GeoLat          *float64   `json:"geo_lat"`
+	GeoLng          *float64   `json:"geo_lng"`
+	GeoCity         string     `json:"geo_city"`
+	GeoCountry      string     `json:"geo_country"`
+	GeoSource       string     `json:"geo_source"`
+	GeoIP           string     `json:"geo_ip"`
+	GeoUpdatedAt    *time.Time `json:"geo_updated_at"`
 	CreatedAt       time.Time  `json:"created_at"`
 }
 

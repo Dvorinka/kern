@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
-import { Pause, Plus, Trash2 } from "lucide-react";
+import { LocateFixed, Pause, Pencil, Plus, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import type { Runner } from "../lib/types";
 import { Button, Card, EmptyState, Input, PageHeader, Spinner } from "../components/ui";
@@ -12,6 +12,7 @@ import { bytes, relTime } from "../lib/format";
 export function RunnersPage() {
 	const qc = useQueryClient();
 	const [enrolling, setEnrolling] = useState(false);
+	const [geoEdit, setGeoEdit] = useState<string | null>(null);
 	const { data, isLoading } = useQuery({
 		queryKey: ["runners"],
 		queryFn: () => api.get<{ runners: Runner[] }>("/runners"),
@@ -103,12 +104,31 @@ export function RunnersPage() {
 										>
 											{(r.labels ?? []).join(", ")}
 										</span>
+										<span className="w-36 min-w-0 shrink-0 truncate text-[11px] text-[var(--faint)]">
+											{r.geo_city || r.geo_country
+												? `${r.geo_city}${r.geo_city && r.geo_country ? ", " : ""}${r.geo_country}`
+												: "—"}
+										</span>
 										<span className="text-[11px] text-[var(--faint)]">
 											{r.draining ? "draining" : busy ? `${r.active_jobs} job${r.active_jobs === 1 ? "" : "s"}` : "idle"}
 										</span>
 										<span className="w-20 shrink-0 text-right font-mono text-[11px] text-[var(--faint)]">
 											{relTime(r.last_heartbeat_at)}
 										</span>
+										<Button
+											size="sm"
+											variant="ghost"
+											title={
+												r.geo_source === "manual"
+													? `manual location — ${r.geo_lat?.toFixed(2)}, ${r.geo_lng?.toFixed(2)}`
+													: r.geo_source === "auto"
+														? `auto location via ${r.geo_ip}`
+														: "no location — edit or wait for a heartbeat"
+											}
+											onClick={() => setGeoEdit((g) => (g === r.id ? null : r.id))}
+										>
+											<Pencil size={13} />
+										</Button>
 										<Button
 											size="sm"
 											variant="ghost"
@@ -139,6 +159,7 @@ export function RunnersPage() {
 											sub={r.disk_free_bytes != null ? `${bytes(r.disk_free_bytes)} free` : ""}
 										/>
 									</div>
+									{geoEdit === r.id && <GeoEditor runner={r} onDone={() => setGeoEdit(null)} />}
 								</div>
 							);
 						})
@@ -198,6 +219,62 @@ function EnrollCard({ onDone }: { onDone: () => void }) {
 				</form>
 			)}
 		</Card>
+	);
+}
+
+// GeoEditor places a runner on the fleet map by hand, or hands it back to
+// egress-IP auto-detection.
+function GeoEditor({ runner, onDone }: { runner: Runner; onDone: () => void }) {
+	const qc = useQueryClient();
+	const save = useMutation({
+		mutationFn: (body: Record<string, unknown>) => api.patch(`/runners/${runner.id}/geo`, body),
+		onSuccess: () => {
+			qc.invalidateQueries({ queryKey: ["runners"] });
+			qc.invalidateQueries({ queryKey: ["fleetmap"] });
+			onDone();
+		},
+	});
+
+	const submit = (e: FormEvent<HTMLFormElement>) => {
+		e.preventDefault();
+		const fd = new FormData(e.currentTarget);
+		const lat = parseFloat(String(fd.get("lat")));
+		const lng = parseFloat(String(fd.get("lng")));
+		if (Number.isNaN(lat) || Number.isNaN(lng)) return;
+		save.mutate({
+			lat,
+			lng,
+			city: String(fd.get("city")).trim(),
+			country: String(fd.get("country")).trim(),
+		});
+	};
+
+	return (
+		<form onSubmit={submit} className="ml-[23px] mt-2 flex flex-wrap items-center gap-2">
+			<Input name="lat" placeholder="lat" defaultValue={runner.geo_lat ?? ""} className="w-24" required />
+			<Input name="lng" placeholder="lng" defaultValue={runner.geo_lng ?? ""} className="w-24" required />
+			<Input name="city" placeholder="city" defaultValue={runner.geo_city} className="w-32" />
+			<Input name="country" placeholder="country" defaultValue={runner.geo_country} className="w-28" />
+			<Button type="submit" variant="primary" size="sm" disabled={save.isPending}>
+				Save
+			</Button>
+			<Button
+				type="button"
+				size="sm"
+				title="re-resolve from the runner's egress IP"
+				disabled={save.isPending}
+				onClick={() => save.mutate({ auto: true })}
+			>
+				<LocateFixed size={13} /> Auto
+			</Button>
+			<Button type="button" size="sm" variant="ghost" onClick={onDone}>
+				Cancel
+			</Button>
+			{save.error && <span className="text-xs text-[var(--err)]">{save.error.message}</span>}
+			<span className="text-[10px] text-[var(--faint)]">
+				{runner.geo_source === "auto" && runner.geo_ip ? `auto via ${runner.geo_ip}` : "manual wins over auto"}
+			</span>
+		</form>
 	);
 }
 

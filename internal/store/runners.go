@@ -51,14 +51,16 @@ func (s *Store) RegisterRunner(ctx context.Context, p RegisterRunnerParams) (Run
 // runnerCols is the full runners column list; keep scan order in lockstep.
 const runnerCols = `id, org_id, name, hostname, os, arch, cpus, memory_bytes, disk_bytes, labels,
 	version, status, draining, ephemeral, last_heartbeat_at, cpu_percent,
-	mem_used_bytes, disk_free_bytes, metrics_at, created_at`
+	mem_used_bytes, disk_free_bytes, metrics_at, geo_lat, geo_lng, geo_city,
+	geo_country, geo_source, geo_ip, geo_updated_at, created_at`
 
 func scanRunner(row pgx.Row) (Runner, error) {
 	var r Runner
 	err := row.Scan(&r.ID, &r.OrgID, &r.Name, &r.Hostname, &r.OS, &r.Arch, &r.CPUs,
 		&r.MemoryBytes, &r.DiskBytes, &r.Labels, &r.Version, &r.Status, &r.Draining,
 		&r.Ephemeral, &r.LastHeartbeatAt, &r.CPUPercent, &r.MemUsedBytes,
-		&r.DiskFreeBytes, &r.MetricsAt, &r.CreatedAt)
+		&r.DiskFreeBytes, &r.MetricsAt, &r.GeoLat, &r.GeoLng, &r.GeoCity,
+		&r.GeoCountry, &r.GeoSource, &r.GeoIP, &r.GeoUpdatedAt, &r.CreatedAt)
 	return r, err
 }
 
@@ -129,6 +131,76 @@ func (s *Store) DeleteRunner(ctx context.Context, orgID, id uuid.UUID) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// SetRunnerGeoManual applies an operator-placed location. It wins over
+// auto-detection until the operator asks for auto again.
+func (s *Store) SetRunnerGeoManual(ctx context.Context, orgID, id uuid.UUID, lat, lng float64, city, country string) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE runners SET geo_lat = $3, geo_lng = $4, geo_city = $5, geo_country = $6,
+			geo_source = 'manual', geo_updated_at = now()
+		WHERE org_id = $1 AND id = $2`, orgID, id, lat, lng, city, country)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetRunnerGeoAuto writes an egress-IP lookup result. The WHERE clause keeps a
+// concurrent manual override from being clobbered by a lookup already in flight.
+func (s *Store) SetRunnerGeoAuto(ctx context.Context, id uuid.UUID, ip string, lat, lng float64, city, country string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE runners SET geo_lat = $2, geo_lng = $3, geo_city = $4, geo_country = $5,
+			geo_ip = $6, geo_source = 'auto', geo_updated_at = now()
+		WHERE id = $1 AND geo_source <> 'manual'`, id, lat, lng, city, country, ip)
+	return err
+}
+
+// MarkRunnerGeoAuto flips a manually placed runner back to auto mode; the next
+// heartbeat (or an explicit re-resolve) rewrites the coordinates.
+func (s *Store) MarkRunnerGeoAuto(ctx context.Context, orgID, id uuid.UUID) (string, error) {
+	var ip string
+	err := s.pool.QueryRow(ctx, `
+		UPDATE runners SET geo_source = 'auto', geo_updated_at = now()
+		WHERE org_id = $1 AND id = $2 RETURNING geo_ip`, orgID, id).Scan(&ip)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	return ip, err
+}
+
+// LiveJob is an in-flight job tied to the runner executing it — the fleet map
+// draws one arc per live job from the control plane to that runner.
+type LiveJob struct {
+	RunnerID uuid.UUID `json:"runner_id"`
+	Key      string    `json:"key"`
+	Name     string    `json:"name"`
+}
+
+// InFlightJobs lists running jobs with their leased runner for one org.
+func (s *Store) InFlightJobs(ctx context.Context, orgID uuid.UUID) ([]LiveJob, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT j.runner_id, j.job_key, j.name
+		FROM jobs j
+		JOIN workflow_runs r ON r.id = j.run_id
+		JOIN projects p ON p.id = r.project_id
+		WHERE p.org_id = $1 AND j.status = 'in_progress' AND j.runner_id IS NOT NULL`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []LiveJob{}
+	for rows.Next() {
+		var j LiveJob
+		if err := rows.Scan(&j.RunnerID, &j.Key, &j.Name); err != nil {
+			return nil, err
+		}
+		out = append(out, j)
+	}
+	return out, rows.Err()
 }
 
 // RunnerActiveJobs lists jobs currently leased to a runner.
