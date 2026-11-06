@@ -194,7 +194,9 @@ function StepsPanel({
 				<div className="slist">
 					{steps.length === 0 && (
 						<div className="px-4 py-3 text-[11px] text-[var(--faint)]">
-							{job.status === "waiting_approval" ? "Waiting for deployment approval." : "No steps yet."}
+							{job.status === "waiting_approval"
+								? "Waiting for deployment approval."
+								: "No steps yet."}
 						</div>
 					)}
 					{steps.map((s) => (
@@ -372,21 +374,38 @@ function ApprovalGate({
 				<span className="r">{pending.length} waiting</span>
 			</div>
 			{pending.map((d) => (
-				<ApprovalRow key={d.id} d={d} email={user?.email ?? ""} role={user?.role ?? ""} onDone={onDone} />
+				<ApprovalRow
+					key={d.id}
+					d={d}
+					email={user?.email ?? ""}
+					role={user?.role ?? ""}
+					onDone={onDone}
+				/>
 			))}
 		</div>
 	);
 }
 
-function ApprovalRow({ d, email, role, onDone }: { d: Deployment; email: string; role: string; onDone: () => void }) {
+function ApprovalRow({
+	d,
+	email,
+	role,
+	onDone,
+}: {
+	d: Deployment;
+	email: string;
+	role: string;
+	onDone: () => void;
+}) {
 	const qc = useQueryClient();
 	const approvals = d.approvals ?? [];
 	const mine = approvals.some((a) => a.email === email);
 	const list = d.reviewer_emails ?? [];
 	const allowed = role === "owner" || role === "admin" || list.length === 0 || list.includes(email);
-	const timer = d.wait_until && new Date(d.wait_until).getTime() > Date.now()
-		? `wait ${Math.max(1, Math.round((new Date(d.wait_until).getTime() - Date.now()) / 60000))}m`
-		: "";
+	const timer =
+		d.wait_until && new Date(d.wait_until).getTime() > Date.now()
+			? `wait ${Math.max(1, Math.round((new Date(d.wait_until).getTime() - Date.now()) / 60000))}m`
+			: "";
 	const act = useMutation({
 		mutationFn: (op: "approve" | "reject") => api.post(`/jobs/${d.job_id}/${op}`),
 		onSuccess: () => {
@@ -414,7 +433,12 @@ function ApprovalRow({ d, email, role, onDone }: { d: Deployment; email: string;
 						>
 							{mine ? "Approved" : "Approve"}
 						</Button>
-						<Button size="sm" variant="danger" disabled={act.isPending} onClick={() => act.mutate("reject")}>
+						<Button
+							size="sm"
+							variant="danger"
+							disabled={act.isPending}
+							onClick={() => act.mutate("reject")}
+						>
 							Reject
 						</Button>
 					</>

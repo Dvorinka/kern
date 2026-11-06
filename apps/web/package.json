@@ -1,9 +1,8 @@
 {
 	"name": "@kern/web",
-	"private": true,
 	"version": "0.1.0",
+	"private": true,
 	"type": "module",
-	"packageManager": "pnpm@12.15.0",
 	"scripts": {
 		"dev": "vite",
 		"build": "tsc -b && vite build",
@@ -36,5 +35,6 @@
 		"oxlint": "^1.90.0",
 		"typescript": "~7.0.2",
 		"vite": "^8.3.5"
-	}
+	},
+	"packageManager": "pnpm@12.15.0"
 }

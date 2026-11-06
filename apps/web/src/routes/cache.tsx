@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import type { CacheEntry, Project } from "../lib/types";
-import { Button, ErrorNote, PageHeader, Spinner } from "../components/ui";
+import { Button, ErrorNote, PageHeader, SkeletonRows } from "../components/ui";
 import { bytes, relTime } from "../lib/format";
 
 export function CachePage() {
@@ -38,7 +38,7 @@ export function CachePage() {
 					<span className="r">newest first</span>
 				</div>
 				{isLoading ? (
-					<Spinner />
+					<SkeletonRows />
 				) : error ? (
 					<ErrorNote error={error} onRetry={() => refetch()} />
 				) : entries.length === 0 ? (
@@ -47,7 +47,10 @@ export function CachePage() {
 					</div>
 				) : (
 					entries.map((e) => (
-						<div key={e.id} className="flex items-center gap-3 border-b border-[var(--line)] px-4 py-2.5 last:border-0">
+						<div
+							key={e.id}
+							className="flex items-center gap-3 border-b border-[var(--line)] px-4 py-2.5 last:border-0"
+						>
 							<div className="min-w-0 flex-1">
 								<div className="truncate font-mono text-xs text-[var(--ink)]">{e.key}</div>
 								<div className="mt-0.5 truncate font-mono text-[11px] text-[var(--faint)]">

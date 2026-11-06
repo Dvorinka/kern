@@ -120,6 +120,27 @@ export function Spinner() {
 	);
 }
 
+// First-load placeholder for list cards — bars in the same row frame as
+// real rows, staggered pulse, so the page never jumps when data lands.
+export function SkeletonRows({ rows = 4 }: { rows?: number }) {
+	return (
+		<div aria-hidden>
+			{Array.from({ length: rows }, (_, i) => (
+				<div className="skl" key={i}>
+					<span className="skl-main">
+						<i style={{ width: `${36 + ((i * 31) % 38)}%`, animationDelay: `${i * 90}ms` }} />
+						<i
+							className="sub"
+							style={{ width: `${20 + ((i * 17) % 22)}%`, animationDelay: `${i * 90}ms` }}
+						/>
+					</span>
+					<i className="side" style={{ animationDelay: `${i * 90}ms` }} />
+				</div>
+			))}
+		</div>
+	);
+}
+
 // Failed queries get the same dashed frame as empty states, in err colour,
 // with a retry that re-fires the query.
 export function ErrorNote({ error, onRetry }: { error: unknown; onRetry?: () => void }) {

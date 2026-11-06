@@ -42,7 +42,10 @@ export function OverviewPage() {
 	// the live run earns its own slot in the detail fan-out — it is not
 	// necessarily inside the recent-six window
 	const detailRuns = useMemo(
-		() => (liveRun && !runs.slice(0, 6).includes(liveRun) ? [liveRun, ...runs.slice(0, 5)] : runs.slice(0, 6)),
+		() =>
+			liveRun && !runs.slice(0, 6).includes(liveRun)
+				? [liveRun, ...runs.slice(0, 5)]
+				: runs.slice(0, 6),
 		[runs, liveRun],
 	);
 	const recent = detailRuns.slice(0, 6);
@@ -163,7 +166,7 @@ export function OverviewPage() {
 						<span className="font-medium text-[var(--err)]">
 							{data.webhooks!.failed_24h} webhook{data.webhooks!.failed_24h === 1 ? "" : "s"}
 						</span>{" "}
-					failed in the last 24h — pushes may not have become runs.
+						failed in the last 24h — pushes may not have become runs.
 						{data.webhooks!.last_error && (
 							<span className="block truncate font-mono text-[11px] text-[var(--faint)]">
 								{data.webhooks!.last_error}

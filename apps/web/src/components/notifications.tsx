@@ -28,8 +28,7 @@ export function NotificationsBell() {
 		refetchInterval: 15000,
 	});
 	const approve = useMutation({
-		mutationFn: (n: Notification) =>
-			api.post(`/jobs/${n.job_id}/remediate`, { step: n.step }),
+		mutationFn: (n: Notification) => api.post(`/jobs/${n.job_id}/remediate`, { step: n.step }),
 		onSuccess: () => {
 			qc.invalidateQueries({ queryKey: ["notifications"] });
 			qc.invalidateQueries({ queryKey: ["run"] });
@@ -94,7 +93,9 @@ export function NotificationsBell() {
 									{n.fix && n.fix.length > 0 && (
 										<div className="mt-1 rounded border border-[var(--line)] bg-[var(--bg)] px-2 py-1 font-mono text-[10px] text-[var(--dim)]">
 											{n.fix.map((f, i) => (
-												<div key={i} className="truncate" title={f}>{f}</div>
+												<div key={i} className="truncate" title={f}>
+													{f}
+												</div>
 											))}
 										</div>
 									)}

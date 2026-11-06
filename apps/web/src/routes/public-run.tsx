@@ -91,17 +91,24 @@ function PublicBody({ data }: { data: PublicPayload }) {
 				sub={
 					<div className="flex flex-wrap items-baseline gap-x-3.5">
 						<span>
-							{run.workflow_name} · <b className="font-medium text-[var(--ink)]">#{run.run_number}</b>
+							{run.workflow_name} ·{" "}
+							<b className="font-medium text-[var(--ink)]">#{run.run_number}</b>
 						</span>
 						<span className="font-mono">{refName(run.ref)}</span>
 						<span className="font-mono">{shortSha(run.sha)}</span>
-						<span>{run.event}{run.actor ? ` by ${run.actor}` : ""}</span>
+						<span>
+							{run.event}
+							{run.actor ? ` by ${run.actor}` : ""}
+						</span>
 					</div>
 				}
 				actions={
 					<>
 						<StatusPill status={run.status} conclusion={run.conclusion} />
-						<Link to={`/runs/${run.id}`} className="text-xs text-[var(--dim)] hover:text-[var(--ink)]">
+						<Link
+							to={`/runs/${run.id}`}
+							className="text-xs text-[var(--dim)] hover:text-[var(--ink)]"
+						>
 							Full run
 						</Link>
 					</>
@@ -127,7 +134,10 @@ function PublicBody({ data }: { data: PublicPayload }) {
 							{job.steps.length > 0 && (
 								<ul className="pb-2">
 									{job.steps.map((step) => (
-										<li key={step.number} className="flex items-center gap-3 px-4 py-1 pl-9 text-xs">
+										<li
+											key={step.number}
+											className="flex items-center gap-3 px-4 py-1 pl-9 text-xs"
+										>
 											<StatusSq status={step.status} conclusion={step.conclusion} />
 											<span className="min-w-0 flex-1 text-[var(--dim)]">
 												<span className="truncate">{step.name}</span>
@@ -148,9 +158,7 @@ function PublicBody({ data }: { data: PublicPayload }) {
 					))
 				)}
 			</div>
-			<p className="mt-3 text-[11px] text-[var(--faint)]">
-				Logs stay on the signed-in run page.
-			</p>
+			<p className="mt-3 text-[11px] text-[var(--faint)]">Logs stay on the signed-in run page.</p>
 		</>
 	);
 }

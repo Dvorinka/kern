@@ -3,7 +3,14 @@ import { Link } from "react-router-dom";
 import { useMemo, useState } from "react";
 import { api } from "../lib/api";
 import type { UsageResponse } from "../lib/types";
-import { Card, CardHeader, EmptyState, ErrorNote, PageHeader, Spinner } from "../components/ui";
+import {
+	Card,
+	CardHeader,
+	EmptyState,
+	ErrorNote,
+	PageHeader,
+	SkeletonRows,
+} from "../components/ui";
 import { seconds } from "../lib/format";
 
 const WINDOWS = [7, 30, 90];
@@ -33,8 +40,7 @@ export function UsagePage() {
 
 	const u = data?.usage;
 	const t = u?.totals;
-	const successRate =
-		t && t.runs > 0 ? `${Math.round((t.runs_success / t.runs) * 100)}%` : "—";
+	const successRate = t && t.runs > 0 ? `${Math.round((t.runs_success / t.runs) * 100)}%` : "—";
 
 	const kpis = t
 		? [
@@ -70,11 +76,7 @@ export function UsagePage() {
 				actions={
 					<div className="tabs" style={{ border: 0 }}>
 						{WINDOWS.map((w) => (
-							<button
-								key={w}
-								className={w === days ? "on" : ""}
-								onClick={() => setDays(w)}
-							>
+							<button key={w} className={w === days ? "on" : ""} onClick={() => setDays(w)}>
 								{w}d
 							</button>
 						))}
@@ -83,7 +85,9 @@ export function UsagePage() {
 			/>
 
 			{isLoading ? (
-				<Spinner />
+				<Card>
+					<SkeletonRows rows={6} />
+				</Card>
 			) : error ? (
 				<Card>
 					<ErrorNote error={error} onRetry={() => refetch()} />
@@ -237,8 +241,8 @@ function SavingsCard({
 					<small> hosted-equivalent · {days}d</small>
 				</div>
 				<div className="sub">
-					<b>{billable.toLocaleString()} billable min</b> — {tierText} ({FREE_TIER_MIN.toLocaleString()}{" "}
-					min/mo on Linux 2-core @ {usd(res.rate_usd_per_min)}/min)
+					<b>{billable.toLocaleString()} billable min</b> — {tierText} (
+					{FREE_TIER_MIN.toLocaleString()} min/mo on Linux 2-core @ {usd(res.rate_usd_per_min)}/min)
 					{billable > FREE_TIER_MIN && (
 						<>
 							{" · "}
@@ -247,8 +251,9 @@ function SavingsCard({
 					)}
 				</div>
 				<div className="foot">
-					Equivalence, not an invoice — the fleet runs on your own hardware; GitHub would have billed
-					this for the same jobs. Billable minutes round each job up, exactly as GitHub meters.
+					Equivalence, not an invoice — the fleet runs on your own hardware; GitHub would have
+					billed this for the same jobs. Billable minutes round each job up, exactly as GitHub
+					meters.
 				</div>
 			</div>
 		</Card>

@@ -14,8 +14,9 @@ interface LogChunk {
 
 // Strip CSI, OSC (hyperlinks, clipboard writes), charset/single escapes and
 // stray C0 controls — runner logs are attacker-adjacent text, not a terminal.
-// oxlint-disable-next-line no-control-regex -- stripping ANSI escapes is the point
-const ANSI = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][0-2]?|\x1b[=>M78DHc]|[\x00-\x08\x0b-\x1f\x7f]/g;
+const ANSI =
+	// oxlint-disable-next-line no-control-regex -- stripping ANSI escapes is the point
+	/\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][0-2]?|\x1b[=>M78DHc]|[\x00-\x08\x0b-\x1f\x7f]/g;
 
 export function LogView({
 	stepId,

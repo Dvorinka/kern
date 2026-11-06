@@ -80,7 +80,13 @@ export interface Step {
 		suggestion: string;
 		agent_prompt: string;
 		fixable: boolean;
-		remediation?: { fix: string[]; applied?: boolean; approved?: boolean; dismissed?: boolean; result?: string };
+		remediation?: {
+			fix: string[];
+			applied?: boolean;
+			approved?: boolean;
+			dismissed?: boolean;
+			result?: string;
+		};
 	} | null;
 }
 
@@ -324,7 +330,13 @@ export interface UsageReport {
 		jobs: number;
 		failed_jobs: number;
 	}[];
-	projects: { slug: string; name: string; seconds: number; runs: number; billable_minutes: number }[];
+	projects: {
+		slug: string;
+		name: string;
+		seconds: number;
+		runs: number;
+		billable_minutes: number;
+	}[];
 	runners: { name: string; seconds: number; jobs: number }[];
 	failures: { kind: string; count: number; fixable: number }[];
 }
