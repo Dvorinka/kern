@@ -4,14 +4,14 @@ import { useState, type FormEvent } from "react";
 import { Play, RefreshCw } from "lucide-react";
 import { api } from "../lib/api";
 import type { Project, Workflow } from "../lib/types";
-import { Button, Card, EmptyState, Input, KV, PageHeader, Spinner } from "../components/ui";
+import { Button, Card, EmptyState, ErrorNote, Input, KV, PageHeader, Spinner } from "../components/ui";
 import { Row } from "../components/layout";
 import { relTime } from "../lib/format";
 
 export function ProjectsPage() {
 	const nav = useNavigate();
 	const qc = useQueryClient();
-	const { data, isLoading } = useQuery({
+	const { data, isLoading, error, refetch } = useQuery({
 		queryKey: ["projects"],
 		queryFn: () => api.get<{ projects: Project[] }>("/projects"),
 	});
@@ -69,7 +69,9 @@ export function ProjectsPage() {
 				<Spinner />
 			) : (
 				<Card>
-					{!data || data.projects.length === 0 ? (
+					{error ? (
+						<ErrorNote error={error} onRetry={() => refetch()} />
+					) : !data || data.projects.length === 0 ? (
 						<EmptyState
 							title="No projects"
 							hint="Create a project with a local_path or repo_url, then sync its .github/workflows."
@@ -132,7 +134,7 @@ export function ProjectDetailPage() {
 	const { slug } = useParams<{ slug: string }>();
 	const nav = useNavigate();
 	const qc = useQueryClient();
-	const { data, isLoading, refetch } = useQuery({
+	const { data, isLoading, error, refetch } = useQuery({
 		queryKey: ["project", slug],
 		queryFn: () => api.get<{ project: Project; workflows: Workflow[] }>(`/projects/${slug}`),
 	});
@@ -163,7 +165,9 @@ export function ProjectDetailPage() {
 		onSuccess: (res) => nav(`/runs/${res.run.id}`),
 	});
 
-	if (isLoading || !data) return <Spinner />;
+	if (isLoading || !data) {
+		return error ? <ErrorNote error={error} onRetry={() => refetch()} /> : <Spinner />;
+	}
 	const { project, workflows } = data;
 	return (
 		<>

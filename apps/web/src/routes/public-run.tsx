@@ -50,6 +50,7 @@ export function PublicRunPage() {
 		queryFn: () => api.get<PublicPayload>(`/public/runs/${id}`),
 		retry: false,
 		refetchInterval: (q) => {
+			if (q.state.status === "error") return false;
 			const s = q.state.data?.run.status;
 			return s === "completed" || s === "cancelled" ? false : 2000;
 		},

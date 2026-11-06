@@ -324,7 +324,7 @@ export interface UsageReport {
 		jobs: number;
 		failed_jobs: number;
 	}[];
-	projects: { slug: string; name: string; seconds: number; runs: number }[];
+	projects: { slug: string; name: string; seconds: number; runs: number; billable_minutes: number }[];
 	runners: { name: string; seconds: number; jobs: number }[];
 	failures: { kind: string; count: number; fixable: number }[];
 }

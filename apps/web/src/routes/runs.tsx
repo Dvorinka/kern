@@ -3,7 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { useMemo, useState, type ReactNode } from "react";
 import { api } from "../lib/api";
 import type { OverviewResponse, Run, Runner } from "../lib/types";
-import { PageHeader, Spinner, cn } from "../components/ui";
+import { ErrorNote, PageHeader, Spinner, cn } from "../components/ui";
 import { StatusSq } from "../components/status";
 import { Fingerprint, useRunDetails } from "../components/fingerprint";
 import { bytes, duration, relTime, refName, shortSha } from "../lib/format";
@@ -30,7 +30,7 @@ export function RunsPage() {
 	const tab = (params.get("tab") ?? "") as Tab;
 	const [branch, setBranch] = useState("");
 	const [older, setOlder] = useState(0);
-	const { data, isLoading } = useQuery({
+	const { data, isLoading, error, refetch } = useQuery({
 		queryKey: ["runs", "all", older],
 		queryFn: () => api.get<{ runs: Run[]; total: number }>(`/runs?limit=60&offset=${older * 60}`),
 		refetchInterval: 4000,
@@ -86,6 +86,8 @@ export function RunsPage() {
 
 					{isLoading ? (
 						<Spinner />
+					) : error ? (
+						<ErrorNote error={error} onRetry={() => refetch()} />
 					) : visible.length === 0 ? (
 						<div className="emptynote flush">
 							Nothing here. A run appears the moment a push, webhook or manual trigger lands.

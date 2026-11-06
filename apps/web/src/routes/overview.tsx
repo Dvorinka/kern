@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { useMemo } from "react";
 import { api } from "../lib/api";
 import type { FleetMapResponse, OverviewResponse, Run, Runner } from "../lib/types";
-import { PageHeader, Spinner } from "../components/ui";
+import { ErrorNote, PageHeader, Spinner } from "../components/ui";
 import { StatusSq } from "../components/status";
 import { Fingerprint, jobHue, useRunDetails } from "../components/fingerprint";
 import { FleetMap } from "../components/fleetmap";
@@ -11,7 +11,7 @@ import { bytes, duration, relTime, seconds } from "../lib/format";
 
 export function OverviewPage() {
 	const nav = useNavigate();
-	const { data, isLoading, dataUpdatedAt } = useQuery({
+	const { data, isLoading, error, dataUpdatedAt } = useQuery({
 		queryKey: ["overview"],
 		queryFn: () => api.get<OverviewResponse>("/overview"),
 		refetchInterval: 5000,
@@ -68,7 +68,16 @@ export function OverviewPage() {
 
 	const day = useMemo(() => runsPerDay(runs), [runs]);
 
-	if (isLoading || !data) return <Spinner />;
+	if (isLoading || !data) {
+		return error ? (
+			<>
+				<PageHeader title="kern" sub="self-hosted control plane" />
+				<ErrorNote error={error} />
+			</>
+		) : (
+			<Spinner />
+		);
+	}
 	const o = data.overview;
 	const todayStart = new Date();
 	todayStart.setHours(0, 0, 0, 0);

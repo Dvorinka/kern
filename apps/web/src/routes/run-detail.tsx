@@ -6,7 +6,7 @@ import DOMPurify from "dompurify";
 import { Download, Wrench } from "lucide-react";
 import { api } from "../lib/api";
 import type { Artifact, Deployment, Job, RunDetail, Runner, Step } from "../lib/types";
-import { Button, PageHeader, Spinner, cn } from "../components/ui";
+import { Button, ErrorNote, PageHeader, Spinner, cn } from "../components/ui";
 import { StatusPill } from "../components/status";
 import { useAuth } from "../lib/auth";
 import { LogView } from "../components/log-view";
@@ -17,7 +17,7 @@ import { bytes, duration, refName, shortSha } from "../lib/format";
 export function RunDetailPage() {
 	const { id } = useParams<{ id: string }>();
 	const qc = useQueryClient();
-	const { data, isLoading } = useQuery({
+	const { data, isLoading, error, refetch } = useQuery({
 		queryKey: ["run", id],
 		queryFn: () => api.get<RunDetail>(`/runs/${id}`),
 		refetchInterval: (q) => {
@@ -46,7 +46,9 @@ export function RunDetailPage() {
 
 	const runnerNames = new Map((runners?.runners ?? []).map((r) => [r.id, r.name]));
 
-	if (isLoading || !data) return <Spinner />;
+	if (isLoading || !data) {
+		return error ? <ErrorNote error={error} onRetry={() => refetch()} /> : <Spinner />;
+	}
 	const { run, jobs } = data;
 	const live =
 		run.status === "in_progress" || run.status === "queued" || run.status === "awaiting_approval";

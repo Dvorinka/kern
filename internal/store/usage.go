@@ -30,10 +30,11 @@ type UsageDay struct {
 }
 
 type UsageProject struct {
-	Slug    string  `json:"slug"`
-	Name    string  `json:"name"`
-	Seconds float64 `json:"seconds"`
-	Runs    int64   `json:"runs"`
+	Slug            string  `json:"slug"`
+	Name            string  `json:"name"`
+	Seconds         float64 `json:"seconds"`
+	Runs            int64   `json:"runs"`
+	BillableMinutes int64   `json:"billable_minutes"`
 }
 
 type UsageRunner struct {
@@ -127,14 +128,15 @@ func (s *Store) Usage(ctx context.Context, orgID uuid.UUID, days int) (*UsageRep
 	prows, err := s.pool.Query(ctx, `
 		SELECT p.slug, p.name,
 		       sum(extract(epoch from j.completed_at - j.started_at)),
-		       count(DISTINCT j.run_id)
+		       count(DISTINCT j.run_id),
+		       coalesce(sum(ceil(extract(epoch from j.completed_at - j.started_at) / 60.0)), 0)
 		`+usageFrom+usageWhere+` GROUP BY p.slug, p.name ORDER BY 3 DESC`, orgID, days)
 	if err != nil {
 		return nil, fmt.Errorf("usage projects: %w", err)
 	}
 	for prows.Next() {
 		var u UsageProject
-		if err := prows.Scan(&u.Slug, &u.Name, &u.Seconds, &u.Runs); err != nil {
+		if err := prows.Scan(&u.Slug, &u.Name, &u.Seconds, &u.Runs, &u.BillableMinutes); err != nil {
 			prows.Close()
 			return nil, fmt.Errorf("usage project scan: %w", err)
 		}

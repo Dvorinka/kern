@@ -3,12 +3,12 @@ import { Link } from "react-router-dom";
 import { Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import type { CacheEntry, Project } from "../lib/types";
-import { Button, PageHeader, Spinner } from "../components/ui";
+import { Button, ErrorNote, PageHeader, Spinner } from "../components/ui";
 import { bytes, relTime } from "../lib/format";
 
 export function CachePage() {
 	const qc = useQueryClient();
-	const { data, isLoading } = useQuery({
+	const { data, isLoading, error, refetch } = useQuery({
 		queryKey: ["cache"],
 		queryFn: () => api.get<{ entries: CacheEntry[] }>("/cache"),
 	});
@@ -21,7 +21,6 @@ export function CachePage() {
 		onSuccess: () => qc.invalidateQueries({ queryKey: ["cache"] }),
 	});
 
-	if (isLoading) return <Spinner />;
 	const entries = data?.entries ?? [];
 	const totalBytes = entries.reduce((n, e) => n + e.size_bytes, 0);
 	const largest = Math.max(...entries.map((e) => e.size_bytes), 1);
@@ -38,7 +37,11 @@ export function CachePage() {
 					<span className="pt">Entries</span>
 					<span className="r">newest first</span>
 				</div>
-				{entries.length === 0 ? (
+				{isLoading ? (
+					<Spinner />
+				) : error ? (
+					<ErrorNote error={error} onRetry={() => refetch()} />
+				) : entries.length === 0 ? (
 					<div className="emptynote">
 						No cache entries. Entries appear when a run uses actions/cache with a key and path.
 					</div>

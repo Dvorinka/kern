@@ -115,7 +115,7 @@ export function Layout() {
 
 	return (
 		<div className="flex h-full">
-			<aside className="rail flex w-[196px] shrink-0 flex-col border-r border-[var(--line)]">
+			<aside className="rail border-r border-[var(--line)]">
 				<div className="flex items-center gap-2.5 border-b border-[var(--line)] px-[18px] pb-3.5 pt-[15px]">
 					<img src="/logo.svg" alt="" className="size-[18px] rounded-[5px]" />
 					<span className="text-[13px] font-semibold tracking-[0.22em]">KERN</span>

@@ -5,7 +5,7 @@ import { Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import type { Deployment, Environment, Project } from "../lib/types";
-import { Button, Card, EmptyState, Input, PageHeader, Spinner } from "../components/ui";
+import { Button, Card, EmptyState, ErrorNote, Input, PageHeader, Spinner } from "../components/ui";
 import { Row } from "../components/layout";
 import { StatusSq } from "../components/status";
 import { refName, relTime, shortSha } from "../lib/format";
@@ -103,7 +103,9 @@ export function EnvironmentsPage() {
 						<Spinner />
 					) : (
 						<Card>
-							{!deps.data || deps.data.deployments.length === 0 ? (
+							{deps.error ? (
+								<ErrorNote error={deps.error} onRetry={() => deps.refetch()} />
+							) : !deps.data || deps.data.deployments.length === 0 ? (
 								<EmptyState title="No deployments" hint="They appear when a job names an environment." />
 							) : (
 								deps.data.deployments.map((d) => <DeploymentRow key={d.id} d={d} slug={slug} />)

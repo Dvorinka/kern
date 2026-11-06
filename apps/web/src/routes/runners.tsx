@@ -3,7 +3,7 @@ import { useState, type FormEvent } from "react";
 import { LocateFixed, Pause, Pencil, Plus, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import type { Runner } from "../lib/types";
-import { Button, Card, EmptyState, Input, PageHeader, Spinner } from "../components/ui";
+import { Button, Card, EmptyState, ErrorNote, Input, PageHeader, Spinner } from "../components/ui";
 import { StatusSq } from "../components/status";
 import { CopyButton } from "./settings";
 import { Row } from "../components/layout";
@@ -13,7 +13,7 @@ export function RunnersPage() {
 	const qc = useQueryClient();
 	const [enrolling, setEnrolling] = useState(false);
 	const [geoEdit, setGeoEdit] = useState<string | null>(null);
-	const { data, isLoading } = useQuery({
+	const { data, isLoading, error, refetch } = useQuery({
 		queryKey: ["runners"],
 		queryFn: () => api.get<{ runners: Runner[] }>("/runners"),
 		refetchInterval: 5000,
@@ -71,7 +71,9 @@ export function RunnersPage() {
 						<span className="pt">Fleet</span>
 						<span className="r">{data?.runners.length ?? 0} registered</span>
 					</div>
-					{!data || data.runners.length === 0 ? (
+					{error ? (
+						<ErrorNote error={error} onRetry={() => refetch()} />
+					) : !data || data.runners.length === 0 ? (
 						<EmptyState
 							title="No runners"
 							hint="Start `just runner` (or the kern-runner binary) on any host with Docker to register one."
@@ -296,7 +298,7 @@ function Meter({ label, pct, sub }: { label: string; pct: number | null; sub: st
 					/>
 				)}
 			</span>
-			<span className="w-20 truncate font-mono">
+			<span className="font-mono whitespace-nowrap">
 				{pct != null ? `${Math.round(pct)}%` : "-"} {sub}
 			</span>
 		</span>

@@ -3,7 +3,7 @@ import { useState, type FormEvent } from "react";
 import { Check, Copy, RefreshCw, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import type { APIToken, AuditEvent, Member, UpdateInfo } from "../lib/types";
-import { Button, Card, CardHeader, EmptyState, Input, KV, PageHeader, Spinner } from "../components/ui";
+import { Button, Card, CardHeader, EmptyState, ErrorNote, Input, KV, PageHeader, Spinner } from "../components/ui";
 import { Row } from "../components/layout";
 import { relTime } from "../lib/format";
 
@@ -229,7 +229,7 @@ function UpdateCard() {
 }
 
 function AuditCard() {
-	const { data, isLoading } = useQuery({
+	const { data, isLoading, error, refetch } = useQuery({
 		queryKey: ["audit"],
 		queryFn: () => api.get<{ events: AuditEvent[] }>("/audit?limit=30"),
 	});
@@ -238,6 +238,8 @@ function AuditCard() {
 			<CardHeader title="Audit trail" sub="approvals, settings changes, and secrets writes" />
 			{isLoading ? (
 				<Spinner />
+			) : error ? (
+				<ErrorNote error={error} onRetry={() => refetch()} />
 			) : !data || data.events.length === 0 ? (
 				<EmptyState title="No audit events yet" hint="Approvals and settings changes land here." />
 			) : (
@@ -266,7 +268,7 @@ function MembersCard() {
 		queryKey: ["me"],
 		queryFn: () => api.get<{ user: { id: string; role: string } }>("/auth/me"),
 	});
-	const { data, isLoading } = useQuery({
+	const { data, isLoading, error, refetch } = useQuery({
 		queryKey: ["members"],
 		queryFn: () => api.get<{ members: Member[] }>("/members"),
 	});
@@ -330,6 +332,8 @@ function MembersCard() {
 			)}
 			{isLoading ? (
 				<Spinner />
+			) : error ? (
+				<ErrorNote error={error} onRetry={() => refetch()} />
 			) : !data || data.members.length === 0 ? (
 				<EmptyState title="No members" hint="The bootstrap admin is the only account." />
 			) : (
@@ -429,7 +433,7 @@ function NotifyCard() {
 
 function TokensCard() {
 	const qc = useQueryClient();
-	const { data, isLoading } = useQuery({
+	const { data, isLoading, error, refetch } = useQuery({
 		queryKey: ["tokens"],
 		queryFn: () => api.get<{ tokens: APIToken[] }>("/auth/tokens"),
 	});
@@ -498,6 +502,8 @@ function TokensCard() {
 			)}
 			{isLoading ? (
 				<Spinner />
+			) : error ? (
+				<ErrorNote error={error} onRetry={() => refetch()} />
 			) : !data || data.tokens.length === 0 ? (
 				<EmptyState title="No tokens" hint="Create one to authenticate the kern CLI or external scripts." />
 			) : (

@@ -3,12 +3,12 @@ import { useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { api } from "../lib/api";
 import type { WebhookDelivery } from "../lib/types";
-import { Card, EmptyState, PageHeader, Spinner, cn } from "../components/ui";
+import { Card, EmptyState, ErrorNote, PageHeader, Spinner, cn } from "../components/ui";
 import { StatusSq } from "../components/status";
 import { relTime } from "../lib/format";
 
 export function DeliveriesPage() {
-	const { data, isLoading } = useQuery({
+	const { data, isLoading, error, refetch } = useQuery({
 		queryKey: ["deliveries"],
 		queryFn: () => api.get<{ deliveries: WebhookDelivery[] }>("/webhooks/deliveries"),
 		refetchInterval: 5000,
@@ -21,7 +21,9 @@ export function DeliveriesPage() {
 				<Spinner />
 			) : (
 				<Card>
-					{!data || data.deliveries.length === 0 ? (
+					{error ? (
+						<ErrorNote error={error} onRetry={() => refetch()} />
+					) : !data || data.deliveries.length === 0 ? (
 						<EmptyState
 							title="No deliveries"
 							hint="Configure a GitHub webhook or App to point at /api/v1/webhooks/github."

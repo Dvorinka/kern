@@ -120,6 +120,23 @@ export function Spinner() {
 	);
 }
 
+// Failed queries get the same dashed frame as empty states, in err colour,
+// with a retry that re-fires the query.
+export function ErrorNote({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
+	const msg = error instanceof Error ? error.message : "Something went wrong.";
+	return (
+		<div className="errnote">
+			<span className="sq bad" />
+			<span>{msg}</span>
+			{onRetry && (
+				<button className="act" onClick={onRetry}>
+					Retry
+				</button>
+			)}
+		</div>
+	);
+}
+
 // Label-over-value for padded cards. For divided cell strips use .cells/.cell
 // markup directly; for side-by-side rows use the .kv CSS pattern.
 export function KV({ k, v, mono }: { k: string; v: ReactNode; mono?: boolean }) {

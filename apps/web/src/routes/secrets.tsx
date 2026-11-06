@@ -3,13 +3,13 @@ import { useState, type FormEvent } from "react";
 import { Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import type { SecretSummary } from "../lib/types";
-import { Button, Card, EmptyState, Input, PageHeader, Spinner } from "../components/ui";
+import { Button, Card, EmptyState, ErrorNote, Input, PageHeader, Spinner } from "../components/ui";
 import { Row } from "../components/layout";
 import { relTime } from "../lib/format";
 
 export function SecretsPage() {
 	const qc = useQueryClient();
-	const { data, isLoading } = useQuery({
+	const { data, isLoading, error, refetch } = useQuery({
 		queryKey: ["secrets"],
 		queryFn: () => api.get<{ secrets: SecretSummary[] }>("/secrets"),
 	});
@@ -56,7 +56,9 @@ export function SecretsPage() {
 				<Spinner />
 			) : (
 				<Card>
-					{!data || data.secrets.length === 0 ? (
+					{error ? (
+						<ErrorNote error={error} onRetry={() => refetch()} />
+					) : !data || data.secrets.length === 0 ? (
 						<EmptyState title="No secrets" hint="Org-level secrets here; project-scoped secrets arrive with project scoping in the UI." />
 					) : (
 						data.secrets.map((s) => (
