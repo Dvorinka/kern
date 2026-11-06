@@ -208,6 +208,12 @@ func compile(content string, c Compiler, depth int, calls *int, deps map[string]
 		for i := range job.Steps {
 			validateStep(d, fmt.Sprintf("jobs.%s.steps[%d]", id, i), job.Steps[i], seenSteps)
 		}
+		for _, label := range job.RunsOn {
+			if strings.Contains(label, "${{") && !strings.Contains(label, "matrix.") {
+				d.warnf("runs-on", "jobs."+id+".runs-on",
+					fmt.Sprintf("runs-on label %q uses a context KERN cannot resolve at compile time; the literal label must exist on a runner", label))
+			}
+		}
 		if job.Strategy != nil && len(job.Strategy.Matrix) > 0 {
 			d.info("matrix", "jobs."+id+".strategy.matrix", "matrix expansion is limited to 256 combinations")
 		}
@@ -331,8 +337,21 @@ func compileJob(wf Workflow, id string, job *Job, matrix map[string]any, c Compi
 
 	env := mergeEnv(wf.Env, job.Env)
 
+	// runs-on accepts expressions (GitHub evaluates them against matrix and
+	// other contexts). Only matrix is knowable at compile time; a label that
+	// still cannot be resolved stays literal and must exist on a runner.
+	runsOn := make([]string, 0, len(job.RunsOn))
+	for _, label := range job.RunsOn {
+		if strings.Contains(label, "${{") {
+			if resolved, err := expressions.Interpolate(label, ctx); err == nil && strings.TrimSpace(resolved) != "" {
+				label = resolved
+			}
+		}
+		runsOn = append(runsOn, label)
+	}
+
 	// Step defaults come from workflow defaults, overridden per job.
-	image := c.resolveImage(job.RunsOn)
+	image := c.resolveImage(runsOn)
 	if job.Container != nil {
 		switch cont := job.Container.(type) {
 		case string:
@@ -395,7 +414,7 @@ func compileJob(wf Workflow, id string, job *Job, matrix map[string]any, c Compi
 		JobID:           id,
 		Name:            displayName,
 		Needs:           dedupe(job.Needs),
-		RunsOn:          []string(job.RunsOn),
+		RunsOn:          runsOn,
 		Image:           image,
 		Matrix:          matrix,
 		Env:             env,

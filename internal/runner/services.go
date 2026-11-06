@@ -1,8 +1,11 @@
 package runner
 
-// Service containers (jobs.<id>.services): each service runs on a dedicated
-// per-job docker network where its declared name resolves as a DNS alias,
-// mirroring how GitHub container jobs reach services (servicename:port).
+// Service containers (jobs.<id>.services). A service without ports runs on a
+// dedicated per-job network where its name resolves as a DNS alias — GitHub's
+// container-job model (servicename:port). A service that declares ports shares
+// the job container's network namespace instead — GitHub's VM model where the
+// published port lands on the runner's localhost; the job container also gets
+// a /etc/hosts entry so servicename:port keeps working.
 // The job container joins the same network in startContainer.
 
 import (
@@ -18,17 +21,40 @@ func (e *executor) serviceNet() string {
 	return "kern-svc-" + sanitizeID(e.claim.Job.ID)
 }
 
-// startServices creates the job network and boots every declared service,
-// then waits for health where the spec carries health options or the image
-// ships a HEALTHCHECK.
+// networkedServices returns the services that join the dedicated job network
+// (those without ports); port-declaring services share the job netns.
+func (e *executor) networkedServices() []ClaimService {
+	var out []ClaimService
+	for _, svc := range e.claim.Job.Services {
+		if len(svc.Ports) == 0 {
+			out = append(out, svc)
+		}
+	}
+	return out
+}
+
+// ensureServiceNet creates the per-job bridge when any service needs it.
+// It runs before the job container so the container can join the net.
+func (e *executor) ensureServiceNet(ctx context.Context) error {
+	if len(e.networkedServices()) == 0 {
+		return nil
+	}
+	out, err := exec.CommandContext(ctx, "docker", "network", "create", e.serviceNet()).CombinedOutput()
+	if err != nil && !strings.Contains(string(out), "already exists") {
+		return fmt.Errorf("create service network: %s", tailStr(string(out), 300))
+	}
+	return nil
+}
+
+// startServices boots every declared service after the job container exists —
+// localhost-mode services attach to its network namespace. Health is then
+// awaited where the spec carries health options or the image ships a
+// HEALTHCHECK.
 func (e *executor) startServices(ctx context.Context) error {
 	if len(e.claim.Job.Services) == 0 {
 		return nil
 	}
 	net := e.serviceNet()
-	if out, err := exec.CommandContext(ctx, "docker", "network", "create", net).CombinedOutput(); err != nil {
-		return fmt.Errorf("create service network: %s", tailStr(string(out), 300))
-	}
 	for _, svc := range e.claim.Job.Services {
 		if err := e.pullService(ctx, svc.Image); err != nil {
 			return fmt.Errorf("service %s: %w", svc.Name, err)
@@ -61,8 +87,11 @@ func (e *executor) startService(ctx context.Context, net string, svc ClaimServic
 	args := []string{
 		"run", "-d", "--rm",
 		"--name", e.serviceContainerName(svc),
-		"--network", net,
-		"--network-alias", svc.Name,
+	}
+	if len(svc.Ports) > 0 {
+		args = append(args, "--network", "container:"+e.container)
+	} else {
+		args = append(args, "--network", net, "--network-alias", svc.Name)
 	}
 	args = append(args, svc.Options...) // compile keeps only --health-* flags
 	for k, v := range svc.Env {
@@ -109,12 +138,13 @@ func (e *executor) waitServiceHealthy(ctx context.Context, svc ClaimService) err
 }
 
 // stopServices removes the service containers and the job network; the job
-// container leaves the network when it is removed in cleanup.
+// container leaves the network when it is removed in cleanup. Services
+// sharing the job netns die with it — the rm calls below are belt and braces.
 func (e *executor) stopServices(ctx context.Context) {
 	for _, svc := range e.claim.Job.Services {
 		_ = exec.CommandContext(ctx, "docker", "rm", "-f", e.serviceContainerName(svc)).Run()
 	}
-	if len(e.claim.Job.Services) > 0 {
+	if len(e.networkedServices()) > 0 {
 		_ = exec.CommandContext(ctx, "docker", "network", "rm", e.serviceNet()).Run()
 	}
 }

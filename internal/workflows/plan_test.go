@@ -189,3 +189,62 @@ func hasDiagnostic(res Result, code string) bool {
 	}
 	return false
 }
+
+func TestCompileRunsOnMatrixInterpolation(t *testing.T) {
+	src := `on: push
+jobs:
+  j:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, self-hosted]
+    steps:
+      - run: echo hi
+`
+	res, err := Compile(src, testCompiler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Valid {
+		t.Fatalf("diagnostics: %+v", res.Diagnostics)
+	}
+	var labels []string
+	for _, j := range res.Plan.Jobs {
+		if len(j.RunsOn) != 1 {
+			t.Fatalf("runs-on: %v", j.RunsOn)
+		}
+		labels = append(labels, j.RunsOn[0])
+	}
+	joined := labels[0] + "," + labels[1]
+	if !strings.Contains(joined, "ubuntu-latest") || !strings.Contains(joined, "self-hosted") {
+		t.Fatalf("matrix runs-on not interpolated: %v", labels)
+	}
+	for _, j := range res.Plan.Jobs {
+		if strings.Contains(j.RunsOn[0], "${{") {
+			t.Fatalf("literal expression survived: %v", j.RunsOn)
+		}
+	}
+}
+
+func TestCompileRunsOnUnresolvedContextWarns(t *testing.T) {
+	src := `on: push
+jobs:
+  j:
+    runs-on: ${{ inputs.runner }}
+    steps:
+      - run: echo hi
+`
+	res, err := Compile(src, testCompiler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, dg := range res.Diagnostics {
+		if dg.Code == "runs-on" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("want runs-on warning, got %+v", res.Diagnostics)
+	}
+}

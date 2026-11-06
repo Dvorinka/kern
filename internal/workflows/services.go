@@ -9,6 +9,7 @@ package workflows
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -34,11 +35,9 @@ func validateService(name string, raw any) error {
 func serviceWarnings(d *diagnostics, path string, m map[string]any) {
 	for k := range m {
 		switch k {
-		case "image", "env", "options":
+		case "image", "env", "options", "ports":
 		case "credentials":
 			d.warnf("services", path+".credentials", "service registry credentials are not implemented and are ignored")
-		case "ports":
-			d.warnf("services", path+".ports", "service port publishing is not implemented; reach the service by its name on the job network")
 		case "volumes":
 			d.warnf("services", path+".volumes", "service volumes are not implemented and are ignored")
 		default:
@@ -63,6 +62,7 @@ func compileService(d *diagnostics, path, name string, raw any) ServicePlan {
 			sp.Env[k] = asString(v)
 		}
 	}
+	sp.Ports = compileServicePorts(d, path+".ports", m["ports"])
 	toks := shellWords(asString(m["options"]))
 	for i := 0; i < len(toks); i++ {
 		tok := toks[i]
@@ -78,6 +78,50 @@ func compileService(d *diagnostics, path, name string, raw any) ServicePlan {
 		d.warnf("services", path+".options", fmt.Sprintf("service option %q is not honoured; only --health-* docker flags are", tok))
 	}
 	return sp
+}
+
+// compileServicePorts normalises services.<name>.ports to the container-side
+// port numbers. GitHub maps "host:container" onto the runner's localhost; KERN
+// shares the service's network namespace with the job container instead, so
+// the service's own port is the one reachable on localhost. Host-side
+// remapping (5433:5432) cannot be expressed that way and warns.
+func compileServicePorts(d *diagnostics, path string, raw any) []string {
+	var entries []string
+	switch v := raw.(type) {
+	case string:
+		entries = []string{v}
+	case []any:
+		for _, e := range v {
+			entries = append(entries, asString(e))
+		}
+	case nil:
+		return nil
+	default:
+		d.warnf("services", path, "service ports must be a string or list of strings")
+		return nil
+	}
+	var ports []string
+	for _, e := range entries {
+		e = strings.TrimSpace(e)
+		if e == "" {
+			continue
+		}
+		parts := strings.Split(e, ":")
+		container := strings.TrimSuffix(strings.TrimSuffix(parts[len(parts)-1], "/tcp"), "/udp")
+		if n, err := strconv.Atoi(container); err != nil || n < 1 || n > 65535 {
+			d.warnf("services", path, fmt.Sprintf("service port %q is not a plain port mapping and is ignored", e))
+			continue
+		}
+		if len(parts) >= 2 {
+			host := strings.TrimSuffix(strings.TrimSuffix(parts[len(parts)-2], "/tcp"), "/udp")
+			if host != container {
+				d.warnf("services", path, fmt.Sprintf(
+					"service port %q maps a different host port; on KERN the service port %s is what localhost exposes", e, container))
+			}
+		}
+		ports = append(ports, container)
+	}
+	return ports
 }
 
 // shellWords splits a docker --options string honouring quotes — enough for

@@ -180,13 +180,17 @@ func (e *executor) prepare(ctx context.Context) error {
 		e.goStop()
 		return fmt.Errorf("pull image: %w", err)
 	}
-	if err := e.startServices(ctx); err != nil {
+	if err := e.ensureServiceNet(ctx); err != nil {
 		e.goStop()
-		return fmt.Errorf("start services: %w", err)
+		return fmt.Errorf("service network: %w", err)
 	}
 	if err := e.startContainer(ctx); err != nil {
 		e.goStop()
 		return fmt.Errorf("start container: %w", err)
+	}
+	if err := e.startServices(ctx); err != nil {
+		e.goStop()
+		return fmt.Errorf("start services: %w", err)
 	}
 	return nil
 }
@@ -228,8 +232,15 @@ func (e *executor) startContainer(ctx context.Context) error {
 	args := []string{
 		"create", "--rm", "--name", e.container,
 	}
-	if len(e.claim.Job.Services) > 0 {
+	if len(e.networkedServices()) > 0 {
 		args = append(args, "--network", e.serviceNet())
+	}
+	for _, svc := range e.claim.Job.Services {
+		if len(svc.Ports) > 0 {
+			// Localhost-mode service shares this container's netns; keep the
+			// service name resolvable so both addressing styles work.
+			args = append(args, "--add-host", svc.Name+":127.0.0.1")
+		}
 	}
 	args = append(args,
 		"--user", fmt.Sprintf("%d:%d", jobUID, jobUID),
@@ -267,6 +278,17 @@ func (e *executor) startContainer(ctx context.Context) error {
 		"-e", "GITHUB_RUN_ID="+e.claim.Run.ID,
 		"-e", "GITHUB_RUN_NUMBER="+itoa(e.claim.Run.Number),
 		"-e", "GITHUB_JOB="+e.claim.Job.Key,
+		// Actions test GITHUB_ACTIONS to detect CI; gh and release actions
+		// read the event/workflow/actor triple.
+		"-e", "GITHUB_ACTIONS=true",
+		"-e", "GITHUB_EVENT_NAME="+e.claim.Run.Event,
+		"-e", "GITHUB_WORKFLOW="+e.claim.Run.Workflow,
+		"-e", "GITHUB_ACTOR="+e.claim.Run.Actor,
+		"-e", "GITHUB_SERVER_URL="+serverURL(e.claim.Run.RepoURL),
+		"-e", "GITHUB_API_URL="+apiURL(e.claim.Run.RepoURL),
+		"-e", "RUNNER_OS=Linux",
+		"-e", "RUNNER_ARCH=X64",
+		"-e", "RUNNER_NAME="+e.cfg.Name,
 		"-e", "KERN=true", "-e", "CI=true",
 		// The workspace is cloned by the runner (uid 0) but steps run as
 		// jobUID — tell git the tree is safe so VCS stamping works.
@@ -439,6 +461,30 @@ func defaultStr(a, b string) string {
 		return a
 	}
 	return b
+}
+
+// serverURL derives the web origin actions expect in GITHUB_SERVER_URL from
+// the run's clone URL; anything unparseable defaults to github.com.
+func serverURL(repoURL string) string {
+	u := strings.TrimPrefix(repoURL, "https://")
+	u = strings.TrimPrefix(u, "http://")
+	u = strings.TrimPrefix(u, "git@")
+	u = strings.Replace(u, ":", "/", 1)
+	host, _, _ := strings.Cut(u, "/")
+	if host == "" {
+		return "https://github.com"
+	}
+	return "https://" + host
+}
+
+// apiURL mirrors GITHUB_API_URL — api.github.com for github.com, /api/v3 on
+// GHES-style hosts.
+func apiURL(repoURL string) string {
+	host := strings.TrimPrefix(serverURL(repoURL), "https://")
+	if host == "github.com" {
+		return "https://api.github.com"
+	}
+	return "https://" + host + "/api/v3"
 }
 
 func itoa(n int) string { return fmt.Sprintf("%d", n) }

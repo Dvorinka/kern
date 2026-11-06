@@ -69,6 +69,7 @@ Environments:
 
 Advisory:
   split --pattern GLOB --shards N [--root DIR]   suggest strategy.split and file buckets
+  lint [dir ...]               offline compile of .github/workflows — will KERN run it?
 
 Globals: --server, --token, --project override config and KERN_SERVER,
 KERN_TOKEN, KERN_PROJECT env vars. --json prints raw JSON.
@@ -179,6 +180,8 @@ func dispatch(c *cli, args []string) int {
 		err = c.cmdExec(ectx, rest)
 	case "split":
 		err = c.cmdSplit(rest)
+	case "lint":
+		err = c.cmdLint(rest)
 	default:
 		err = fmt.Errorf("unknown command %q — see kern help", name)
 	}

@@ -42,6 +42,7 @@ type ServiceSeed struct {
 	Image   string            `json:"image"`
 	Env     map[string]string `json:"env,omitempty"`
 	Options []string          `json:"options,omitempty"`
+	Ports   []string          `json:"ports,omitempty"`
 }
 
 type StepSeed struct {
