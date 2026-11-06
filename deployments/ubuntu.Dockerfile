@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq unzip zip xz-utils bzip2 zstd tar file \
     build-essential make cmake pkg-config autoconf automake libtool bison flex \
     libssl-dev zlib1g-dev libffi-dev libsqlite3-dev libxml2-dev libyaml-dev \
+    libatomic1 libstdc++6 libgcc-s1 \
     python3 python3-pip python3-venv python3-dev \
     sudo gnupg apt-transport-https software-properties-common \
     iproute2 net-tools dnsutils netcat-openbsd iputils-ping \
