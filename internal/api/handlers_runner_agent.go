@@ -201,6 +201,19 @@ func (s *Server) respondWithClaim(c *gin.Context, claimed *store.ClaimedJob) {
 	}
 	remediations, _ := s.Store.ApprovedFixes(c.Request.Context(), claimed.Job.ID)
 	policy, _ := s.Store.SelfHealPolicy(c.Request.Context(), claimed.Run.ID)
+	// Private repos clone with a short-lived installation token minted at claim
+	// time. It rides the claim payload only — never the stored run source.
+	var cloneToken string
+	if s.GH.App != nil {
+		if full, ok := claimed.Source["repo_full_name"].(string); ok && full != "" {
+			if tok, err := s.GH.App.CloneToken(c.Request.Context(), full); err == nil {
+				cloneToken = tok
+			} else {
+				s.Log.Warn("clone token mint failed; public clones unaffected",
+					zap.String("repo", full), zap.Error(err))
+			}
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"job": gin.H{
 			"id": claimed.Job.ID, "run_id": claimed.Job.RunID, "key": claimed.Job.Key,
@@ -218,6 +231,7 @@ func (s *Server) respondWithClaim(c *gin.Context, claimed *store.ClaimedJob) {
 			"workflow": claimed.Run.WorkflowName, "project": claimed.Run.ProjectName,
 			"project_slug": claimed.Run.ProjectSlug, "trust_level": claimed.Run.TrustLevel,
 			"repo_url": claimed.Source["repo_url"], "repo_full_name": claimed.Source["repo_full_name"],
+			"clone_token":    cloneToken,
 			"default_branch": claimed.Source["default_branch"], "local_path": claimed.Source["local_path"],
 			"bundle_ref": claimed.Source["bundle_ref"], "head_ref": claimed.Source["head_ref"],
 			"head_sha": claimed.Source["head_sha"],

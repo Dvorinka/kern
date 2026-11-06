@@ -87,6 +87,22 @@ func TestEnvBuilderRender(t *testing.T) {
 	}
 }
 
+func TestCloneArgs(t *testing.T) {
+	pub := cloneArgs(ClaimRun{RepoURL: "https://github.com/o/r.git"}, "/ws")
+	if got := strings.Join(pub, " "); got != "clone --quiet --depth 1 -- https://github.com/o/r.git /ws" {
+		t.Errorf("public: %q", got)
+	}
+	priv := cloneArgs(ClaimRun{RepoURL: "https://github.com/o/r.git", SHA: strings.Repeat("a", 40), CloneToken: "tok"}, "/ws")
+	if priv[1] != "http.extraHeader=Authorization: Bearer tok" {
+		t.Errorf("missing auth header: %v", priv)
+	}
+	for _, a := range priv {
+		if a == "--depth" {
+			t.Errorf("sha checkout must keep full history: %v", priv)
+		}
+	}
+}
+
 func TestSanitizeID(t *testing.T) {
 	if got := sanitizeID("abc/def-123"); got != "abc-def-123" {
 		t.Errorf("sanitizeID: got %q", got)
