@@ -138,8 +138,9 @@ commit status on the pushed SHA.
 - Redeploy: `cd /opt/kern/src && git pull && docker compose -f deployments/docker-compose.yml --env-file /opt/kern/.env up -d --build`.
 - Runner envs live in `.env`; the runner re-registers on restart (upserts by
   org+name), so a new image does not need a fresh enroll token.
-- `/api/v1/metrics` exposes Prometheus text format; `/healthz`/`/readyz` for
-  probes.
+- `/api/v1/metrics` exposes Prometheus text format behind auth — scrape with
+  `Authorization: Bearer <api token>` (a `read`-scoped token is enough).
+  `/healthz`/`/readyz` stay open for probes.
 - Retention: `KERN_LOG_RETENTION` sweeps step logs/summaries,
   `KERN_CACHE_MAX_AGE` evicts actions/cache entries,
   `KERN_WEBHOOK_RETENTION` prunes `webhook_deliveries` rows, artifacts expire after

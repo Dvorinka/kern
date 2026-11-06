@@ -12,11 +12,11 @@ diffs with a large security delta.
 
 | Gap | State | What it takes |
 | --- | --- | --- |
-| API token scopes not enforced | `read`/`write`/`admin` scopes are stored on tokens and placed in the request context (`ctxAPIScopes`), but no handler reads them — every valid token has full power | One scope-check middleware plus a route→scope table in `api.go`. Small diff; do it before tokens are handed to third parties (the MCP endpoint in flight makes this more urgent, not less) |
-| Org roles not enforced | `org_members.role` (`owner`/`admin`/`member`) exists; only environment approval consults it. Any member can create projects, secrets, tokens, enroll runners | Role middleware on write routes (admin+ for secrets/runners/settings, member for run triggers). Migration-free — column already exists |
+| ~~API token scopes not enforced~~ | **DONE** — `requireScope` gates routes: `read` for member GETs, `write` for run/project operations, `admin` for secrets/runners/settings. Sessions are scope-free; MCP tools mirror the HTTP gates (`kern_cancel_run` → write, `kern_approve_run` → admin) | — |
+| ~~Org roles not enforced~~ | **DONE** — `requireRole("admin")` on the admin route group: project create, GitHub App flow, fork-gate approve, enroll tokens, runner drain/geo/delete, environments, org+project settings, secrets write, audit | Remaining: nothing enforcement-side; member UX gets 403s, not hidden controls |
 | No user management | The bootstrap admin is the only way in. No invite flow, no `POST /users`, no member list, no way to change a role | `POST /users` + member list/role endpoints, an invite token (same pattern as runner enrollment), and the settings page wiring |
-| `/api/v1/metrics` unauthenticated | Prometheus text is served on the public listener | Auth-protect it (runner token or a scrape token), or document binding it to loopback and scraping via the tunnel's internal address |
-| No security headers | No `Content-Security-Policy`, `X-Content-Type-Options`, `X-Frame-Options` on API or SPA responses | One middleware; SPA CSP is the only fiddly part (Vite asset URLs) |
+| ~~`/api/v1/metrics` unauthenticated~~ | **DONE** — moved inside `requireAuth`; scrape with `Authorization: Bearer <token>` (read scope suffices) | — |
+| ~~No security headers~~ | **DONE** — CSP (`default-src 'self'` + Google Fonts allowances), `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy` on every response | — |
 | Login rate limit is in-process | `loginLimiter` lives in api memory — correct for one replica, silently weakens per-replica in a multi-replica future | Move to Postgres or the shared cache when multi-instance lands; not before |
 | No session management UI | One cookie, no "active sessions" list, no revocation | Sessions table exists — list + delete endpoints and a settings card |
 | No native TLS | The api speaks HTTP; TLS terminates at the tunnel/proxy | Acceptable while ingress is the tunnel. Optional `KERN_TLS_CERT`/`KERN_TLS_KEY` is a small `ListenAndServeTLS` switch if an operator ever needs it |
@@ -40,7 +40,7 @@ diffs with a large security delta.
 | Single-org effectively | `orgs`/`org_members` exist; no org switching, creation, or cross-org admin in UI or API | Multi-org UI is mostly frontend; untested multi-tenancy means scoping bugs are likely — audit `org_id` filters when it matters |
 | No OpenAPI contract | `plan.md` §2 promises OpenAPI 3.1 → generated TS client. The spec was never written; `apps/web/src/lib/api.ts` is hand-maintained | Writing the spec is documentation work, not plumbing; it also forces an error-shape audit. The generated client can replace the hand one incrementally |
 | Audit log has no export or retention knob | `audit_events` + `GET /audit` exist; nothing ages out or leaves the box | Retention sweep like the other tables, and a JSONL export endpoint for compliance pulls |
-| MCP endpoint in flight | PR #36 (streamable-HTTP, token-authed tools: list/get/approve/cancel) open at time of writing | Merge when checks land; then enforce token scopes (first row above) |
+| ~~MCP endpoint in flight~~ | **DONE** — merged as PR #36; scope/role gates applied in the same PR as HTTP enforcement | — |
 
 ## Compatibility tail (workflow surface)
 
@@ -69,10 +69,11 @@ they bound which workflows run unmodified.
 
 ## Suggested order
 
-1. Token-scope enforcement + role middleware + `/metrics` auth + security
-   headers — one focused PR, largest security delta per line.
+1. ~~Token-scope enforcement + role middleware + `/metrics` auth + security
+   headers~~ — **DONE**.
 2. User management (create/invite/list/role) — makes the instance
-   multi-user in fact.
+   multi-user in fact. Role enforcement is live but useless until a second
+   user exists.
 3. Backup runbook + S3 blob driver — makes the instance recoverable.
 4. OpenAPI spec — contract for everything that integrates next.
 5. OIDC — the real enterprise gate; schedule it against an actual IdP,

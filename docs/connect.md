@@ -82,3 +82,5 @@ Client config:
 ```
 
 Tools: `kern_list_projects`, `kern_list_runs`, `kern_get_run`, `kern_step_log`, `kern_list_runners`, `kern_approve_run`, `kern_cancel_run`. Write actions are audited under the token owner's identity. Secrets and raw logs stay masked server-side — the endpoint exposes nothing the console doesn't.
+
+Scopes apply: list/get tools need `read`, `kern_cancel_run` needs `write`, `kern_approve_run` needs `admin` plus the admin org role — the same gates as the HTTP routes they mirror.

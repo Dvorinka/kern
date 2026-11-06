@@ -63,6 +63,100 @@ func (s *Server) requireAuth() gin.HandlerFunc {
 	}
 }
 
+// roleRank orders org roles; owner outranks admin outranks member.
+func roleRank(role string) int {
+	switch role {
+	case "owner":
+		return 3
+	case "admin":
+		return 2
+	case "member":
+		return 1
+	default:
+		return 0
+	}
+}
+
+// requireRole gates a route to users whose org role is at least min.
+// It applies to sessions and API tokens alike.
+func (s *Server) requireRole(min string) gin.HandlerFunc {
+	need := roleRank(min)
+	return func(c *gin.Context) {
+		user, ok := currentUser(c)
+		if !ok {
+			fail(c, http.StatusUnauthorized, "unauthenticated", "authentication required")
+			return
+		}
+		if roleRank(user.Role) < need {
+			fail(c, http.StatusForbidden, "forbidden", "requires the "+min+" role")
+			return
+		}
+		c.Next()
+	}
+}
+
+// scopeRank orders API token scopes; admin outranks write outranks read.
+func scopeRank(scope string) int {
+	switch scope {
+	case "admin":
+		return 3
+	case "write":
+		return 2
+	case "read":
+		return 1
+	default:
+		return 0
+	}
+}
+
+// scopeAllows reports whether the request carries at least the min scope.
+// Session-authenticated requests carry no scopes and always pass.
+func scopeAllows(c *gin.Context, min string) bool {
+	if c.GetString(ctxAuthKind) != "api_token" {
+		return true
+	}
+	have := 0
+	if list, ok := c.Get(ctxAPIScopes); ok {
+		if scopes, ok := list.([]string); ok {
+			for _, sc := range scopes {
+				if scopeRank(sc) > have {
+					have = scopeRank(sc)
+				}
+			}
+		}
+	}
+	return have >= scopeRank(min)
+}
+
+// requireScope constrains API tokens only — session-authenticated requests
+// (the dashboard) are full-power.
+func (s *Server) requireScope(min string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !scopeAllows(c, min) {
+			fail(c, http.StatusForbidden, "insufficient_scope", "token requires the "+min+" scope")
+			return
+		}
+		c.Next()
+	}
+}
+
+// securityHeaders sets a strict baseline on every response. The SPA loads
+// fonts from Google Fonts; everything else is same-origin.
+func (s *Server) securityHeaders() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Header("X-Frame-Options", "DENY")
+		c.Header("Referrer-Policy", "no-referrer")
+		c.Header("Content-Security-Policy",
+			"default-src 'self'; script-src 'self'; "+
+				"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "+
+				"font-src 'self' data: https://fonts.gstatic.com; "+
+				"img-src 'self' data:; connect-src 'self'; "+
+				"frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+		c.Next()
+	}
+}
+
 func (s *Server) originAllowed(origin string) bool {
 	if origin == "" {
 		// Non-browser clients do not send Origin; cookies are still HttpOnly and random.
