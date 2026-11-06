@@ -3,10 +3,13 @@ import { Link } from "react-router-dom";
 import { useMemo, useState } from "react";
 import { api } from "../lib/api";
 import type { UsageResponse } from "../lib/types";
-import { Card, CardHeader, EmptyState, PageHeader, Spinner } from "../components/ui";
+import { Card, CardHeader, EmptyState, ErrorNote, PageHeader, Spinner } from "../components/ui";
 import { seconds } from "../lib/format";
 
 const WINDOWS = [7, 30, 90];
+// GitHub's free tier for private repos on the Free plan — the honest
+// comparison unit, not a quota KERN enforces.
+const FREE_TIER_MIN = 2000;
 
 function minutes(sec: number): string {
 	if (sec < 60) return `${Math.round(sec)}s`;
@@ -23,7 +26,7 @@ function usd(n: number): string {
 
 export function UsagePage() {
 	const [days, setDays] = useState(30);
-	const { data, isLoading } = useQuery({
+	const { data, isLoading, error, refetch } = useQuery({
 		queryKey: ["usage", days],
 		queryFn: () => api.get<UsageResponse>(`/usage?days=${days}`),
 	});
@@ -41,9 +44,9 @@ export function UsagePage() {
 					c: `${t.jobs} jobs · ${t.runs} runs`,
 				},
 				{
-					k: "Hosted equivalent",
-					v: usd(data!.hosted_equiv_usd),
-					c: `${t.billable_minutes} billed min · GitHub Linux 2-core @ ${usd(data!.rate_usd_per_min)}/min`,
+					k: "Billable minutes",
+					v: t.billable_minutes.toLocaleString(),
+					c: `per-job ceiling · GitHub Linux 2-core @ ${usd(data!.rate_usd_per_min)}/min`,
 				},
 				{
 					k: "Median queue wait",
@@ -79,11 +82,16 @@ export function UsagePage() {
 				}
 			/>
 
-			{isLoading || !u ? (
+			{isLoading ? (
 				<Spinner />
-			) : (
+			) : error ? (
+				<Card>
+					<ErrorNote error={error} onRetry={() => refetch()} />
+				</Card>
+			) : !u ? null : (
 				<>
-					<div className="panel kpis">
+					<SavingsCard u={u} res={data!} days={days} />
+					<div className="panel kpis mt-4">
 						{kpis.map((k) => (
 							<div className="kpi" key={k.k}>
 								<div className="k">{k.k}</div>
@@ -124,7 +132,7 @@ export function UsagePage() {
 
 					<div className="mt-4 grid grid-cols-2 items-start gap-4 max-lg:grid-cols-1">
 						<Card>
-							<CardHeader title="By project" sub="runner time" />
+							<CardHeader title="By project" sub="runner time and hosted equivalent" />
 							{u.projects.length === 0 ? (
 								<EmptyState title="No completed jobs in this window." />
 							) : (
@@ -134,6 +142,7 @@ export function UsagePage() {
 											<th>Project</th>
 											<th className="num">Runs</th>
 											<th className="num">Time</th>
+											<th className="num">≈ hosted</th>
 											<th className="num">Share</th>
 										</tr>
 									</thead>
@@ -147,6 +156,12 @@ export function UsagePage() {
 												</td>
 												<td className="num">{p.runs}</td>
 												<td className="num">{minutes(p.seconds)}</td>
+												<td
+													className="num"
+													title={`${p.billable_minutes.toLocaleString()} billable min`}
+												>
+													{usd(p.billable_minutes * data!.rate_usd_per_min)}
+												</td>
 												<td className="num">
 													{t!.runner_seconds > 0
 														? `${Math.round((p.seconds / t!.runner_seconds) * 100)}%`
@@ -191,6 +206,52 @@ export function UsagePage() {
 				</>
 			)}
 		</>
+	);
+}
+
+// SavingsCard reads instantly — one big honest number: what GitHub-hosted
+// runners would have billed for the same jobs, plus where the window sits
+// against the 2,000-minute free tier. An equivalence, never an invoice.
+function SavingsCard({
+	u,
+	res,
+	days,
+}: {
+	u: UsageResponse["usage"];
+	res: UsageResponse;
+	days: number;
+}) {
+	const billable = u.totals.billable_minutes;
+	const tiers = billable / FREE_TIER_MIN;
+	const tierText =
+		billable === 0
+			? "no billable minutes this window"
+			: tiers >= 1
+				? `${tiers.toFixed(1)}× the GitHub free tier`
+				: `${Math.round(tiers * 100)}% of the GitHub free tier`;
+	return (
+		<Card>
+			<div className="save">
+				<div className="big">
+					≈ {usd(res.hosted_equiv_usd)}
+					<small> hosted-equivalent · {days}d</small>
+				</div>
+				<div className="sub">
+					<b>{billable.toLocaleString()} billable min</b> — {tierText} ({FREE_TIER_MIN.toLocaleString()}{" "}
+					min/mo on Linux 2-core @ {usd(res.rate_usd_per_min)}/min)
+					{billable > FREE_TIER_MIN && (
+						<>
+							{" · "}
+							<b>+{(billable - FREE_TIER_MIN).toLocaleString()} min</b> over a free month
+						</>
+					)}
+				</div>
+				<div className="foot">
+					Equivalence, not an invoice — the fleet runs on your own hardware; GitHub would have billed
+					this for the same jobs. Billable minutes round each job up, exactly as GitHub meters.
+				</div>
+			</div>
+		</Card>
 	);
 }
 

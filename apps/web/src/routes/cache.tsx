@@ -3,12 +3,12 @@ import { Link } from "react-router-dom";
 import { Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import type { CacheEntry, Project } from "../lib/types";
-import { Button, PageHeader, Spinner } from "../components/ui";
+import { Button, ErrorNote, PageHeader, Spinner } from "../components/ui";
 import { bytes, relTime } from "../lib/format";
 
 export function CachePage() {
 	const qc = useQueryClient();
-	const { data, isLoading } = useQuery({
+	const { data, isLoading, error, refetch } = useQuery({
 		queryKey: ["cache"],
 		queryFn: () => api.get<{ entries: CacheEntry[] }>("/cache"),
 	});
@@ -22,6 +22,7 @@ export function CachePage() {
 	});
 
 	if (isLoading) return <Spinner />;
+	if (error) return <ErrorNote error={error} onRetry={() => refetch()} />;
 	const entries = data?.entries ?? [];
 	const totalBytes = entries.reduce((n, e) => n + e.size_bytes, 0);
 	const largest = Math.max(...entries.map((e) => e.size_bytes), 1);

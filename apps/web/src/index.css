@@ -1,7 +1,19 @@
 @import "tailwindcss";
 
 /* KERN Console v4 — flat monochrome surface. Colour lives on data only:
-	 status hues and job-keyed tints. No shadows, gradients, or glows. */
+	 status hues and job-keyed tints. No shadows, gradients, or glows.
+
+	 Everything below lives in @layer components so Tailwind utilities always
+	 win over a house class on the same element — never name a house class
+	 after a utility (the .grid/.ggrid incident). Theme fonts ride @theme so
+	 font-mono and .mono resolve to the same stack. */
+
+@theme {
+	--font-sans: "Geist", system-ui, -apple-system, sans-serif;
+	--font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+@layer components {
 
 :root {
 	--bg: #08080a;
@@ -42,8 +54,7 @@ body {
 	font-variant-numeric: tabular-nums;
 }
 
-.mono,
-.font-mono {
+.mono {
 	font-family: var(--mono);
 	font-variant-numeric: tabular-nums;
 }
@@ -1110,6 +1121,14 @@ input:focus-visible {
 	cursor: pointer;
 }
 
+/* the rail owns its display so the mobile hide below survives utilities */
+.rail {
+	display: flex;
+	flex-direction: column;
+	width: 196px;
+	flex: none;
+}
+
 @media (max-width: 760px) {
 	.rail {
 		display: none;
@@ -1155,6 +1174,9 @@ input:focus-visible {
 	}
 	.axis-col {
 		width: 56px;
+	}
+	.kbd {
+		display: none;
 	}
 }
 
@@ -1439,13 +1461,15 @@ input:focus-visible {
 }
 .fm-run.offline {
 	fill: none;
-	stroke: var(--ctl);
-	stroke-width: 1;
+	stroke: var(--faint);
+	stroke-width: 1.1;
+	stroke-dasharray: 2 1.6;
 }
 .fm-run.draining {
 	fill: none;
 	stroke: var(--warn);
-	stroke-width: 1;
+	stroke-width: 1.2;
+	stroke-dasharray: 3 1.8;
 }
 .fm-run.busy {
 	stroke: var(--bg);
@@ -1463,4 +1487,154 @@ input:focus-visible {
 	bottom: 8px;
 	font-size: 10px;
 	color: var(--faint);
+}
+
+.fm-label {
+	font-family: var(--mono);
+	font-size: 9px;
+	fill: var(--dim);
+	paint-order: stroke;
+	stroke: var(--bg);
+	stroke-width: 2.5px;
+}
+.fm-label.city {
+	fill: var(--faint);
+	font-size: 8px;
+}
+.fm-legend {
+	position: absolute;
+	left: 12px;
+	bottom: 8px;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 12px;
+	font-size: 10px;
+	color: var(--faint);
+	align-items: center;
+}
+.fm-legend i {
+	display: inline-block;
+	width: 7px;
+	height: 7px;
+	margin-right: 5px;
+	border-radius: 1.5px;
+	vertical-align: -1px;
+}
+.fm-zoom {
+	position: absolute;
+	top: 8px;
+	right: 8px;
+	display: flex;
+	gap: 4px;
+}
+.fm-zoom button {
+	width: 22px;
+	height: 22px;
+	display: grid;
+	place-items: center;
+	border: 1px solid var(--line2);
+	border-radius: 6px;
+	background: var(--bg);
+	color: var(--dim);
+	font-size: 12px;
+	font-family: var(--mono);
+	cursor: pointer;
+	line-height: 1;
+}
+.fm-zoom button:hover {
+	color: var(--ink);
+	border-color: var(--ctl);
+}
+.fleetmap svg {
+	cursor: grab;
+	touch-action: none;
+}
+.fleetmap svg.panning {
+	cursor: grabbing;
+}
+@media (max-width: 560px) {
+	.fm-label {
+		display: none;
+	}
+	.fm-note {
+		display: none;
+	}
+}
+
+/* savings card — one number that reads instantly, honest footnote under it */
+.save {
+	display: grid;
+	grid-template-columns: auto 1fr;
+	gap: 6px 28px;
+	padding: 16px 18px 14px;
+	align-items: baseline;
+}
+.save .big {
+	font-size: 30px;
+	font-weight: 500;
+	letter-spacing: -0.02em;
+	font-variant-numeric: tabular-nums;
+	line-height: 1.1;
+}
+.save .big small {
+	font-size: 13px;
+	color: var(--faint);
+	font-weight: 400;
+	letter-spacing: 0;
+}
+.save .sub {
+	font-size: 11px;
+	color: var(--faint);
+	line-height: 1.7;
+}
+.save .sub b {
+	color: var(--dim);
+	font-weight: 500;
+}
+.save .foot {
+	grid-column: 1 / -1;
+	font-size: 10px;
+	color: var(--faint);
+	border-top: 1px solid var(--line);
+	padding-top: 8px;
+}
+@media (max-width: 760px) {
+	.save {
+		grid-template-columns: 1fr;
+	}
+	.save .big {
+		font-size: 26px;
+	}
+}
+
+/* query error note — same dashed frame as emptynote, err square marks it */
+.errnote {
+	margin: 10px 16px 14px;
+	border: 1px dashed var(--line2);
+	border-radius: 10px;
+	padding: 11px 14px;
+	font-size: 11px;
+	color: var(--err);
+	line-height: 1.6;
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+}
+.errnote .sq {
+	align-self: center;
+}
+.errnote .act {
+	margin-left: auto;
+	color: var(--dim);
+	cursor: pointer;
+	background: none;
+	border: 0;
+	padding: 0;
+	font: inherit;
+	font-size: 11px;
+	flex: none;
+}
+.errnote .act:hover {
+	color: var(--ink);
+}
 }

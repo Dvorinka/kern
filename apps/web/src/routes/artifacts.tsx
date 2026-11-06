@@ -3,12 +3,12 @@ import { Download } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api } from "../lib/api";
 import type { Artifact } from "../lib/types";
-import { Card, EmptyState, PageHeader, Spinner } from "../components/ui";
+import { Card, EmptyState, ErrorNote, PageHeader, Spinner } from "../components/ui";
 import { Row } from "../components/layout";
 import { bytes, relTime } from "../lib/format";
 
 export function ArtifactsPage() {
-	const { data, isLoading } = useQuery({
+	const { data, isLoading, error, refetch } = useQuery({
 		queryKey: ["artifacts"],
 		queryFn: () => api.get<{ artifacts: Artifact[] }>("/artifacts"),
 	});
@@ -23,7 +23,9 @@ export function ArtifactsPage() {
 				<Spinner />
 			) : (
 				<Card>
-					{!data || data.artifacts.length === 0 ? (
+					{error ? (
+						<ErrorNote error={error} onRetry={() => refetch()} />
+					) : !data || data.artifacts.length === 0 ? (
 						<EmptyState
 							title="No artifacts"
 							hint="Artifacts appear here when a run uploads files with actions/upload-artifact."
