@@ -76,6 +76,9 @@ func New(cfg *config.Config, st *store.Store, orch *orchestrator.Orchestrator, b
 // without a repo binding no-op before any client work.
 func (s *Server) wireCommitStatus() {
 	s.Orch.PostStatus = func(ctx context.Context, run store.Run, state string) {
+		if state != "pending" {
+			s.notifyRunCompleted(ctx, run)
+		}
 		var src map[string]any
 		_ = json.Unmarshal(run.Source, &src)
 		repo, _ := src["repo_full_name"].(string)

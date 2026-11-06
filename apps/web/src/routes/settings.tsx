@@ -15,6 +15,7 @@ export function SettingsPage() {
 			<SelfHealCard />
 			<AutoUpdateCard />
 			<MembersCard />
+			<NotifyCard />
 			<TokensCard />
 			<UpdateCard />
 			<InstanceCard />
@@ -371,6 +372,57 @@ function MembersCard() {
 			{del.error && (
 				<div className="px-4 py-2 text-xs text-[var(--err)]">{del.error.message}</div>
 			)}
+		</Card>
+	);
+}
+
+function NotifyCard() {
+	const qc = useQueryClient();
+	const { data } = useQuery({
+		queryKey: ["settings"],
+		queryFn: () =>
+			api.get<{ notify_url: string; notify_secret_set: boolean }>("/settings"),
+	});
+	const save = useMutation({
+		mutationFn: (body: { notify_url: string; notify_secret?: string }) =>
+			api.put("/settings", body),
+		onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
+	});
+	const submit = (e: FormEvent<HTMLFormElement>) => {
+		e.preventDefault();
+		const fd = new FormData(e.currentTarget);
+		const secret = String(fd.get("secret"));
+		save.mutate({
+			notify_url: String(fd.get("url")).trim(),
+			...(secret ? { notify_secret: secret } : {}),
+		});
+	};
+	return (
+		<Card className="mb-4">
+			<CardHeader
+				title="Notifications"
+				sub="POST run.completed to a webhook when a run finishes — HMAC-signed if a secret is set"
+			/>
+			<form onSubmit={submit} className="flex flex-wrap items-center gap-3 px-4 py-3">
+				<Input
+					name="url"
+					type="url"
+					placeholder="https://hooks.example.com/kern (empty = off)"
+					defaultValue={data?.notify_url ?? ""}
+					className="min-w-0 flex-1"
+				/>
+				<Input
+					name="secret"
+					type="password"
+					placeholder={data?.notify_secret_set ? "secret set — enter to rotate" : "signing secret (optional)"}
+					className="w-56"
+				/>
+				<Button type="submit" variant="primary" size="sm" disabled={save.isPending}>
+					Save
+				</Button>
+				{save.error && <span className="text-xs text-[var(--err)]">{save.error.message}</span>}
+				{save.isSuccess && <span className="text-xs text-[var(--ok)]">saved</span>}
+			</form>
 		</Card>
 	);
 }

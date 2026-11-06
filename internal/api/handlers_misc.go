@@ -192,10 +192,12 @@ func (s *Server) getOrgSettings(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"settings":    raw,
-		"self_heal":   settingsValue(raw, "self_heal", "off"),
-		"public_ci":   settingsValue(raw, "public_ci", "off"),
-		"auto_update": settingsValue(raw, "auto_update", "off"),
+		"settings":          raw,
+		"self_heal":         settingsValue(raw, "self_heal", "off"),
+		"public_ci":         settingsValue(raw, "public_ci", "off"),
+		"auto_update":       settingsValue(raw, "auto_update", "off"),
+		"notify_url":        settingsValue(raw, "notify_url", ""),
+		"notify_secret_set": settingsValue(raw, "notify_secret", "") != "",
 	})
 }
 
@@ -207,14 +209,16 @@ type settingsRequest struct {
 // orgSettingsRequest accepts either key. A self_heal-only body, which the
 // runners page sends, must keep working.
 type orgSettingsRequest struct {
-	SelfHeal   *string `json:"self_heal"`
-	PublicCI   *string `json:"public_ci"`
-	AutoUpdate *string `json:"auto_update"`
+	SelfHeal     *string `json:"self_heal"`
+	PublicCI     *string `json:"public_ci"`
+	AutoUpdate   *string `json:"auto_update"`
+	NotifyURL    *string `json:"notify_url"`
+	NotifySecret *string `json:"notify_secret"`
 }
 
-func orgSettingWrites(selfHeal, publicCI, autoUpdate *string) (map[string]string, string) {
-	if selfHeal == nil && publicCI == nil && autoUpdate == nil {
-		return nil, "self_heal, public_ci or auto_update is required"
+func orgSettingWrites(selfHeal, publicCI, autoUpdate, notifyURL, notifySecret *string) (map[string]string, string) {
+	if selfHeal == nil && publicCI == nil && autoUpdate == nil && notifyURL == nil && notifySecret == nil {
+		return nil, "self_heal, public_ci, auto_update, notify_url or notify_secret is required"
 	}
 	out := map[string]string{}
 	if selfHeal != nil {
@@ -235,6 +239,16 @@ func orgSettingWrites(selfHeal, publicCI, autoUpdate *string) (map[string]string
 		}
 		out["auto_update"] = *autoUpdate
 	}
+	if notifyURL != nil {
+		v := strings.TrimSpace(*notifyURL)
+		if v != "" && !strings.HasPrefix(v, "https://") && !strings.HasPrefix(v, "http://") {
+			return nil, "notify_url must be an http(s) URL or empty to disable"
+		}
+		out["notify_url"] = v
+	}
+	if notifySecret != nil {
+		out["notify_secret"] = *notifySecret
+	}
 	return out, ""
 }
 
@@ -245,7 +259,7 @@ func (s *Server) putOrgSettings(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_body", "self_heal, public_ci or auto_update is required")
 		return
 	}
-	writes, msg := orgSettingWrites(req.SelfHeal, req.PublicCI, req.AutoUpdate)
+	writes, msg := orgSettingWrites(req.SelfHeal, req.PublicCI, req.AutoUpdate, req.NotifyURL, req.NotifySecret)
 	if msg != "" {
 		fail(c, http.StatusBadRequest, "invalid_body", msg)
 		return
