@@ -258,6 +258,20 @@ func (e *executor) startContainer(ctx context.Context) error {
 		)
 	} else {
 		args = append(args, "-v", "/var/run/docker.sock:/var/run/docker.sock")
+		// Job images ship no docker client; GitHub's ubuntu image does. The
+		// runner seeds its own CLI + plugins into the host-visible work root
+		// (docker -v sources resolve on the host), then mounts them read-only.
+		cliDir := filepath.Join(e.cfg.WorkRoot, "_cli")
+		if seeded, serr := seedDockerCLI(cliDir); serr == nil {
+			args = append(args,
+				"-v", filepath.Join(seeded, "docker")+":/usr/bin/docker:ro",
+			)
+			if plugins := filepath.Join(seeded, "cli-plugins"); dirExists(plugins) {
+				args = append(args, "-v", plugins+":/usr/libexec/docker/cli-plugins:ro")
+			}
+		} else {
+			e.log.Warn("docker cli seed failed; docker steps will lack the client", zap.Error(serr))
+		}
 	}
 	args = append(args,
 		"--memory", valueOr(e.cfg.JobMemory, "1g"),
@@ -535,6 +549,56 @@ func apiURL(repoURL string) string {
 		return "https://api.github.com"
 	}
 	return "https://" + host + "/api/v3"
+}
+
+// seedDockerCLI copies the runner's own docker client and any cli-plugins
+// into dir (a host-visible work-root path) so privileged job containers can
+// mount them. Idempotent — existing files win.
+func seedDockerCLI(dir string) (string, error) {
+	src, err := exec.LookPath("docker")
+	if err != nil {
+		return "", fmt.Errorf("docker cli not on runner PATH: %w", err)
+	}
+	src, _ = filepath.EvalSymlinks(src)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	dst := filepath.Join(dir, "docker")
+	if _, err := os.Stat(dst); os.IsNotExist(err) {
+		data, err := os.ReadFile(src)
+		if err != nil {
+			return "", err
+		}
+		if err := os.WriteFile(dst, data, 0o755); err != nil {
+			return "", err
+		}
+	}
+	pluginDst := filepath.Join(dir, "cli-plugins")
+	for _, cand := range []string{"/usr/libexec/docker/cli-plugins", "/usr/lib/docker/cli-plugins"} {
+		if !dirExists(cand) {
+			continue
+		}
+		entries, _ := os.ReadDir(cand)
+		for _, en := range entries {
+			to := filepath.Join(pluginDst, en.Name())
+			if _, err := os.Stat(to); err == nil {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(cand, en.Name()))
+			if err != nil {
+				continue
+			}
+			_ = os.MkdirAll(pluginDst, 0o755)
+			_ = os.WriteFile(to, data, 0o755)
+		}
+		break
+	}
+	return dir, nil
+}
+
+func dirExists(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && st.IsDir()
 }
 
 func itoa(n int) string { return fmt.Sprintf("%d", n) }
