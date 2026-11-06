@@ -174,7 +174,11 @@ export function UsagePage() {
 									<tbody>
 										{u.runners.map((r) => (
 											<tr key={r.name}>
-												<td className="lead">{r.name}</td>
+												<td className="lead">
+													<Link to="/runners" className="lnk">
+														{r.name}
+													</Link>
+												</td>
 												<td className="num">{r.jobs}</td>
 												<td className="num">{minutes(r.seconds)}</td>
 											</tr>

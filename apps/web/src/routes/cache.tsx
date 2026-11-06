@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import type { CacheEntry, Project } from "../lib/types";
@@ -47,7 +48,13 @@ export function CachePage() {
 							<div className="min-w-0 flex-1">
 								<div className="truncate font-mono text-xs text-[var(--ink)]">{e.key}</div>
 								<div className="mt-0.5 truncate font-mono text-[11px] text-[var(--faint)]">
-									{slugOf.get(e.project_id) ?? e.project_id.slice(0, 8)}
+									{slugOf.get(e.project_id) ? (
+										<Link to={`/projects/${slugOf.get(e.project_id)}`} className="lnk">
+											{slugOf.get(e.project_id)}
+										</Link>
+									) : (
+										e.project_id.slice(0, 8)
+									)}
 									<i className="mx-1.5 not-italic text-[#3d3d3d]">·</i>
 									{e.scope}
 								</div>

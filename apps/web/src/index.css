@@ -1107,6 +1107,7 @@ input:focus-visible {
 .rowlink {
 	color: inherit;
 	text-decoration: none;
+	cursor: pointer;
 }
 
 @media (max-width: 760px) {

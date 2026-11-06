@@ -201,7 +201,7 @@ export function OverviewPage() {
 						const busy = (r.active_jobs ?? 0) > 0;
 						const pct = Math.round(r.cpu_percent ?? 0);
 						return (
-							<div className="fr" key={r.id}>
+							<div className="fr rowlink" key={r.id} onClick={() => nav("/runners")}>
 								<StatusSq status={busy ? "in_progress" : r.status} />
 								<span className="rn">{r.name}</span>
 								<div className="ubar">
