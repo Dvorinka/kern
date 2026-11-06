@@ -77,6 +77,9 @@ func (s *Server) registerRunner(c *gin.Context) {
 		return
 	}
 	s.Log.Info("runner registered", zap.String("runner", runner.Name), zap.String("runner_id", runner.ID.String()))
+	if ip := clientIP(c); geoForRunner(runner, ip) {
+		go s.resolveRunnerGeo(runner.ID, ip)
+	}
 	c.JSON(http.StatusCreated, gin.H{"runner_id": runner.ID, "name": runner.Name, "token": token})
 }
 
@@ -95,6 +98,9 @@ func (s *Server) runnerHeartbeat(c *gin.Context) {
 	if err := s.Store.Heartbeat(c.Request.Context(), runner.ID, body.HostMetrics); err != nil {
 		s.internalError(c, err)
 		return
+	}
+	if ip := clientIP(c); geoForRunner(runner, ip) {
+		go s.resolveRunnerGeo(runner.ID, ip)
 	}
 	resp := gin.H{"ok": true, "draining": runner.Draining}
 	jobs, err := s.Store.RunnerActiveJobs(c.Request.Context(), runner.ID)

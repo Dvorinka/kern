@@ -18,6 +18,7 @@ import (
 
 	"github.com/dvorinka/kern/internal/blobs"
 	"github.com/dvorinka/kern/internal/config"
+	"github.com/dvorinka/kern/internal/geoip"
 	"github.com/dvorinka/kern/internal/github"
 	"github.com/dvorinka/kern/internal/orchestrator"
 	"github.com/dvorinka/kern/internal/secrets"
@@ -35,11 +36,13 @@ type Server struct {
 	Started time.Time
 	Engine  *gin.Engine
 	GH      *github.Resolver
+	Geo     *geoip.Resolver
 	limiter *loginLimiter
 
 	ghAppsMu  sync.Mutex
 	ghApps    map[uuid.UUID]*github.App // github_apps.id -> lazily built app
 	ghRepoApp map[string]uuid.UUID      // repo -> github_apps.id (probe cache)
+	geoSelfMu sync.Mutex                // serializes the control-plane self-lookup
 }
 
 func New(cfg *config.Config, st *store.Store, orch *orchestrator.Orchestrator, blobStore blobs.Store,
@@ -59,6 +62,7 @@ func New(cfg *config.Config, st *store.Store, orch *orchestrator.Orchestrator, b
 		Cfg: cfg, Store: st, Orch: orch, Blobs: blobStore, Cipher: cipher,
 		Log: log, Started: time.Now(), limiter: newLoginLimiter(8, time.Minute),
 		GH:     &github.Resolver{App: app, PAT: github.New(cfg.GitHub.APIBaseURL, cfg.GitHub.StatusToken)},
+		Geo:    geoip.New(cfg.GeoIPURL),
 		ghApps: make(map[uuid.UUID]*github.App), ghRepoApp: make(map[string]uuid.UUID),
 	}
 	s.wireCommitStatus()
@@ -155,7 +159,11 @@ func (s *Server) buildRouter() *gin.Engine {
 		auth.GET("/runners", s.listRunners)
 		auth.POST("/enroll-tokens", s.createEnrollToken)
 		auth.POST("/runners/:id/drain", s.drainRunner)
+		auth.PATCH("/runners/:id/geo", s.patchRunnerGeo)
 		auth.DELETE("/runners/:id", s.deleteRunner)
+
+		auth.GET("/instance/map", s.fleetMap)
+		auth.PATCH("/instance/geo", s.patchControlGeo)
 
 		auth.GET("/cache", s.listCache)
 		auth.DELETE("/cache/:id", s.deleteCache)

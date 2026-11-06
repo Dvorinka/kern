@@ -1402,3 +1402,64 @@ input:focus-visible {
 .tbl td.lead {
 	color: var(--ink);
 }
+
+/* ── fleet map — dots + live arcs on a cropped equirectangular world ── */
+.fleetmap {
+	position: relative;
+}
+.fleetmap svg {
+	display: block;
+	width: 100%;
+	height: auto;
+}
+.fm-grat {
+	fill: none;
+	stroke: var(--raise2);
+	stroke-width: 0.6;
+}
+.fm-land {
+	fill: var(--raise2);
+	stroke: var(--line2);
+	stroke-width: 0.5;
+}
+.fm-ctl {
+	fill: none;
+	stroke: var(--ink);
+	stroke-width: 1.2;
+}
+.fm-ctlcore {
+	fill: var(--ink);
+}
+.fm-run {
+	fill: var(--faint);
+}
+.fm-run.online {
+	fill: var(--dim);
+}
+.fm-run.offline {
+	fill: none;
+	stroke: var(--ctl);
+	stroke-width: 1;
+}
+.fm-run.draining {
+	fill: none;
+	stroke: var(--warn);
+	stroke-width: 1;
+}
+.fm-run.busy {
+	stroke: var(--bg);
+	stroke-width: 0.8;
+}
+.fm-arc {
+	fill: none;
+	stroke-width: 0.9;
+	stroke-dasharray: 3 4;
+	opacity: 0.85;
+}
+.fm-note {
+	position: absolute;
+	right: 12px;
+	bottom: 8px;
+	font-size: 10px;
+	color: var(--faint);
+}

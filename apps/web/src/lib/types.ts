@@ -200,8 +200,32 @@ export interface Runner {
 	mem_used_bytes: number | null;
 	disk_free_bytes: number | null;
 	metrics_at: string | null;
+	geo_lat: number | null;
+	geo_lng: number | null;
+	geo_city: string;
+	geo_country: string;
+	geo_source: "" | "auto" | "manual";
+	geo_ip: string;
+	geo_updated_at: string | null;
 	created_at: string;
 	active_jobs?: number;
+}
+
+export interface FleetMapPin {
+	id: string;
+	name: string;
+	status: string;
+	lat: number | null;
+	lng: number | null;
+	city: string;
+	country: string;
+	geo_source: "" | "auto" | "manual";
+	jobs: { runner_id: string; key: string; name: string }[];
+}
+
+export interface FleetMapResponse {
+	control: { lat: number; lng: number; city: string; country: string; source: string } | null;
+	runners: FleetMapPin[];
 }
 
 export interface Overview {

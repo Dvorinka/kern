@@ -37,6 +37,10 @@ type Config struct {
 	// ReleaseRepo is the "owner/name" slug checked for newer releases on the
 	// settings page. Empty disables nothing — the endpoint just falls back.
 	ReleaseRepo string
+	// GeoIPURL is the lookup template resolving runner egress IPs to coarse
+	// locations ("{ip}" placeholder; empty ip queries the control plane's own
+	// egress). "off" or "none" disables GeoIP entirely.
+	GeoIPURL string
 }
 
 type GitHubConfig struct {
@@ -82,6 +86,7 @@ func Load() (*Config, error) {
 		DefaultImage:     env("KERN_DEFAULT_IMAGE", "ubuntu:24.04"),
 		WebDir:           env("KERN_WEB_DIR", ""),
 		ReleaseRepo:      env("KERN_RELEASE_REPO", "Dvorinka/kern"),
+		GeoIPURL:         env("KERN_GEOIP_URL", "https://ipwho.is/{ip}"),
 	}
 
 	if f := env("KERN_GITHUB_APP_PRIVATE_KEY_FILE", ""); f != "" {

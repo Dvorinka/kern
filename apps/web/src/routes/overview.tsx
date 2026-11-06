@@ -2,10 +2,11 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { useMemo } from "react";
 import { api } from "../lib/api";
-import type { OverviewResponse, Run, Runner } from "../lib/types";
+import type { FleetMapResponse, OverviewResponse, Run, Runner } from "../lib/types";
 import { PageHeader, Spinner } from "../components/ui";
 import { StatusSq } from "../components/status";
 import { Fingerprint, jobHue, useRunDetails } from "../components/fingerprint";
+import { FleetMap } from "../components/fleetmap";
 import { bytes, duration, relTime, seconds } from "../lib/format";
 
 export function OverviewPage() {
@@ -24,6 +25,11 @@ export function OverviewPage() {
 		queryKey: ["runners"],
 		queryFn: () => api.get<{ runners: Runner[] }>("/runners"),
 		refetchInterval: 8000,
+	});
+	const { data: fleetMap } = useQuery({
+		queryKey: ["fleetmap"],
+		queryFn: () => api.get<FleetMapResponse>("/instance/map"),
+		refetchInterval: 4000,
 	});
 	const { data: meta } = useQuery({
 		queryKey: ["meta"],
@@ -226,6 +232,20 @@ export function OverviewPage() {
 							: "Queue is clear. A push picks a runner on contact."}
 					</div>
 				</div>
+				{fleetMap && (
+					<div className="panel col-span-full">
+						<div className="phead">
+							<span className="pt">Fleet map</span>
+							<span className="r">
+								{fleetMap.control
+									? `control at ${fleetMap.control.city || "?"}${fleetMap.control.country ? `, ${fleetMap.control.country}` : ""}`
+									: "control plane unlocated"}
+								{" · "}arcs are live jobs
+							</span>
+						</div>
+						<FleetMap data={fleetMap} />
+					</div>
+				)}
 			</div>
 
 			<div className="mt-4 grid grid-cols-[3fr_2fr] items-start gap-4 max-lg:grid-cols-1">
