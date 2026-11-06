@@ -21,8 +21,6 @@ export function CachePage() {
 		onSuccess: () => qc.invalidateQueries({ queryKey: ["cache"] }),
 	});
 
-	if (isLoading) return <Spinner />;
-	if (error) return <ErrorNote error={error} onRetry={() => refetch()} />;
 	const entries = data?.entries ?? [];
 	const totalBytes = entries.reduce((n, e) => n + e.size_bytes, 0);
 	const largest = Math.max(...entries.map((e) => e.size_bytes), 1);
@@ -39,7 +37,11 @@ export function CachePage() {
 					<span className="pt">Entries</span>
 					<span className="r">newest first</span>
 				</div>
-				{entries.length === 0 ? (
+				{isLoading ? (
+					<Spinner />
+				) : error ? (
+					<ErrorNote error={error} onRetry={() => refetch()} />
+				) : entries.length === 0 ? (
 					<div className="emptynote">
 						No cache entries. Entries appear when a run uses actions/cache with a key and path.
 					</div>
