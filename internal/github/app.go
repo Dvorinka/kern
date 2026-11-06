@@ -180,6 +180,16 @@ func (a *App) Client(ctx context.Context, repo string) (*Client, error) {
 	return New(a.base, tok), nil
 }
 
+// CloneToken returns an installation access token for git clone auth. It is
+// minted at claim time, never stored, and expires about an hour later.
+func (a *App) CloneToken(ctx context.Context, repo string) (string, error) {
+	instID, err := a.InstallationID(ctx, repo)
+	if err != nil {
+		return "", err
+	}
+	return a.token(ctx, instID)
+}
+
 // Resolver holds the env-level credentials: the app when configured, else the
 // static-token client (PAT; possibly anonymous). Repo-level resolution across
 // registered apps lives in the api layer.

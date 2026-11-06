@@ -52,30 +52,35 @@ type Claim struct {
 		Services        []ClaimService    `json:"services"`
 		Needs           map[string]any    `json:"needs"`
 	} `json:"job"`
-	Run struct {
-		ID            string `json:"id"`
-		Number        int    `json:"number"`
-		Event         string `json:"event"`
-		Ref           string `json:"ref"`
-		SHA           string `json:"sha"`
-		Actor         string `json:"actor"`
-		Workflow      string `json:"workflow"`
-		Project       string `json:"project"`
-		ProjectSlug   string `json:"project_slug"`
-		TrustLevel    string `json:"trust_level"`
-		RepoURL       string `json:"repo_url"`
-		RepoFullName  string `json:"repo_full_name"`
-		DefaultBranch string `json:"default_branch"`
-		LocalPath     string `json:"local_path"`
-		BundleRef     string `json:"bundle_ref"`
-		HeadRef       string `json:"head_ref"`
-		HeadSHA       string `json:"head_sha"`
-	} `json:"run"`
+	Run          ClaimRun            `json:"run"`
 	Steps        []StepSpec          `json:"steps"`
 	Secrets      []string            `json:"secrets"`
 	LeaseEnds    time.Time           `json:"lease_expires_at"`
 	Remediations map[string][]string `json:"remediations"`
 	SelfHeal     string              `json:"self_heal"`
+}
+
+// ClaimRun carries run identity and checkout source. CloneToken is minted by
+// the control plane per claim and never persisted.
+type ClaimRun struct {
+	ID            string `json:"id"`
+	Number        int    `json:"number"`
+	Event         string `json:"event"`
+	Ref           string `json:"ref"`
+	SHA           string `json:"sha"`
+	Actor         string `json:"actor"`
+	Workflow      string `json:"workflow"`
+	Project       string `json:"project"`
+	ProjectSlug   string `json:"project_slug"`
+	TrustLevel    string `json:"trust_level"`
+	RepoURL       string `json:"repo_url"`
+	RepoFullName  string `json:"repo_full_name"`
+	CloneToken    string `json:"clone_token,omitempty"`
+	DefaultBranch string `json:"default_branch"`
+	LocalPath     string `json:"local_path"`
+	BundleRef     string `json:"bundle_ref"`
+	HeadRef       string `json:"head_ref"`
+	HeadSHA       string `json:"head_sha"`
 }
 
 type StepSpec struct {

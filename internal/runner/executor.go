@@ -340,13 +340,7 @@ func (e *executor) checkout(ctx context.Context) error {
 	if run.RepoURL == "" {
 		return fmt.Errorf("run has neither repo_url nor local_path; there is nothing to check out")
 	}
-	var args []string
-	if run.SHA != "" {
-		// A SHA checkout needs history, so no --depth.
-		args = []string{"clone", "--quiet", "--", run.RepoURL, ws}
-	} else {
-		args = []string{"clone", "--quiet", "--depth", "1", "--", run.RepoURL, ws}
-	}
+	args := cloneArgs(run, ws)
 	if out, err := exec.CommandContext(ctx, "git", args...).CombinedOutput(); err != nil {
 		return fmt.Errorf("clone %s: %w (%s)", run.RepoURL, err, tailStr(string(out), 400))
 	}
@@ -366,6 +360,20 @@ func (e *executor) checkout(ctx context.Context) error {
 		_ = exec.CommandContext(ctx, "git", "-C", ws, "checkout", "--force", branch).Run()
 	}
 	return nil
+}
+
+// cloneArgs builds the git command line. A clone token rides an extra header
+// so it never lands in .git/config or in clone error output.
+func cloneArgs(run ClaimRun, ws string) []string {
+	var args []string
+	if run.CloneToken != "" {
+		args = append(args, "-c", "http.extraHeader=Authorization: Bearer "+run.CloneToken)
+	}
+	if run.SHA != "" {
+		// A SHA checkout needs history, so no --depth.
+		return append(args, "clone", "--quiet", "--", run.RepoURL, ws)
+	}
+	return append(args, "clone", "--quiet", "--depth", "1", "--", run.RepoURL, ws)
 }
 
 // leaseHeartbeat renews the job lease while the job runs.
