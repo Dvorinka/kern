@@ -63,3 +63,22 @@ Two things people trip on:
 
 Install the App, create the project, done. On this fleet `runs-on` needs no
 edit at all — `ubuntu-latest` already resolves to a live runner.
+
+## MCP (agents)
+
+`POST /api/v1/mcp` speaks the Model Context Protocol (streamable HTTP, stateless). Any MCP-capable agent connects with an API token — create one under Settings → API tokens or `kern login`.
+
+Client config:
+
+```json
+{
+  "mcpServers": {
+    "kern": {
+      "url": "https://kern.tdvorak.dev/api/v1/mcp",
+      "headers": { "Authorization": "Bearer <token>" }
+    }
+  }
+}
+```
+
+Tools: `kern_list_projects`, `kern_list_runs`, `kern_get_run`, `kern_step_log`, `kern_list_runners`, `kern_approve_run`, `kern_cancel_run`. Write actions are audited under the token owner's identity. Secrets and raw logs stay masked server-side — the endpoint exposes nothing the console doesn't.

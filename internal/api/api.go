@@ -176,6 +176,7 @@ func (s *Server) buildRouter() *gin.Engine {
 		auth.GET("/notifications", s.notifications)
 		auth.GET("/audit", s.listAudit)
 		auth.GET("/instance/update", s.updateCheck)
+		auth.POST("/mcp", s.mcp)
 		auth.GET("/projects/:project/settings", s.getProjectSettings)
 		auth.PUT("/projects/:project/settings", s.putProjectSettings)
 		auth.POST("/jobs/:id/remediate", s.approveRemediation)
