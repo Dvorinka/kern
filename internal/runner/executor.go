@@ -71,6 +71,9 @@ type executor struct {
 	// (GitHub runners fall back the same way — e.g. alpine images).
 	shell string
 	enc   *envBuilder
+	// stepEnvExtra holds the multi-line vars docker's env-file cannot carry;
+	// set per step by writeStepEnv and passed as -e args.
+	stepEnvExtra map[string]string
 
 	cancelled    atomic.Bool
 	stepResults  map[string]*stepOutcome
