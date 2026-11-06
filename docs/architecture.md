@@ -9,7 +9,9 @@ specification see `project.md`; for milestone status see `plan.md`.
 | --- | --- | --- |
 | Control plane | `cmd/api` | HTTP API, auth, workflow compile, scheduler loop, orchestrator, log ingestion |
 | Runner agent | `cmd/runner` | Registers, long-polls for jobs, executes them in ephemeral containers |
+| CLI | `cmd/kern` | Operator client (`kern`): auth, projects, runs, runners, artifacts, cache, `exec`, `split` |
 | Migrator | `cmd/migrate` | Applies goose migrations and exits (also runs inside `cmd/api` at boot) |
+| Updater | `deployments/kern-updater.sh` | Compose-profile sidecar that polls `GET /update/plan` and applies signed releases (git fast-forward + rebuild). External runners self-update via `KERN_RUNNER_UPDATE=1` |
 
 The scheduler and orchestrator run in-process inside `cmd/api`. They move to a
 separate `cmd/scheduler` only when multi-instance control planes are tested; the
@@ -56,8 +58,20 @@ commands (`GITHUB_ENV`, `GITHUB_PATH`, `GITHUB_OUTPUT`, `GITHUB_STEP_SUMMARY`)
 are files under `/github/cmd`; the runner merges them into the env builder
 between steps, matching GitHub's toolkit semantics.
 
+Sibling containers share the job boundary but not its privileges:
+
+- `services:` entries run on a per-job Docker network where the service name
+  is a DNS alias; `--health-*` options pass through and the runner waits for
+  healthy before starting steps.
+- `docker://` and Dockerfile actions run as separate containers under the
+  same hardening (dropped caps, no-new-privileges, read-only root).
+- `node*` actions execute inside the job container against a pinned Node
+  distribution the runner downloads once, verifies against `SHASUMS256.txt`,
+  and mounts read-only from `<work-root>/_node`.
+
 Checkout happens on the runner host into the workspace dir (`git clone` from
-`repo_url` or `local_path`), so job containers never need credentials.
+`repo_url` or `local_path`, or an uploaded source bundle from `kern exec`),
+so job containers never need credentials.
 
 ## Scheduler
 
