@@ -380,6 +380,14 @@ func (e *executor) execUID() int {
 // uploaded bundle (kern exec) replaces the git clone entirely.
 func (e *executor) checkout(ctx context.Context) error {
 	ws := filepath.Join(e.workRoot(), "workspace")
+	// A re-claimed job reuses the job-id work root; a dead attempt's residue
+	// makes git clone refuse the non-empty dir. Workspace is ephemeral — wipe.
+	if err := os.RemoveAll(ws); err != nil {
+		return fmt.Errorf("clear stale workspace: %w", err)
+	}
+	if err := os.MkdirAll(ws, 0o777); err != nil {
+		return fmt.Errorf("recreate workspace: %w", err)
+	}
 	run := e.claim.Run
 	if run.BundleRef != "" {
 		bundle := filepath.Join(e.workRoot(), "source.tar.gz")
