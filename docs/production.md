@@ -25,8 +25,8 @@ diffs with a large security delta.
 
 | Gap | State | What it takes |
 | --- | --- | --- |
-| Backup story is one line | `docs/deploy.md` shows a manual `pg_dump`. No schedule, no restore drill, no blob-dir backup note | A `backups.md` runbook: cron'd `pg_dump` + `KERN_BLOB_DIR` sync, retention, and a written restore procedure that has actually been executed once |
-| Blob store is filesystem-only | `blobs.Store` interface exists; only the filesystem driver does | S3/MinIO driver behind the same interface. Unblocks off-host state, DR, and multi-replica reads |
+| ~~Backup story is one line~~ | **DONE** — `docs/backups.md`: nightly `pg_dump` + blob-dir sync script, retention, and a restore drill | Remaining: verify a restore once per quarter, not just write it |
+| ~~Blob store is filesystem-only~~ | **DONE** — `internal/blobs/s3.go` (minio-go): `KERN_BLOB_S3_BUCKET` switches the driver; verified live against an S3-compatible endpoint. `Append` is read-modify-write — live log streaming rules out multipart | Remaining: part-manifest scheme if single logs regularly exceed tens of MB |
 | Single control-plane replica | Scheduler, orchestrator, cron and sweeps run in-process. `SKIP LOCKED` claiming is already multi-instance safe, but ticks/sweeps would double-run | Either document "exactly one api replica" (current truth) or add a Postgres advisory-lock leader gate around `orchestrator.Tick` and the sweeps — a few dozen lines, not an election system |
 | Notifications are pull-only | `/notifications` is a derived in-app feed; nothing leaves the box | Outbound webhook target (URL + event filter + HMAC sign — the GitHub-inbound code already proves the shape) is the 80% case; email can wait |
 | No quotas | Artifacts expire at 90d, cache ages out, but there is no per-project storage cap, run-rate limit, or concurrency quota | Start with per-project artifact/blob bytes accounting (the store already knows sizes) + a reject threshold |
@@ -73,7 +73,9 @@ they bound which workflows run unmodified.
    headers~~ — **DONE**.
 2. ~~User management (create/invite/list/role)~~ — **DONE**. The instance is
    multi-user in fact; a member invite email flow can wait for an IdP.
-3. Backup runbook + S3 blob driver — makes the instance recoverable.
+3. ~~Backup runbook + S3 blob driver~~ — **DONE** (`docs/backups.md`,
+   `internal/blobs/s3.go`). The instance is recoverable; run the restore
+   drill once to prove it.
 4. OpenAPI spec — contract for everything that integrates next.
 5. OIDC — the real enterprise gate; schedule it against an actual IdP,
    not in the abstract.

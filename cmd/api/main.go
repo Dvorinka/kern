@@ -74,7 +74,17 @@ func run() int {
 		return 1
 	}
 
-	blobStore, err := blobs.NewFilesystem(cfg.BlobDir)
+	var blobStore blobs.Store
+	if cfg.BlobS3.Bucket != "" {
+		blobStore, err = blobs.NewS3(blobs.S3Config{
+			Endpoint: cfg.BlobS3.Endpoint, Region: cfg.BlobS3.Region,
+			Bucket: cfg.BlobS3.Bucket, Prefix: cfg.BlobS3.Prefix,
+			AccessKey: cfg.BlobS3.AccessKey, SecretKey: cfg.BlobS3.SecretKey,
+			Secure: cfg.BlobS3.Secure, PathStyle: cfg.BlobS3.PathStyle,
+		})
+	} else {
+		blobStore, err = blobs.NewFilesystem(cfg.BlobDir)
+	}
 	if err != nil {
 		log.Error("blob store", zap.String("dir", cfg.BlobDir), zap.Error(err))
 		return 1
