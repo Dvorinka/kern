@@ -18,8 +18,8 @@ repository to the first end-to-end milestone (M0–M3) and sketches the later ph
 | Queue | PostgreSQL only | `FOR UPDATE SKIP LOCKED`, leases, heartbeats. No in-memory authoritative queue |
 | Execution | Docker, one container per job | no host socket, read-only root, dropped capabilities, resource limits |
 | Blobs | `blobs.Store` interface; filesystem driver now, S3/MinIO driver next | Logs and artifacts are never stored in relational columns |
-| Frontend | **React 18 + Vite + TypeScript strict + Tailwind + TanStack Query + Lucide** | React per user instruction, overriding the SolidJS line in `project.md` |
-| API contract | OpenAPI 3.1 spec → generated TypeScript client (`openapi-typescript` + `openapi-fetch`) | No hand-duplicated API types |
+| Frontend | **React 19 + Vite + TypeScript strict + Tailwind + TanStack Query + Lucide** | React per user instruction, overriding the SolidJS line in `project.md` |
+| API contract | OpenAPI 3.1 spec → generated TypeScript client (`openapi-typescript` + `openapi-fetch`) | Deferred: the spec was never written; `apps/web/src/lib/api.ts` is hand-maintained. Tracked in `docs/production.md` |
 | Auth | argon2id passwords, HMAC-signed HttpOnly session cookie, hashed API tokens | Better Auth (Node) cannot run inside a Go control plane; ADR required |
 | Observability | zap structured logs, Prometheus text `/metrics`, OTel hooks | OTel collector is optional, not required to run |
 | Task runner | `just` + Docker Compose | `just dev`, `just test`, `just migrate` |
@@ -94,9 +94,9 @@ diagnostic; it is never silently ignored.
 | M0 | Monorepo, compose, migrations, config, logging, health, auth, API skeleton, React shell | DONE — stack boots, login works, migrations applied, `just test` green (verified 2026-11-03) |
 | M1 | Workflow model, parser, validator, expression evaluator, compiler, DAG | DONE — table-driven tests incl. hostile/matrix corpus, diagnostics for unsupported constructs |
 | M2 | Scheduler + leases + reaper, runner agent, Docker executor, log ingestion, cancel, retry | DONE — demo workflow ran green end to end on runner `tdub`, run #3, 2026-11-03 |
-| M3 | React dashboard: overview, runs, run detail with DAG and live logs, runners | DONE (core) — overview/projects/runs/runners/secrets live, DAG + SSE logs; remaining nav sections (artifacts, releases, deployments, cache, orgs) pending their backends |
-| M4 | GitHub App: install, webhooks, discovery, checks, summaries, rerun/cancel | requires operator credentials; documented Checks API limits |
-| M5 | Actions (composite/JS/Docker), reusable workflows, services, artifacts, caches, environments | compatibility suite green |
+| M3 | React dashboard: overview, runs, run detail with DAG and live logs, runners | DONE — overview, projects, runs (+DAG/SSE logs/summaries), runners, secrets, artifacts, cache, environments, usage, audit, settings all live |
+| M4 | GitHub App: install, webhooks, discovery, checks, summaries, rerun/cancel | DONE — RS256 JWT → installation tokens, push/pull_request/pull_request_target deliveries, statuses + check-runs as `kern-ci[bot]`, manifest Connect flow, fork approval gate. Verified live on `kern.tdvorak.dev` (2026-11-04/05) |
+| M5 | Actions (composite/JS/Docker), reusable workflows, services, artifacts, caches, environments | DONE — composite local+remote, `node*` on pinned Node 20 (pre/post lifecycle hooks), `docker://` + Dockerfile actions, `jobs.<id>.uses` with inputs/outputs, per-job service networks with health waits. Residual diagnostics documented in `docs/compatibility.md` (caller strategy/secrets-maps, service ports/volumes) |
 | M6 | Distributed cache, BuildKit, warm pools, cache-aware placement | measured queue-wait and cache-hit improvements |
 | M7 | Registry, releases, packages, deployments, approvals, rollback | idempotent publish retries proven |
 | M8 | Hardening, backup/restore, docs, upgrade path, security audit | operational runbooks + scorecard |

@@ -47,7 +47,10 @@ untracked, honoured .gitignore, no `.git`), uploads, streams step logs live to
 stdout, and downloads run artifacts after completion. Exit code follows the run
 conclusion.
 
-Not yet: dedupe of unchanged trees (content-addressed bundle keys), in-flight
-cancel passthrough (Ctrl-C detaches but does not cancel the run), compose
-wrapper (`kern compose up` that loads pulled images then invokes docker
-compose).
+Uploads are content-addressed: the CLI hashes the bundle, resolves it through
+`GET /projects/:p/source/resolve`, and skips the upload entirely on a hit;
+`PUT ?sha256=` stores under the digest key so the server dedupes too.
+
+Not yet: in-flight cancel passthrough (Ctrl-C detaches but does not cancel the
+run), compose wrapper (`kern compose up` that loads pulled images then invokes
+docker compose).
