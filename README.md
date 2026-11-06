@@ -106,6 +106,7 @@ cd apps/web && pnpm build && pnpm lint
 | `docs/compatibility.md` | Honest GitHub Actions feature matrix |
 | `docs/connect.md` | Bind a repo to the fleet; `runs-on` label matching |
 | `docs/deploy.md` | Production checklist, GitHub App, auto-update |
+| `docs/backups.md` | Backup + restore runbook |
 | `docs/remote-exec.md` | `kern exec` remote execution offload |
 | `docs/production.md` | What remains for enterprise/production readiness |
 | `plan.md` | Milestone ledger |

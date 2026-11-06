@@ -41,6 +41,19 @@ type Config struct {
 	// locations ("{ip}" placeholder; empty ip queries the control plane's own
 	// egress). "off" or "none" disables GeoIP entirely.
 	GeoIPURL string
+	// BlobS3, when Bucket is set, selects the S3/MinIO blob driver instead of
+	// the filesystem. AccessKey/SecretKey may stay empty to use the ambient
+	// AWS credential chain (env, IAM).
+	BlobS3 struct {
+		Endpoint  string
+		Region    string
+		Bucket    string
+		Prefix    string
+		AccessKey string
+		SecretKey string
+		Secure    bool
+		PathStyle bool
+	}
 }
 
 type GitHubConfig struct {
@@ -88,6 +101,17 @@ func Load() (*Config, error) {
 		ReleaseRepo:      env("KERN_RELEASE_REPO", "Dvorinka/kern"),
 		GeoIPURL:         env("KERN_GEOIP_URL", "https://ipwho.is/{ip}"),
 	}
+	cfg.BlobS3.Endpoint = env("KERN_BLOB_S3_ENDPOINT", "")
+	cfg.BlobS3.Region = env("KERN_BLOB_S3_REGION", "us-east-1")
+	cfg.BlobS3.Bucket = env("KERN_BLOB_S3_BUCKET", "")
+	cfg.BlobS3.Prefix = env("KERN_BLOB_S3_PREFIX", "")
+	cfg.BlobS3.AccessKey = env("KERN_BLOB_S3_ACCESS_KEY", "")
+	cfg.BlobS3.SecretKey = env("KERN_BLOB_S3_SECRET_KEY", "")
+	cfg.BlobS3.Secure = env("KERN_BLOB_S3_SECURE", "true") != "false"
+	// Path-style is required by MinIO and most S3-compatible services; AWS
+	// virtual-hosted style is implied when the endpoint is left at AWS.
+	cfg.BlobS3.PathStyle = env("KERN_BLOB_S3_PATH_STYLE",
+		strconv.FormatBool(cfg.BlobS3.Endpoint != "" && !strings.HasSuffix(cfg.BlobS3.Endpoint, "amazonaws.com"))) == "true"
 
 	if f := env("KERN_GITHUB_APP_PRIVATE_KEY_FILE", ""); f != "" {
 		data, err := os.ReadFile(f)
