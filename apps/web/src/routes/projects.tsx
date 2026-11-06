@@ -4,7 +4,7 @@ import { useState, type FormEvent } from "react";
 import { Play, RefreshCw } from "lucide-react";
 import { api } from "../lib/api";
 import type { Project, Workflow } from "../lib/types";
-import { Button, Card, EmptyState, ErrorNote, Input, KV, PageHeader, Spinner } from "../components/ui";
+import { Button, Card, EmptyState, ErrorNote, Input, KV, PageHeader, SkeletonRows, Spinner } from "../components/ui";
 import { Row } from "../components/layout";
 import { relTime } from "../lib/format";
 
@@ -65,30 +65,28 @@ export function ProjectsPage() {
 					/>
 				</Card>
 			)}
-			{isLoading ? (
-				<Spinner />
-			) : (
-				<Card>
-					{error ? (
-						<ErrorNote error={error} onRetry={() => refetch()} />
-					) : !data || data.projects.length === 0 ? (
-						<EmptyState
-							title="No projects"
-							hint="Create a project with a local_path or repo_url, then sync its .github/workflows."
-						/>
-					) : (
-						data.projects.map((p) => (
-							<Row key={p.id} onClick={() => nav(`/projects/${p.slug}`)}>
-								<span className="min-w-0 flex-1 truncate font-medium">{p.name}</span>
-								<span className="text-xs text-[var(--dim)]">{p.slug}</span>
-								<span className="font-mono w-64 truncate text-xs text-[var(--faint)]">
-									{p.repo_full_name || p.local_path || p.repo_url}
-								</span>
-							</Row>
-						))
-					)}
-				</Card>
-			)}
+			<Card>
+				{isLoading ? (
+					<SkeletonRows />
+				) : error ? (
+					<ErrorNote error={error} onRetry={() => refetch()} />
+				) : !data || data.projects.length === 0 ? (
+					<EmptyState
+						title="No projects"
+						hint="Create a project with a local_path or repo_url, then sync its .github/workflows."
+					/>
+				) : (
+					data.projects.map((p) => (
+						<Row key={p.id} onClick={() => nav(`/projects/${p.slug}`)}>
+							<span className="min-w-0 flex-1 truncate font-medium">{p.name}</span>
+							<span className="text-xs text-[var(--dim)]">{p.slug}</span>
+							<span className="font-mono w-64 truncate text-xs text-[var(--faint)]">
+								{p.repo_full_name || p.local_path || p.repo_url}
+							</span>
+						</Row>
+					))
+				)}
+			</Card>
 		</>
 	);
 }

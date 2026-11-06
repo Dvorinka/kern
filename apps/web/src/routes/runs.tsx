@@ -3,7 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { useMemo, useState, type ReactNode } from "react";
 import { api } from "../lib/api";
 import type { OverviewResponse, Run, Runner } from "../lib/types";
-import { ErrorNote, PageHeader, Spinner, cn } from "../components/ui";
+import { ErrorNote, PageHeader, SkeletonRows, cn } from "../components/ui";
 import { StatusSq } from "../components/status";
 import { Fingerprint, useRunDetails } from "../components/fingerprint";
 import { bytes, duration, relTime, refName, shortSha } from "../lib/format";
@@ -85,7 +85,7 @@ export function RunsPage() {
 					</div>
 
 					{isLoading ? (
-						<Spinner />
+						<SkeletonRows rows={8} />
 					) : error ? (
 						<ErrorNote error={error} onRetry={() => refetch()} />
 					) : visible.length === 0 ? (

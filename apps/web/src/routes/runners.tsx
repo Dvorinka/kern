@@ -3,7 +3,7 @@ import { useState, type FormEvent } from "react";
 import { LocateFixed, Pause, Pencil, Plus, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import type { Runner } from "../lib/types";
-import { Button, Card, EmptyState, ErrorNote, Input, PageHeader, Spinner } from "../components/ui";
+import { Button, Card, EmptyState, ErrorNote, Input, PageHeader, SkeletonRows } from "../components/ui";
 import { StatusSq } from "../components/status";
 import { CopyButton } from "./settings";
 import { Row } from "../components/layout";
@@ -64,7 +64,9 @@ export function RunnersPage() {
 				</span>
 			</Row>
 			{isLoading ? (
-				<Spinner />
+				<div className="panel">
+					<SkeletonRows rows={5} />
+				</div>
 			) : (
 				<div className="panel">
 					<div className="phead">

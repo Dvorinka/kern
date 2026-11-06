@@ -5,7 +5,7 @@ import { Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import type { Deployment, Environment, Project } from "../lib/types";
-import { Button, Card, EmptyState, ErrorNote, Input, PageHeader, Spinner } from "../components/ui";
+import { Button, Card, EmptyState, ErrorNote, Input, PageHeader, SkeletonRows, Spinner } from "../components/ui";
 import { Row } from "../components/layout";
 import { StatusSq } from "../components/status";
 import { refName, relTime, shortSha } from "../lib/format";
@@ -81,37 +81,34 @@ export function EnvironmentsPage() {
 							onClose={() => setAdding(false)}
 						/>
 					)}
-					{envs.isLoading ? (
-						<Spinner />
-					) : (
-						<Card>
-							{!envs.data || envs.data.environments.length === 0 ? (
-								<EmptyState
-									title="No environments"
-									hint="A job's environment: key creates one on first use. Protect it here before that run."
-								/>
-							) : (
-								envs.data.environments.map((env) => (
-									<EnvRow key={env.id} slug={slug} env={env} />
-								))
-							)}
-						</Card>
-					)}
-					{envs.error && <p className="mt-2 text-xs text-[var(--err)]">{envs.error.message}</p>}
+					<Card>
+						{envs.isLoading ? (
+							<SkeletonRows />
+						) : envs.error ? (
+							<ErrorNote error={envs.error} onRetry={() => envs.refetch()} />
+						) : !envs.data || envs.data.environments.length === 0 ? (
+							<EmptyState
+								title="No environments"
+								hint="A job's environment: key creates one on first use. Protect it here before that run."
+							/>
+						) : (
+							envs.data.environments.map((env) => (
+								<EnvRow key={env.id} slug={slug} env={env} />
+							))
+						)}
+					</Card>
 					<h2 className="mb-2 mt-6 text-[13px] font-semibold">Deployments</h2>
-					{deps.isLoading ? (
-						<Spinner />
-					) : (
-						<Card>
-							{deps.error ? (
-								<ErrorNote error={deps.error} onRetry={() => deps.refetch()} />
-							) : !deps.data || deps.data.deployments.length === 0 ? (
-								<EmptyState title="No deployments" hint="They appear when a job names an environment." />
-							) : (
-								deps.data.deployments.map((d) => <DeploymentRow key={d.id} d={d} slug={slug} />)
-							)}
-						</Card>
-					)}
+					<Card>
+						{deps.isLoading ? (
+							<SkeletonRows />
+						) : deps.error ? (
+							<ErrorNote error={deps.error} onRetry={() => deps.refetch()} />
+						) : !deps.data || deps.data.deployments.length === 0 ? (
+							<EmptyState title="No deployments" hint="They appear when a job names an environment." />
+						) : (
+							deps.data.deployments.map((d) => <DeploymentRow key={d.id} d={d} slug={slug} />)
+						)}
+					</Card>
 				</>
 			)}
 		</>

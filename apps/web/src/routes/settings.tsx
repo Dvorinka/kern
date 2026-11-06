@@ -3,7 +3,7 @@ import { useState, type FormEvent } from "react";
 import { Check, Copy, RefreshCw, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import type { APIToken, AuditEvent, Member, UpdateInfo } from "../lib/types";
-import { Button, Card, CardHeader, EmptyState, ErrorNote, Input, KV, PageHeader, Spinner } from "../components/ui";
+import { Button, Card, CardHeader, EmptyState, ErrorNote, Input, KV, PageHeader, SkeletonRows, Spinner } from "../components/ui";
 import { Row } from "../components/layout";
 import { relTime } from "../lib/format";
 
@@ -237,7 +237,7 @@ function AuditCard() {
 		<Card className="mb-4">
 			<CardHeader title="Audit trail" sub="approvals, settings changes, and secrets writes" />
 			{isLoading ? (
-				<Spinner />
+				<SkeletonRows />
 			) : error ? (
 				<ErrorNote error={error} onRetry={() => refetch()} />
 			) : !data || data.events.length === 0 ? (
@@ -331,7 +331,7 @@ function MembersCard() {
 				</form>
 			)}
 			{isLoading ? (
-				<Spinner />
+				<SkeletonRows />
 			) : error ? (
 				<ErrorNote error={error} onRetry={() => refetch()} />
 			) : !data || data.members.length === 0 ? (
@@ -501,7 +501,7 @@ function TokensCard() {
 				</form>
 			)}
 			{isLoading ? (
-				<Spinner />
+				<SkeletonRows />
 			) : error ? (
 				<ErrorNote error={error} onRetry={() => refetch()} />
 			) : !data || data.tokens.length === 0 ? (

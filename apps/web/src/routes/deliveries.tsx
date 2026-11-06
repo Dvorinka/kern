@@ -3,7 +3,7 @@ import { useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { api } from "../lib/api";
 import type { WebhookDelivery } from "../lib/types";
-import { Card, EmptyState, ErrorNote, PageHeader, Spinner, cn } from "../components/ui";
+import { Card, EmptyState, ErrorNote, PageHeader, SkeletonRows, cn } from "../components/ui";
 import { StatusSq } from "../components/status";
 import { relTime } from "../lib/format";
 
@@ -17,22 +17,20 @@ export function DeliveriesPage() {
 	return (
 		<>
 			<PageHeader title="Webhooks" sub="Provider deliveries received by the control plane" />
-			{isLoading ? (
-				<Spinner />
-			) : (
-				<Card>
-					{error ? (
-						<ErrorNote error={error} onRetry={() => refetch()} />
-					) : !data || data.deliveries.length === 0 ? (
-						<EmptyState
-							title="No deliveries"
-							hint="Configure a GitHub webhook or App to point at /api/v1/webhooks/github."
-						/>
-					) : (
-						data.deliveries.map((d) => <DeliveryRow key={d.id} d={d} />)
-					)}
-				</Card>
-			)}
+			<Card>
+				{isLoading ? (
+					<SkeletonRows />
+				) : error ? (
+					<ErrorNote error={error} onRetry={() => refetch()} />
+				) : !data || data.deliveries.length === 0 ? (
+					<EmptyState
+						title="No deliveries"
+						hint="Configure a GitHub webhook or App to point at /api/v1/webhooks/github."
+					/>
+				) : (
+					data.deliveries.map((d) => <DeliveryRow key={d.id} d={d} />)
+				)}
+			</Card>
 		</>
 	);
 }

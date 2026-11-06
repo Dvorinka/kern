@@ -1084,7 +1084,8 @@ input:focus-visible {
 	.sq.live::after,
 	.pb.r,
 	.cursor,
-	.seg.live {
+	.seg.live,
+	.skl i {
 		animation: none;
 	}
 }
@@ -1636,5 +1637,47 @@ input:focus-visible {
 }
 .errnote .act:hover {
 	color: var(--ink);
+}
+
+/* first-load skeleton — bars sit in the same row frame as list rows */
+.skl {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 10px 16px;
+	border-bottom: 1px solid var(--line);
+}
+.skl:last-child {
+	border-bottom: 0;
+}
+.skl i {
+	display: block;
+	height: 8px;
+	border-radius: 3px;
+	background: var(--line2);
+	animation: skl 1.6s ease-in-out infinite;
+}
+.skl .skl-main {
+	flex: 1;
+	min-width: 0;
+	display: grid;
+	gap: 7px;
+}
+.skl .sub {
+	height: 7px;
+	opacity: 0.55;
+}
+.skl .side {
+	width: 52px;
+	flex: none;
+}
+@keyframes skl {
+	0%,
+	100% {
+		opacity: 0.4;
+	}
+	50% {
+		opacity: 0.9;
+	}
 }
 }

@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import type { CacheEntry, Project } from "../lib/types";
-import { Button, ErrorNote, PageHeader, Spinner } from "../components/ui";
+import { Button, ErrorNote, PageHeader, SkeletonRows } from "../components/ui";
 import { bytes, relTime } from "../lib/format";
 
 export function CachePage() {
@@ -38,7 +38,7 @@ export function CachePage() {
 					<span className="r">newest first</span>
 				</div>
 				{isLoading ? (
-					<Spinner />
+					<SkeletonRows />
 				) : error ? (
 					<ErrorNote error={error} onRetry={() => refetch()} />
 				) : entries.length === 0 ? (

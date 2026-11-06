@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { useMemo, useState } from "react";
 import { api } from "../lib/api";
 import type { UsageResponse } from "../lib/types";
-import { Card, CardHeader, EmptyState, ErrorNote, PageHeader, Spinner } from "../components/ui";
+import { Card, CardHeader, EmptyState, ErrorNote, PageHeader, SkeletonRows } from "../components/ui";
 import { seconds } from "../lib/format";
 
 const WINDOWS = [7, 30, 90];
@@ -83,7 +83,9 @@ export function UsagePage() {
 			/>
 
 			{isLoading ? (
-				<Spinner />
+				<Card>
+					<SkeletonRows rows={6} />
+				</Card>
 			) : error ? (
 				<Card>
 					<ErrorNote error={error} onRetry={() => refetch()} />
