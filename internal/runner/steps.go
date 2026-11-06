@@ -189,7 +189,7 @@ func (e *executor) runStepBody(ctx context.Context, step StepSpec) (string, int,
 	}
 
 	cmd := exec.CommandContext(stepCtx, "docker", "exec",
-		"--user", fmt.Sprintf("%d:%d", jobUID, jobUID),
+		"--user", fmt.Sprintf("%d:%d", e.execUID(), e.execUID()),
 		"-w", containerWorkspace,
 		"--env-file", e.stepEnvPath(step),
 		e.container, e.shell, script,

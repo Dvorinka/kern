@@ -244,13 +244,19 @@ func (e *executor) startContainer(ctx context.Context) error {
 			args = append(args, "--add-host", svc.Name+":127.0.0.1")
 		}
 	}
+	if !e.privileged() {
+		args = append(args,
+			"--user", fmt.Sprintf("%d:%d", jobUID, jobUID),
+			"--cap-drop", "ALL",
+			"--security-opt", "no-new-privileges",
+			"--read-only",
+			"--tmpfs", "/tmp:rw,noexec,nosuid,size=512m",
+			"--tmpfs", "/run:rw,noexec,nosuid,size=64m",
+		)
+	} else {
+		args = append(args, "-v", "/var/run/docker.sock:/var/run/docker.sock")
+	}
 	args = append(args,
-		"--user", fmt.Sprintf("%d:%d", jobUID, jobUID),
-		"--cap-drop", "ALL",
-		"--security-opt", "no-new-privileges",
-		"--read-only",
-		"--tmpfs", "/tmp:rw,noexec,nosuid,size=512m",
-		"--tmpfs", "/run:rw,noexec,nosuid,size=64m",
 		"--memory", valueOr(e.cfg.JobMemory, "1g"),
 		"--cpus", valueOr(e.cfg.JobCPUs, "1"),
 		"-v", filepath.Join(workRoot, "workspace")+":"+containerWorkspace,
@@ -316,7 +322,28 @@ func (e *executor) startContainer(ctx context.Context) error {
 		"sh", "-c", "command -v bash >/dev/null").Run() != nil {
 		e.shell = "/bin/sh"
 	}
+	if e.privileged() {
+		// Steps run as root; `sudo` only needs to pass the command through.
+		// Written into the ephemeral container — the image stays untouched.
+		_ = exec.CommandContext(ctx, "docker", "exec", e.container, "sh", "-c",
+			`command -v sudo >/dev/null || { printf '#!/bin/sh\nexec "$@"\n' > /usr/local/bin/sudo && chmod +x /usr/local/bin/sudo; }`).Run()
+	}
 	return nil
+}
+
+// privileged reports whether this job runs with GitHub parity — root, a
+// writable rootfs, and the docker socket. Maintainer-controlled trust levels
+// ("trusted", "protected") opt in; fork/untrusted runs keep the sandbox.
+func (e *executor) privileged() bool {
+	return e.claim.Run.TrustLevel == "trusted" || e.claim.Run.TrustLevel == "protected"
+}
+
+// execUID is the uid steps run as inside the job container.
+func (e *executor) execUID() int {
+	if e.privileged() {
+		return 0
+	}
+	return jobUID
 }
 
 // checkout materialises the repository inside the workspace directory. An

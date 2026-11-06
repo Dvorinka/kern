@@ -106,6 +106,18 @@ func TestCloneArgs(t *testing.T) {
 	}
 }
 
+func TestPrivilegedExecUID(t *testing.T) {
+	e := &executor{claim: &Claim{}}
+	e.claim.Run.TrustLevel = "fork"
+	if e.execUID() != jobUID {
+		t.Error("untrusted runs must stay uid 1000")
+	}
+	e.claim.Run.TrustLevel = "trusted"
+	if e.execUID() != 0 {
+		t.Error("trusted runs must run as root")
+	}
+}
+
 func TestSanitizeID(t *testing.T) {
 	if got := sanitizeID("abc/def-123"); got != "abc-def-123" {
 		t.Errorf("sanitizeID: got %q", got)
