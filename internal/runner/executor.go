@@ -279,6 +279,11 @@ func (e *executor) startContainer(ctx context.Context) error {
 		// RUNNER_TEMP must be exec-allowed: setup-* actions extract and run
 		// installers there, and the container's /tmp tmpfs is noexec.
 		"-e", "RUNNER_TEMP="+containerTmpDir,
+		// go build/test scratch (GOTMPDIR) and generic temp (TMPDIR) must be
+		// exec-allowed and roomier than the noexec /tmp tmpfs — `go test`
+		// writes and executes binaries there.
+		"-e", "GOTMPDIR="+containerTmpDir,
+		"-e", "TMPDIR="+containerTmpDir,
 		"-v", filepath.Join(workRoot, "tmp")+":"+containerTmpDir,
 		// Actions resolve $HOME for tool state (setup-go GOPATH, npm config);
 		// images may carry no writable home for uid 1000 at all.
