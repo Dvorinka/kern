@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"encoding/base64"
 	"os"
 	"strings"
 	"testing"
@@ -93,7 +94,9 @@ func TestCloneArgs(t *testing.T) {
 		t.Errorf("public: %q", got)
 	}
 	priv := cloneArgs(ClaimRun{RepoURL: "https://github.com/o/r.git", SHA: strings.Repeat("a", 40), CloneToken: "tok"}, "/ws")
-	if priv[1] != "http.extraHeader=Authorization: Bearer tok" {
+	want := "http.extraHeader=Authorization: Basic " +
+		base64.StdEncoding.EncodeToString([]byte("x-access-token:tok"))
+	if priv[1] != want {
 		t.Errorf("missing auth header: %v", priv)
 	}
 	for _, a := range priv {

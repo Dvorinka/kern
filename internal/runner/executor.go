@@ -11,6 +11,7 @@ package runner
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
@@ -367,7 +368,9 @@ func (e *executor) checkout(ctx context.Context) error {
 func cloneArgs(run ClaimRun, ws string) []string {
 	var args []string
 	if run.CloneToken != "" {
-		args = append(args, "-c", "http.extraHeader=Authorization: Bearer "+run.CloneToken)
+		// GitHub's git endpoint wants Basic auth: x-access-token:<token>.
+		basic := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + run.CloneToken))
+		args = append(args, "-c", "http.extraHeader=Authorization: Basic "+basic)
 	}
 	if run.SHA != "" {
 		// A SHA checkout needs history, so no --depth.
