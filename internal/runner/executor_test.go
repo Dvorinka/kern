@@ -17,8 +17,11 @@ func TestJobCAMount(t *testing.T) {
 		}
 		return
 	}
-	if len(got) != 2 || got[1] != hostCABundle+":"+hostCABundle+":ro" {
+	if len(got) != 2 || got[1] != hostCABundle+":"+containerCABundle+":ro" {
 		t.Fatal(got)
+	}
+	if env := caEnv(); len(env) == 0 || !strings.Contains(strings.Join(env, " "), containerCABundle) {
+		t.Fatal(env)
 	}
 }
 

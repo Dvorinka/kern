@@ -40,16 +40,36 @@ func cacheDir(workRoot string) string {
 	return filepath.Join(workRoot, "_cache")
 }
 
-// hostCABundle is the trust store the job container does not ship.
-// ubuntu:24.04 has no CA bundle, and Go ignores its embedded roots when
-// the system store is missing. The daemon mounts this host path.
-const hostCABundle = "/etc/ssl/certs/ca-certificates.crt"
+// hostCABundle is the trust store some job images do not ship.
+// It is mounted at a KERN-owned path, never at /etc/ssl/certs — a distro
+// package postinst (ca-certificates) replaces that file atomically and a
+// bind mount makes it "Device or resource busy", failing every apt install.
+const (
+	hostCABundle       = "/etc/ssl/certs/ca-certificates.crt"
+	containerCABundle  = "/kern/ca/ca-certificates.crt"
+	containerCAEnvName = "SSL_CERT_FILE"
+)
 
 func jobCAMount() []string {
 	if _, err := os.Stat(hostCABundle); err != nil {
 		return nil
 	}
-	return []string{"-v", hostCABundle + ":" + hostCABundle + ":ro"}
+	return []string{"-v", hostCABundle + ":" + containerCABundle + ":ro"}
+}
+
+// caEnv points the toolchains that read a bundle path at the mounted one.
+// Go, curl, node, python and git each use their own variable.
+func caEnv() []string {
+	if _, err := os.Stat(hostCABundle); err != nil {
+		return nil
+	}
+	return []string{
+		"-e", containerCAEnvName + "=" + containerCABundle,
+		"-e", "GIT_SSL_CAINFO=" + containerCABundle,
+		"-e", "CURL_CA_BUNDLE=" + containerCABundle,
+		"-e", "REQUESTS_CA_BUNDLE=" + containerCABundle,
+		"-e", "NODE_EXTRA_CA_CERTS=" + containerCABundle,
+	}
 }
 
 var (
@@ -296,6 +316,7 @@ func (e *executor) startContainer(ctx context.Context) error {
 		"-v", filepath.Join(workRoot, "home")+":"+containerActionHome,
 	)
 	args = append(args, jobCAMount()...)
+	args = append(args, caEnv()...)
 	args = append(args,
 		"-e", "KERN_CACHE_DIR="+containerCacheDir,
 		// setup-* actions resolve @actions/tool-cache via RUNNER_TOOL_CACHE;

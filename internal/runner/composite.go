@@ -9,7 +9,9 @@ package runner
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,7 +43,7 @@ func (e *executor) runAction(ctx context.Context, step StepSpec, evalCtx map[str
 	ref := strings.TrimSpace(step.Uses)
 	switch actions.Classify(ref) {
 	case actions.KindNative:
-		return e.runNativeAction(step, ref)
+		return e.runNativeAction(ctx, step, ref)
 	case actions.KindLocal:
 		if err := actions.ValidLocal(ref); err != nil {
 			e.logStep(step, "KERN: "+err.Error())
@@ -70,11 +72,10 @@ func (e *executor) runAction(ctx context.Context, step StepSpec, evalCtx map[str
 }
 
 // runNativeAction keeps the pre-M5 native actions behind their own switch.
-func (e *executor) runNativeAction(step StepSpec, ref string) (string, int) {
+func (e *executor) runNativeAction(ctx context.Context, step StepSpec, ref string) (string, int) {
 	switch strings.ToLower(strings.SplitN(ref, "@", 2)[0]) {
 	case "actions/checkout":
-		// The workspace was checked out during prepare; an explicit step keeps that state.
-		return "success", 0
+		return e.secondaryCheckout(ctx, step)
 	case "actions/upload-artifact":
 		return e.artifactUpload(step)
 	case "actions/download-artifact":
@@ -88,6 +89,76 @@ func (e *executor) runNativeAction(step StepSpec, ref string) (string, int) {
 	}
 	e.logStep(step, "KERN: action "+ref+" is not supported")
 	return "failure", 1
+}
+
+// secondaryCheckout implements `actions/checkout` with `repository:`/`path:`.
+// The run's own repository is materialised during prepare, so a plain
+// checkout is already satisfied; a second one clones another repo (public
+// https, or private when the run's token can read it) into the workspace.
+func (e *executor) secondaryCheckout(ctx context.Context, step StepSpec) (string, int) {
+	repository := withString(step, "repository", "")
+	path := withString(step, "path", "")
+	if repository == "" && path == "" {
+		// The workspace was checked out during prepare; an explicit step keeps that state.
+		return "success", 0
+	}
+	run := e.claim.Run
+	if repository == "" {
+		repository = run.RepoFullName
+	}
+	ref := withString(step, "ref", "")
+	if path == "" {
+		path = strings.TrimSuffix(filepath.Base(repository), ".git")
+	}
+	clean := filepath.Clean(filepath.FromSlash(path))
+	if clean == "." || filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
+		e.logStep(step, "KERN: checkout path must stay inside the workspace")
+		return "failure", 1
+	}
+	dest := filepath.Join(e.workRoot(), "workspace", clean)
+	if entries, err := os.ReadDir(dest); err == nil && len(entries) > 0 {
+		return "success", 0 // already populated by an earlier checkout
+	}
+	url := repositoryURL(repository, run.RepoURL)
+	args := []string{}
+	if run.CloneToken != "" {
+		basic := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + run.CloneToken))
+		args = append(args, "-c", "http.extraHeader=Authorization: Basic "+basic)
+	}
+	looksSHA := len(ref) == 40 && !strings.ContainsAny(ref, "ghijklmnopqrstuvwxyz/")
+	if ref != "" && !looksSHA {
+		args = append(args, "clone", "--quiet", "--depth", "1", "--branch", ref, "--", url, dest)
+	} else {
+		args = append(args, "clone", "--quiet", "--", url, dest)
+	}
+	out, err := exec.CommandContext(ctx, "git", args...).CombinedOutput()
+	if err != nil {
+		e.logStep(step, "KERN: checkout "+repository+": "+err.Error()+" ("+tailStr(string(out), 300)+")")
+		return "failure", 1
+	}
+	if looksSHA {
+		if out, err := exec.CommandContext(ctx, "git", "-C", dest, "checkout", "--force", ref).CombinedOutput(); err != nil {
+			e.logStep(step, "KERN: checkout ref: "+err.Error()+" ("+tailStr(string(out), 300)+")")
+			return "failure", 1
+		}
+	}
+	chownTree(dest, e.execUID())
+	return "success", 0
+}
+
+// repositoryURL turns a `repository:` input into a clone URL on the same host
+// as the run's repository. A value that is already a URL is used verbatim.
+func repositoryURL(repository, runRepoURL string) string {
+	if strings.Contains(repository, "://") || strings.HasPrefix(repository, "git@") {
+		return repository
+	}
+	host := "github.com"
+	if runRepoURL != "" {
+		if u, err := url.Parse(runRepoURL); err == nil && u.Host != "" {
+			host = u.Host
+		}
+	}
+	return "https://" + host + "/" + repository + ".git"
 }
 
 // runActionDir loads action.yml and dispatches on runs.using. actionPath is
