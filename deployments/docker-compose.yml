@@ -84,6 +84,9 @@ services:
       # Job bind mounts are resolved by the host docker daemon, so the work
       # root must be the same path inside and outside this container.
       - ${KERN_RUNNER_WORK:-/opt/kern/work}:/opt/kern/work
+      # docker-compose `./` volumes in privileged jobs resolve client-side to
+      # /github/workspace; this host dir carries the per-job workspace symlink.
+      - /github:/github
 
   # The API cannot replace its own container. This sidecar is started with
   # the compose profile "update" and is the process that recreates api and

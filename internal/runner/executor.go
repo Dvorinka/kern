@@ -349,6 +349,14 @@ func (e *executor) startContainer(ctx context.Context) error {
 		// Written into the ephemeral container — the image stays untouched.
 		_ = exec.CommandContext(ctx, "docker", "exec", e.container, "sh", "-c",
 			`command -v sudo >/dev/null || { printf '#!/bin/sh\nexec "$@"\n' > /usr/local/bin/sudo && chmod +x /usr/local/bin/sudo; }`).Run()
+		// docker-compose `./` volumes resolve client-side to /github/workspace
+		// but the daemon mounts host-side. /github is a host dir bind-mounted
+		// into the runner; point its workspace link at this job's workspace so
+		// client paths land on the right host path. Race-free at concurrency 1.
+		if dirExists("/github") {
+			_ = os.Remove("/github/workspace")
+			_ = os.Symlink(filepath.Join(e.workRoot(), "workspace"), "/github/workspace")
+		}
 	}
 	return nil
 }
