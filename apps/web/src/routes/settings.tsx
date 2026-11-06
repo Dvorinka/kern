@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { Check, Copy, RefreshCw, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
-import type { APIToken, AuditEvent, UpdateInfo } from "../lib/types";
+import type { APIToken, AuditEvent, Member, UpdateInfo } from "../lib/types";
 import { Button, Card, CardHeader, EmptyState, Input, KV, PageHeader, Spinner } from "../components/ui";
 import { Row } from "../components/layout";
 import { relTime } from "../lib/format";
@@ -14,6 +14,7 @@ export function SettingsPage() {
 			<PublicCICard />
 			<SelfHealCard />
 			<AutoUpdateCard />
+			<MembersCard />
 			<TokensCard />
 			<UpdateCard />
 			<InstanceCard />
@@ -253,6 +254,122 @@ function AuditCard() {
 						</span>
 					</Row>
 				))
+			)}
+		</Card>
+	);
+}
+
+function MembersCard() {
+	const qc = useQueryClient();
+	const { data: me } = useQuery({
+		queryKey: ["me"],
+		queryFn: () => api.get<{ user: { id: string; role: string } }>("/auth/me"),
+	});
+	const { data, isLoading } = useQuery({
+		queryKey: ["members"],
+		queryFn: () => api.get<{ members: Member[] }>("/members"),
+	});
+	const [creating, setCreating] = useState(false);
+	const create = useMutation({
+		mutationFn: (body: { email: string; name: string; password: string; role: string }) =>
+			api.post("/members", body),
+		onSuccess: () => {
+			setCreating(false);
+			qc.invalidateQueries({ queryKey: ["members"] });
+		},
+	});
+	const setRole = useMutation({
+		mutationFn: ({ id, role }: { id: string; role: string }) =>
+			api.patch(`/members/${id}`, { role }),
+		onSuccess: () => qc.invalidateQueries({ queryKey: ["members"] }),
+	});
+	const del = useMutation({
+		mutationFn: (id: string) => api.del(`/members/${id}`),
+		onSuccess: () => qc.invalidateQueries({ queryKey: ["members"] }),
+	});
+
+	const submit = (e: FormEvent<HTMLFormElement>) => {
+		e.preventDefault();
+		const fd = new FormData(e.currentTarget);
+		create.mutate({
+			email: String(fd.get("email")).trim(),
+			name: String(fd.get("name")).trim(),
+			password: String(fd.get("password")),
+			role: String(fd.get("role")),
+		});
+		e.currentTarget.reset();
+	};
+
+	return (
+		<Card className="mb-4">
+			<CardHeader
+				title="Members"
+				sub="org accounts — admins manage the fleet, members run pipelines"
+				actions={
+					<Button size="sm" variant="primary" onClick={() => setCreating((v) => !v)}>
+						Add member
+					</Button>
+				}
+			/>
+			{creating && (
+				<form onSubmit={submit} className="flex flex-wrap items-center gap-3 border-b border-[var(--line)] px-4 py-3">
+					<Input name="email" type="email" placeholder="email" required className="w-56" />
+					<Input name="name" placeholder="name" className="w-40" />
+					<Input name="password" type="password" placeholder="password (8+)" required minLength={8} className="w-44" />
+					<select name="role" className="fsel" defaultValue="member" aria-label="Role">
+						<option value="member">member</option>
+						<option value="admin">admin</option>
+						{me?.user.role === "owner" && <option value="owner">owner</option>}
+					</select>
+					<Button type="submit" variant="primary" size="sm" disabled={create.isPending}>
+						Create
+					</Button>
+					{create.error && <span className="text-xs text-[var(--err)]">{create.error.message}</span>}
+				</form>
+			)}
+			{isLoading ? (
+				<Spinner />
+			) : !data || data.members.length === 0 ? (
+				<EmptyState title="No members" hint="The bootstrap admin is the only account." />
+			) : (
+				data.members.map((m) => (
+					<Row key={m.id}>
+						<span className="min-w-0 flex-1 truncate font-medium">
+							{m.email}
+							{m.id === me?.user.id && <span className="text-[var(--faint)]"> · you</span>}
+						</span>
+						<span className="w-32 flex-none truncate text-xs text-[var(--dim)]">{m.name || "—"}</span>
+						<select
+							className="fsel"
+							aria-label={`Role for ${m.email}`}
+							value={m.role}
+							disabled={setRole.isPending}
+							onChange={(e) => setRole.mutate({ id: m.id, role: e.target.value })}
+						>
+							<option value="member">member</option>
+							<option value="admin">admin</option>
+							<option value="owner">owner</option>
+						</select>
+						{m.id !== me?.user.id && (
+							<Button
+								size="sm"
+								variant="ghost"
+								disabled={del.isPending}
+								onClick={() => {
+									if (confirm(`Remove ${m.email} from the org? Their sessions and tokens are revoked.`)) del.mutate(m.id);
+								}}
+							>
+								<Trash2 size={13} />
+							</Button>
+						)}
+					</Row>
+				))
+			)}
+			{setRole.error && (
+				<div className="px-4 py-2 text-xs text-[var(--err)]">{setRole.error.message}</div>
+			)}
+			{del.error && (
+				<div className="px-4 py-2 text-xs text-[var(--err)]">{del.error.message}</div>
 			)}
 		</Card>
 	);
