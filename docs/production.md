@@ -14,7 +14,7 @@ diffs with a large security delta.
 | --- | --- | --- |
 | ~~API token scopes not enforced~~ | **DONE** — `requireScope` gates routes: `read` for member GETs, `write` for run/project operations, `admin` for secrets/runners/settings. Sessions are scope-free; MCP tools mirror the HTTP gates (`kern_cancel_run` → write, `kern_approve_run` → admin) | — |
 | ~~Org roles not enforced~~ | **DONE** — `requireRole("admin")` on the admin route group: project create, GitHub App flow, fork-gate approve, enroll tokens, runner drain/geo/delete, environments, org+project settings, secrets write, audit | Remaining: nothing enforcement-side; member UX gets 403s, not hidden controls |
-| No user management | The bootstrap admin is the only way in. No invite flow, no `POST /users`, no member list, no way to change a role | `POST /users` + member list/role endpoints, an invite token (same pattern as runner enrollment), and the settings page wiring |
+| ~~No user management~~ | **DONE** — `GET/POST/PATCH/DELETE /members` (admin group): create with role, change role, remove. Removal revokes sessions + API tokens; the last owner can neither be demoted nor removed; only an owner grants owner. Settings → Members card | Remaining: no invite-by-email flow (no mailer exists — admin sets the initial password and hands it over out-of-band) |
 | ~~`/api/v1/metrics` unauthenticated~~ | **DONE** — moved inside `requireAuth`; scrape with `Authorization: Bearer <token>` (read scope suffices) | — |
 | ~~No security headers~~ | **DONE** — CSP (`default-src 'self'` + Google Fonts allowances), `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy` on every response | — |
 | Login rate limit is in-process | `loginLimiter` lives in api memory — correct for one replica, silently weakens per-replica in a multi-replica future | Move to Postgres or the shared cache when multi-instance lands; not before |
@@ -71,9 +71,8 @@ they bound which workflows run unmodified.
 
 1. ~~Token-scope enforcement + role middleware + `/metrics` auth + security
    headers~~ — **DONE**.
-2. User management (create/invite/list/role) — makes the instance
-   multi-user in fact. Role enforcement is live but useless until a second
-   user exists.
+2. ~~User management (create/invite/list/role)~~ — **DONE**. The instance is
+   multi-user in fact; a member invite email flow can wait for an IdP.
 3. Backup runbook + S3 blob driver — makes the instance recoverable.
 4. OpenAPI spec — contract for everything that integrates next.
 5. OIDC — the real enterprise gate; schedule it against an actual IdP,

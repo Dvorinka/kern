@@ -377,3 +377,11 @@ export interface UpdateInfo {
 	updater_error?: string;
 	updater_at?: string;
 }
+
+export interface Member {
+	id: string;
+	email: string;
+	name: string;
+	role: string;
+	created_at: string;
+}

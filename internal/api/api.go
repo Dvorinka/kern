@@ -183,6 +183,11 @@ func (s *Server) buildRouter() *gin.Engine {
 		write.POST("/jobs/:id/approve", s.approveDeployment)
 		write.POST("/jobs/:id/reject", s.rejectDeployment)
 
+		admin.GET("/members", s.listMembers)
+		admin.POST("/members", s.createMember)
+		admin.PATCH("/members/:id", s.patchMember)
+		admin.DELETE("/members/:id", s.deleteMember)
+
 		auth.GET("/settings", s.getOrgSettings)
 		admin.PUT("/settings", s.putOrgSettings)
 		auth.GET("/usage", s.usage)

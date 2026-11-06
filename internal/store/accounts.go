@@ -14,6 +14,9 @@ import (
 
 var ErrNotFound = errors.New("not found")
 
+// ErrConflict marks a state guard violation (e.g. demoting the last owner).
+var ErrConflict = errors.New("conflict")
+
 // Bootstrap creates the default organization and admin user when they do not exist.
 func (s *Store) Bootstrap(ctx context.Context, orgSlug, orgName, email, name, passwordHash string) (User, error) {
 	tx, err := s.pool.Begin(ctx)
@@ -135,6 +138,143 @@ func (s *Store) UserByID(ctx context.Context, id uuid.UUID) (User, error) {
 		return User{}, ErrNotFound
 	}
 	return u, err
+}
+
+type Member struct {
+	ID        uuid.UUID `json:"id"`
+	Email     string    `json:"email"`
+	Name      string    `json:"name"`
+	Role      string    `json:"role"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (s *Store) Members(ctx context.Context, orgID uuid.UUID) ([]Member, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT u.id, u.email, u.name, m.role, m.created_at
+		FROM org_members m JOIN users u ON u.id = m.user_id
+		WHERE m.org_id = $1 ORDER BY m.created_at`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Member{}
+	for rows.Next() {
+		var m Member
+		if err := rows.Scan(&m.ID, &m.Email, &m.Name, &m.Role, &m.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// CreateMember inserts a user and grants them an org membership in one
+// transaction. A duplicate email returns ErrExists-flavored text for the API
+// to map to 409.
+func (s *Store) CreateMember(ctx context.Context, orgID uuid.UUID, email, name, passwordHash, role string) (User, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return User{}, err
+	}
+	defer tx.Rollback(ctx)
+	var userID uuid.UUID
+	err = tx.QueryRow(ctx, `
+		INSERT INTO users (email, name, password_hash) VALUES ($1, $2, $3)
+		RETURNING id`, email, name, passwordHash).Scan(&userID)
+	if err != nil {
+		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "23505") {
+			return User{}, fmt.Errorf("%w: email already registered", ErrExists)
+		}
+		return User{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO org_members (org_id, user_id, role) VALUES ($1, $2, $3)`,
+		orgID, userID, role); err != nil {
+		return User{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return User{}, err
+	}
+	return s.UserByEmail(ctx, email)
+}
+
+// SetMemberRole updates a member's role. The last owner cannot be demoted —
+// checked inside the transaction so a concurrent demotion cannot race it.
+func (s *Store) SetMemberRole(ctx context.Context, orgID, userID uuid.UUID, role string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var current string
+	err = tx.QueryRow(ctx, `
+		SELECT role FROM org_members WHERE org_id = $1 AND user_id = $2 FOR UPDATE`,
+		orgID, userID).Scan(&current)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if current == "owner" && role != "owner" {
+		var owners int
+		if err := tx.QueryRow(ctx, `
+			SELECT COUNT(*) FROM org_members WHERE org_id = $1 AND role = 'owner'`,
+			orgID).Scan(&owners); err != nil {
+			return err
+		}
+		if owners <= 1 {
+			return fmt.Errorf("%w: cannot demote the last owner", ErrConflict)
+		}
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE org_members SET role = $3 WHERE org_id = $1 AND user_id = $2`,
+		orgID, userID, role); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// RemoveMember deletes a membership plus the user's sessions and API tokens,
+// so a removed member cannot authenticate at all. The last owner cannot be
+// removed.
+func (s *Store) RemoveMember(ctx context.Context, orgID, userID uuid.UUID) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var current string
+	err = tx.QueryRow(ctx, `
+		SELECT role FROM org_members WHERE org_id = $1 AND user_id = $2 FOR UPDATE`,
+		orgID, userID).Scan(&current)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if current == "owner" {
+		var owners int
+		if err := tx.QueryRow(ctx, `
+			SELECT COUNT(*) FROM org_members WHERE org_id = $1 AND role = 'owner'`,
+			orgID).Scan(&owners); err != nil {
+			return err
+		}
+		if owners <= 1 {
+			return fmt.Errorf("%w: cannot remove the last owner", ErrConflict)
+		}
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM org_members WHERE org_id = $1 AND user_id = $2`, orgID, userID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1`, userID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM api_tokens WHERE user_id = $1`, userID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) CreateSession(ctx context.Context, userID uuid.UUID, tokenHash string, expiresAt time.Time) error {
