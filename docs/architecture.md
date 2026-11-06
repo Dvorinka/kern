@@ -109,6 +109,11 @@ against every secret value for the run's project + org.
   carried in an HttpOnly cookie (`kern_session`, 14d). Cookie writes are origin
   checked (CSRF). Login is rate limited in-process.
 - API tokens (`kern_…`) and runner tokens (`kernr_…`): random, stored hashed.
+- Authorization has two axes. Token scopes (`read`/`write`/`admin`) constrain
+  API tokens only — sessions are full-power. Org roles (`member`/`admin`/`owner`)
+  constrain both: the admin route group (secrets, runner fleet, environments,
+  org/project settings, fork-gate approve, audit, GitHub App flow) requires
+  the admin role and, for tokens, the admin scope. `/metrics` sits inside auth.
 - The `kern` CLI authenticates with an API token. `POST /auth/token` exchanges
   email+password for one (rate-limited, no cookie) — `kern login` uses it.
 - Runner registration accepts either a one-time enrollment token (`kerne_…`,

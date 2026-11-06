@@ -288,12 +288,26 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			out = views
 		}
 	case "kern_approve_run", "kern_cancel_run":
+		// Mirror the HTTP gates: cancel needs write scope, approve needs
+		// admin scope plus the admin role (same as POST /runs/:id/approve).
+		need := "write"
+		if call.Name == "kern_approve_run" {
+			need = "admin"
+		}
+		if !scopeAllows(c, need) {
+			err = fmt.Errorf("token requires the %s scope", need)
+			break
+		}
 		id, perr := uuid.Parse(mcpArgStringOr(params, "run_id"))
 		if perr != nil {
 			err = fmt.Errorf("run_id must be a UUID")
 			break
 		}
 		if call.Name == "kern_approve_run" {
+			if roleRank(user.Role) < roleRank("admin") {
+				err = fmt.Errorf("requires the admin role")
+				break
+			}
 			err = s.Store.ApproveRunHold(ctx, id)
 			if err == nil {
 				s.Store.Audit(ctx, user.OrgID, &user.ID, "run.approve", id.String())
