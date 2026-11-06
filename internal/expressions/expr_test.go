@@ -188,3 +188,18 @@ func TestTruthy(t *testing.T) {
 		}
 	}
 }
+
+func TestHyphenatedIdentifiers(t *testing.T) {
+	ctx := map[string]any{
+		"inputs": map[string]any{"scan-type": "fs"},
+		"steps":  map[string]any{"dl": map[string]any{"outputs": map[string]any{"cache-hit": "true"}}},
+	}
+	ok, err := EvaluateCondition("${{ inputs.scan-type == 'fs' }}", ctx)
+	if err != nil || !ok {
+		t.Errorf("hyphenated input: ok=%v err=%v", ok, err)
+	}
+	ok, err = EvaluateCondition("${{ steps.dl.outputs.cache-hit == 'true' }}", ctx)
+	if err != nil || !ok {
+		t.Errorf("hyphenated step output: ok=%v err=%v", ok, err)
+	}
+}

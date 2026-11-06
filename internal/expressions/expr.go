@@ -266,7 +266,9 @@ func isIdentStart(c byte) bool {
 }
 
 func isIdentPart(c byte) bool {
-	return isIdentStart(c) || (c >= '0' && c <= '9')
+	// GitHub permits hyphens in context identifiers — inputs.foo-bar,
+	// steps.my-step.outputs.x — and has no subtraction operator to clash.
+	return isIdentStart(c) || (c >= '0' && c <= '9') || c == '-'
 }
 
 // ---- parser (precedence climbing) ----
