@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -202,9 +204,10 @@ func (s *Server) getOrgSettings(c *gin.Context) {
 }
 
 type settingsRequest struct {
-	SelfHeal string `json:"self_heal"`
-	ForkGate string `json:"fork_gate"`
-	PrTrust  string `json:"pr_trust"`
+	SelfHeal string  `json:"self_heal"`
+	ForkGate string  `json:"fork_gate"`
+	PrTrust  string  `json:"pr_trust"`
+	IconPath *string `json:"icon_path"`
 }
 
 // orgSettingsRequest accepts either key. A self_heal-only body, which the
@@ -292,7 +295,43 @@ func (s *Server) getProjectSettings(c *gin.Context) {
 		"self_heal": settingsValue(raw, "self_heal", "inherit"),
 		"fork_gate": settingsValue(raw, "fork_gate", "off"),
 		"pr_trust":  settingsValue(raw, "pr_trust", "off"),
+		"icon_path": settingsValue(raw, "icon_path", ""),
 	})
+}
+
+// projectIcon serves the project's configured icon from its local checkout.
+// GitHub-connected projects resolve their icon client-side via
+// raw.githubusercontent.com; this endpoint only covers local_path sources.
+func (s *Server) projectIcon(c *gin.Context) {
+	user, _ := currentUser(c)
+	p, err := s.Store.Project(c.Request.Context(), user.OrgID, c.Param("project"))
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	raw, err := s.Store.ProjectSettings(c.Request.Context(), p.ID)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	rel := settingsValue(raw, "icon_path", "")
+	if rel == "" || p.LocalPath == "" {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	full := filepath.Join(p.LocalPath, filepath.Clean("/"+rel))
+	if !strings.HasPrefix(full, filepath.Clean(p.LocalPath)+string(os.PathSeparator)) {
+		fail(c, http.StatusBadRequest, "invalid_body", "icon escapes the project path")
+		return
+	}
+	switch strings.ToLower(filepath.Ext(full)) {
+	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".avif":
+	default:
+		fail(c, http.StatusBadRequest, "invalid_body", "icon must be an image file")
+		return
+	}
+	c.Header("Cache-Control", "private, max-age=300")
+	c.File(full)
 }
 
 func validForkGate(v string) bool {
@@ -315,8 +354,8 @@ func (s *Server) putProjectSettings(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_body", "invalid JSON body")
 		return
 	}
-	if req.SelfHeal == "" && req.ForkGate == "" && req.PrTrust == "" {
-		fail(c, http.StatusBadRequest, "invalid_body", "self_heal, fork_gate or pr_trust is required")
+	if req.SelfHeal == "" && req.ForkGate == "" && req.PrTrust == "" && req.IconPath == nil {
+		fail(c, http.StatusBadRequest, "invalid_body", "self_heal, fork_gate, pr_trust or icon_path is required")
 		return
 	}
 	writes := map[string]string{}
@@ -348,6 +387,14 @@ func (s *Server) putProjectSettings(c *gin.Context) {
 			return
 		}
 		writes["pr_trust"] = req.PrTrust // "off" restores the sandboxed default
+	}
+	if req.IconPath != nil {
+		v := *req.IconPath
+		if len(v) > 200 || strings.Contains(v, "..") || strings.HasPrefix(v, "/") || strings.ContainsAny(v, "\x00\\") {
+			fail(c, http.StatusBadRequest, "invalid_body", "icon_path must be a repo-relative path")
+			return
+		}
+		writes["icon_path"] = v // empty string clears the icon
 	}
 	for k, v := range writes {
 		if err := s.Store.PutProjectSetting(c.Request.Context(), p.ID, k, v); err != nil {

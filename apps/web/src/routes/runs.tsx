@@ -1,11 +1,12 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useMemo, useState, type ReactNode } from "react";
+import { RotateCcw, X } from "lucide-react";
 import { api } from "../lib/api";
-import type { OverviewResponse, Run, Runner } from "../lib/types";
+import type { Job, OverviewResponse, Run, Runner } from "../lib/types";
 import { PageHeader, Spinner, cn } from "../components/ui";
 import { StatusSq } from "../components/status";
-import { Fingerprint, useRunDetails } from "../components/fingerprint";
+import { Fingerprint, jobHue, useRunDetails } from "../components/fingerprint";
 import { bytes, duration, projectColor, refName, relTime, shortSha } from "../lib/format";
 
 type Tab = "" | "running" | "failed" | "cancelled";
@@ -51,10 +52,7 @@ export function RunsPage() {
 
 	const runs = useMemo(() => data?.runs ?? [], [data]);
 	const branches = useMemo(() => [...new Set(runs.map((r) => refName(r.ref)))].sort(), [runs]);
-	const projects = useMemo(
-		() => [...new Set(runs.map((r) => r.project_slug))].sort(),
-		[runs],
-	);
+	const projects = useMemo(() => [...new Set(runs.map((r) => r.project_slug))].sort(), [runs]);
 	const counts = useMemo(() => TABS.map((t) => runs.filter(t.match).length), [runs]);
 	const match = TABS.find((t) => t.key === tab)?.match ?? TABS[0]!.match;
 	const dayStart = day ? new Date(day).getTime() : null;
@@ -69,9 +67,32 @@ export function RunsPage() {
 	);
 	const details = useRunDetails(visible);
 
+	// day groups: runs land under dated headers like a git log
+	const groups = useMemo(() => {
+		const out: { key: string; label: string; runs: { r: Run; i: number }[] }[] = [];
+		visible.forEach((r, i) => {
+			const d = new Date(r.created_at);
+			const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+			const label = dayLabel(d);
+			if (out[out.length - 1]?.key !== key) out.push({ key, label, runs: [] });
+			out[out.length - 1]!.runs.push({ r, i });
+		});
+		return out;
+	}, [visible]);
+
+	// jobs still parked — surfaces the real queue, not just a count
+	const queuedJobs = useMemo(
+		() =>
+			details
+				.flatMap((d) => d.data?.jobs ?? [])
+				.filter((j) => j.status === "queued" || j.status === "waiting_approval")
+				.sort((a, b) => Date.parse(a.queued_at) - Date.parse(b.queued_at)),
+		[details],
+	);
+
 	return (
 		<>
-			<PageHeader title="Runs" sub="Every push runs on contact" />
+			<PageHeader mark="build" title="Runs" sub="Every push runs on contact" />
 			<div className="grid grid-cols-[1fr_300px] items-start gap-[26px] max-lg:grid-cols-1">
 				<div className="min-w-0">
 					<div className="tabs">
@@ -146,53 +167,28 @@ export function RunsPage() {
 						</div>
 					) : (
 						<>
-							{visible.map((r, i) => {
-								const live = r.status === "in_progress" || r.status === "queued";
-								return (
-									<Link key={r.id} to={`/runs/${r.id}`} className="runrow" data-testid="run-row">
-										<StatusSq status={r.status} conclusion={r.conclusion} />
-										<div className="min-w-0">
-											<div className="truncate text-[13px] font-medium text-[var(--ink)]">
-												<span className="mr-2 font-mono font-normal text-[var(--faint)]">
-													#{r.run_number}
-												</span>
-												{r.commit_message?.split("\n")[0] || r.workflow_name}
-											</div>
-											<div className="mt-[3px] truncate font-mono text-[11px] text-[var(--faint)]">
-												<span style={{ color: projectColor(r.project_slug) }}>
-													{r.project_slug}
-												</span>
-												<i className="mx-1.5 not-italic text-[#3d3d3d]">·</i>
-												{refName(r.ref)}
-												<i className="mx-1.5 not-italic text-[#3d3d3d]">·</i>
-												{shortSha(r.sha)}
-												<i className="mx-1.5 not-italic text-[#3d3d3d]">·</i>
-												{r.event}
-												<i className="mx-1.5 not-italic text-[#3d3d3d]">·</i>
-												{r.actor}
-												<i className="mx-1.5 not-italic text-[#3d3d3d]">·</i>
-												{r.workflow_name}
-											</div>
-										</div>
-										<Fingerprint run={r} jobs={details[i]?.data?.jobs} small className="fp" />
-										<div className="dur text-right font-mono text-xs text-[var(--dim)]">
-											{duration(r.started_at, r.completed_at)}
-											{live && (
-												<small className="block text-[11px] text-[var(--faint)]">elapsed</small>
-											)}
-											{r.conclusion === "failure" && (
-												<small className="block text-[11px] text-[var(--faint)]">failed</small>
-											)}
-											{r.status === "cancelled" && (
-												<small className="block text-[11px] text-[var(--faint)]">cancelled</small>
-											)}
-										</div>
-										<div className="when text-right text-[11px] text-[var(--faint)]">
-											{live ? "now" : relTime(r.created_at)}
-										</div>
-									</Link>
-								);
-							})}
+							{groups.map((g) => (
+								<div key={g.key}>
+									<div className="dayh">
+										<span>{g.label}</span>
+										<span className="dayn">
+											{g.runs.length} run{g.runs.length === 1 ? "" : "s"}
+										</span>
+									</div>
+									{g.runs.map(({ r, i }) => {
+										const live = r.status === "in_progress" || r.status === "queued";
+										return (
+											<RunRow
+												key={r.id}
+												r={r}
+												jobs={details[i]?.data?.jobs}
+												live={live}
+												onOpen={() => nav(`/runs/${r.id}`)}
+											/>
+										);
+									})}
+								</div>
+							))}
 							<div className="flex items-baseline gap-3.5 py-[11px] text-[11px] text-[var(--faint)]">
 								<span>
 									{visible.length} of {data?.total ?? visible.length} runs
@@ -213,26 +209,47 @@ export function RunsPage() {
 				</div>
 
 				<aside className="min-w-0">
-					<SideBlock title="Queue" right={`${overview?.overview.jobs_queued ?? 0} waiting`}>
-						<div className="emptynote flush">
-							{overview?.overview.jobs_queued
-								? `${overview.overview.jobs_queued} job${overview.overview.jobs_queued === 1 ? "" : "s"} waiting for a runner.`
-								: "Queue is clear. A push picks a runner on contact."}
-						</div>
+					<SideBlock title="Queue" right={`${queuedJobs.length || overview?.overview.jobs_queued || 0} waiting`}>
+						{queuedJobs.length === 0 && (
+							<div className="emptynote flush">Queue is clear. A push picks a runner on contact.</div>
+						)}
+						{queuedJobs.slice(0, 5).map((j) => (
+							<Link to={`/runs/${j.run_id}`} className="qrow rowlink" key={j.id}>
+								<i className={`sw pat-${jobHue(j.job_key || j.name)}`} />
+								<div className="min-w-0">
+									<b className="block truncate">{j.name}</b>
+									<small>
+										{j.status === "waiting_approval"
+											? "needs an approval"
+											: j.needs.length
+												? `waits for ${j.needs.join(", ")}`
+												: "waiting for a runner"}
+									</small>
+								</div>
+								<span className="wt">~{mmss(Date.now() - Date.parse(j.queued_at))}</span>
+							</Link>
+						))}
+						{queuedJobs.length > 5 && (
+							<div className="qrow dim">+{queuedJobs.length - 5} more waiting</div>
+						)}
 					</SideBlock>
 					<SideBlock title="Fleet" right={`${runners?.runners.length ?? 0} runners`}>
 						{(runners?.runners ?? []).map((r) => (
 							<div
 								key={r.id}
-								className="fr rowlink cursor-pointer"
-								style={{ padding: "9px 0" }}
+								className="fleetrow rowlink cursor-pointer"
 								onClick={() => nav("/runners")}
 							>
 								<StatusSq status={r.active_jobs ? "in_progress" : r.status} />
-								<span className="rn" style={{ width: "auto" }}>
+								<span className="min-w-0 flex-1 truncate text-[12.5px] font-medium">
 									{r.name}
 								</span>
-								<span className={cn("rs", r.active_jobs ? "busy" : "")}>
+								<span
+									className={cn(
+										"text-[11px]",
+										r.active_jobs ? "font-semibold text-[var(--live)]" : "text-[var(--faint)]",
+									)}
+								>
 									{r.active_jobs
 										? `${r.active_jobs} job${r.active_jobs === 1 ? "" : "s"}`
 										: `idle · ${relTime(r.last_heartbeat_at)}`}
@@ -259,6 +276,121 @@ export function RunsPage() {
 				</aside>
 			</div>
 		</>
+	);
+}
+
+const mmss = (ms: number) =>
+	`${Math.floor(ms / 60000)}:${String(Math.floor((ms % 60000) / 1000)).padStart(2, "0")}`;
+
+function dayLabel(d: Date): string {
+	const day = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+	const today = new Date();
+	today.setHours(0, 0, 0, 0);
+	if (day === today.getTime()) return "Today";
+	if (day === today.getTime() - 86_400_000) return "Yesterday";
+	return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+}
+
+function RunRow({
+	r,
+	jobs,
+	live,
+	onOpen,
+}: {
+	r: Run;
+	jobs?: Job[];
+	live: boolean;
+	onOpen: () => void;
+}) {
+	const qc = useQueryClient();
+	const nav = useNavigate();
+	const rerun = useMutation({
+		mutationFn: () => api.post<{ run: { id: string } }>(`/runs/${r.id}/rerun`),
+		onSuccess: (res) => {
+			qc.invalidateQueries({ queryKey: ["runs"] });
+			if (res.run?.id) nav(`/runs/${res.run.id}`);
+		},
+	});
+	const cancel = useMutation({
+		mutationFn: () => api.post(`/runs/${r.id}/cancel`),
+		onSuccess: () => qc.invalidateQueries({ queryKey: ["runs"] }),
+	});
+	return (
+		<div
+			className="runrow cursor-pointer"
+			data-testid="run-row"
+			role="link"
+			tabIndex={0}
+			onClick={onOpen}
+			onKeyDown={(e) => {
+				if (e.key === "Enter") onOpen();
+			}}
+		>
+			<StatusSq status={r.status} conclusion={r.conclusion} />
+			<div className="min-w-0">
+				<div className="truncate text-[13px] font-medium text-[var(--ink)]">
+					<span className="mr-2 font-mono font-normal text-[var(--faint)]">
+						#{r.run_number}
+					</span>
+					{r.commit_message?.split("\n")[0] || r.workflow_name}
+				</div>
+				<div className="mt-[3px] truncate font-mono text-[11px] text-[var(--faint)]">
+					<Link
+						to={`/projects/${r.project_slug}`}
+						onClick={(e) => e.stopPropagation()}
+						className="lnk"
+						style={{ color: projectColor(r.project_slug) }}
+						title={`Open project ${r.project_name || r.project_slug}`}
+					>
+						{r.project_slug}
+					</Link>
+					<i className="mx-1.5 not-italic text-[#3d3d3d]">·</i>
+					{refName(r.ref)}
+					<i className="mx-1.5 not-italic text-[#3d3d3d]">·</i>
+					{shortSha(r.sha)}
+					<i className="mx-1.5 not-italic text-[#3d3d3d]">·</i>
+					{r.event}
+					<i className="mx-1.5 not-italic text-[#3d3d3d]">·</i>
+					{r.actor}
+					<i className="mx-1.5 not-italic text-[#3d3d3d]">·</i>
+					{r.workflow_name}
+				</div>
+			</div>
+			<Fingerprint run={r} jobs={jobs} small className="fp" />
+			<div className="dur text-right font-mono text-xs text-[var(--dim)]">
+				{duration(r.started_at, r.completed_at)}
+				{live && <small className="block text-[11px] text-[var(--faint)]">elapsed</small>}
+				{r.conclusion === "failure" && (
+					<small className="block text-[11px] text-[var(--faint)]">failed</small>
+				)}
+				{r.status === "cancelled" && (
+					<small className="block text-[11px] text-[var(--faint)]">cancelled</small>
+				)}
+			</div>
+			<div className="when text-right text-[11px] text-[var(--faint)]">
+				{live ? "now" : relTime(r.created_at)}
+			</div>
+			<span className="racts" onClick={(e) => e.stopPropagation()}>
+				<button
+					className="ract"
+					title="Re-run this workflow"
+					disabled={rerun.isPending}
+					onClick={() => rerun.mutate()}
+				>
+					<RotateCcw size={12} />
+				</button>
+				{live && (
+					<button
+						className="ract err"
+						title="Cancel this run"
+						disabled={cancel.isPending}
+						onClick={() => cancel.mutate()}
+					>
+						<X size={12} />
+					</button>
+				)}
+			</span>
+		</div>
 	);
 }
 

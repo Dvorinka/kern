@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
-import { LocateFixed, Pause, Pencil, Plus, Trash2 } from "lucide-react";
+import { Cpu, LocateFixed, Pause, Pencil, Plus, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import type { Runner } from "../lib/types";
-import { Button, Card, EmptyState, Input, PageHeader, Spinner } from "../components/ui";
+import { Button, Card, EmptyState, Input, Spinner } from "../components/ui";
 import { StatusSq } from "../components/status";
 import { CopyButton } from "./settings";
 import { Row } from "../components/layout";
@@ -36,16 +36,25 @@ export function RunnersPage() {
 	});
 
 	return (
-		<>
-			<PageHeader
-				title="Runners"
-				sub="Registered execution agents"
-				actions={
-					<Button size="sm" variant="primary" onClick={() => setEnrolling((e) => !e)}>
+		<div className="page">
+			<div className="mb-6 flex flex-wrap items-end gap-4">
+				<div>
+					<h1 className="big x">
+						{data?.runners.length
+							? `${data.runners.filter((r) => r.status === "online").length} of ${data.runners.length} runners are online.`
+							: "No runners yet."}
+					</h1>
+					<p className="lead">
+						Each square is a job slot — filled with the pattern of the job running in
+						it. Empty squares are free.
+					</p>
+				</div>
+				<div className="ml-auto">
+					<button className="pill solid" onClick={() => setEnrolling((e) => !e)}>
 						<Plus size={13} /> Enroll runner
-					</Button>
-				}
-			/>
+					</button>
+				</div>
+			</div>
 			{enrolling && <EnrollCard onDone={() => setEnrolling(false)} />}
 			<Row>
 				<span className="text-xs text-[var(--dim)]">Self-heal (org):</span>
@@ -66,15 +75,16 @@ export function RunnersPage() {
 			{isLoading ? (
 				<Spinner />
 			) : (
-				<div className="panel">
-					<div className="phead">
-						<span className="pt">Fleet</span>
-						<span className="r">{data?.runners.length ?? 0} registered</span>
-					</div>
+				<div className="fl">
 					{!data || data.runners.length === 0 ? (
-						<EmptyState
+						<EmptyState icon={<Cpu size={19} />}
 							title="No runners"
 							hint="Start `just runner` (or the kern-runner binary) on any host with Docker to register one."
+							action={
+								<Button size="sm" variant="primary" onClick={() => setEnrolling(true)}>
+									<Plus size={12} /> Enroll runner
+								</Button>
+							}
 						/>
 					) : (
 						data.runners.map((r) => {
@@ -89,84 +99,94 @@ export function RunnersPage() {
 									? Math.max(0, Math.round(100 - (r.disk_free_bytes / r.disk_bytes) * 100))
 									: null;
 							return (
-								<div key={r.id} className="border-b border-[var(--line)] px-4 py-3 last:border-0">
-									<div className="flex items-center gap-3">
+								<div key={r.id} className="frow">
+									<div className="fn">
+										<b>{r.name}</b>
+										<small>
+											{r.cpus} cores · {r.arch}
+											{r.hostname ? ` · ${r.hostname}` : ""}
+											{r.geo_city ? ` · ${r.geo_city}` : ""}
+										</small>
+									</div>
+									<div className={`slots ${r.status === "offline" ? "off" : ""}`}>
+										{Array.from({ length: Math.min(8, Math.max(4, r.cpus)) }, (_, i) => (
+											<i key={i} className={busy && i < (r.active_jobs ?? 0) ? "j jr" : busy ? "j" : ""} />
+										))}
+									</div>
+									<div className="ld">
+										<div className="meter">
+											<i style={{ width: `${Math.max(cpu ?? 0, busy ? 4 : 0)}%` }} />
+										</div>
+										<b>{cpu != null ? `${cpu}%` : "—"}</b>
+									</div>
+									<span className="stt">
 										<StatusSq status={busy ? "in_progress" : r.status} />
-										<span className="w-36 min-w-0 truncate font-mono text-xs text-[var(--ink)]">
-											{r.name}
-										</span>
-										<span className="w-28 min-w-0 truncate text-[11px] text-[var(--faint)]">
-											{r.hostname}
-										</span>
-										<span
-											className="min-w-0 flex-1 truncate font-mono text-[11px] text-[var(--faint)]"
-											title={(r.labels ?? []).join(", ")}
-										>
-											{(r.labels ?? []).join(", ")}
-										</span>
-										<span className="w-36 min-w-0 shrink-0 truncate text-[11px] text-[var(--faint)]">
-											{r.geo_city || r.geo_country
-												? `${r.geo_city}${r.geo_city && r.geo_country ? ", " : ""}${r.geo_country}`
-												: "—"}
-										</span>
-										<span className="text-[11px] text-[var(--faint)]">
-											{r.draining ? "draining" : busy ? `${r.active_jobs} job${r.active_jobs === 1 ? "" : "s"}` : "idle"}
-										</span>
-										<span className="w-20 shrink-0 text-right font-mono text-[11px] text-[var(--faint)]">
+										{r.draining
+											? "draining"
+											: busy
+												? `${r.active_jobs} job${r.active_jobs === 1 ? "" : "s"}`
+												: r.status}
+										<span className="font-mono text-[11px] text-[var(--faint)]">
 											{relTime(r.last_heartbeat_at)}
 										</span>
-										<Button
-											size="sm"
-											variant="ghost"
-											title={
-												r.geo_source === "manual"
-													? `manual location — ${r.geo_lat?.toFixed(2)}, ${r.geo_lng?.toFixed(2)}`
-													: r.geo_source === "auto"
-														? `auto location via ${r.geo_ip}`
-														: "no location — edit or wait for a heartbeat"
-											}
-											onClick={() => setGeoEdit((g) => (g === r.id ? null : r.id))}
-										>
-											<Pencil size={13} />
-										</Button>
-										<Button
-											size="sm"
-											variant="ghost"
-											title="Drain (finish current work, take no new jobs)"
-											disabled={r.draining || drain.isPending}
-											onClick={() => drain.mutate(r.id)}
-										>
-											<Pause size={13} />
-										</Button>
-										<Button
-											size="sm"
-											variant="ghost"
-											title="Delete runner"
-											disabled={remove.isPending}
-											onClick={() => {
-												if (confirm(`Delete runner ${r.name}?`)) remove.mutate(r.id);
-											}}
-										>
-											<Trash2 size={13} />
-										</Button>
-									</div>
-									<div className="ml-[23px] mt-2 flex flex-wrap items-center gap-x-8 gap-y-1">
-										<Meter label="cpu" pct={cpu} sub={busy ? `${r.active_jobs} job${r.active_jobs === 1 ? "" : "s"}` : ""} />
-										<Meter label="mem" pct={mem} sub={r.memory_bytes > 0 ? bytes(r.memory_bytes) : ""} />
+									</span>
+									<div className="fx">
+										<Meter
+											label="mem"
+											pct={mem}
+											sub={r.memory_bytes > 0 ? bytes(r.memory_bytes) : ""}
+										/>
 										<Meter
 											label="disk"
 											pct={disk}
 											sub={r.disk_free_bytes != null ? `${bytes(r.disk_free_bytes)} free` : ""}
 										/>
+										<span className="acts2">
+											<button
+												className="pill"
+												title={
+													r.geo_source === "manual"
+														? `manual location — ${r.geo_lat?.toFixed(2)}, ${r.geo_lng?.toFixed(2)}`
+														: r.geo_source === "auto"
+															? `auto location via ${r.geo_ip}`
+															: "no location — edit or wait for a heartbeat"
+												}
+												onClick={() => setGeoEdit((g) => (g === r.id ? null : r.id))}
+											>
+												<Pencil size={12} />
+											</button>
+											<button
+												className="pill"
+												title="Drain (finish current work, take no new jobs)"
+												disabled={r.draining || drain.isPending}
+												onClick={() => drain.mutate(r.id)}
+											>
+												<Pause size={12} />
+											</button>
+											<button
+												className="pill"
+												title="Delete runner"
+												disabled={remove.isPending}
+												onClick={() => {
+													if (confirm(`Delete runner ${r.name}?`)) remove.mutate(r.id);
+												}}
+											>
+												<Trash2 size={12} />
+											</button>
+										</span>
 									</div>
-									{geoEdit === r.id && <GeoEditor runner={r} onDone={() => setGeoEdit(null)} />}
+									{geoEdit === r.id && (
+										<div className="fgeo">
+											<GeoEditor runner={r} onDone={() => setGeoEdit(null)} />
+										</div>
+									)}
 								</div>
 							);
 						})
 					)}
 				</div>
 			)}
-		</>
+		</div>
 	);
 }
 
@@ -211,7 +231,14 @@ function EnrollCard({ onDone }: { onDone: () => void }) {
 			) : (
 				<form onSubmit={submit} className="flex flex-wrap items-center gap-3">
 					<Input name="name" placeholder="runner name" required className="w-48" />
-					<Input name="ttl" type="number" min={1} max={1440} placeholder="ttl minutes (60)" className="w-40" />
+					<Input
+						name="ttl"
+						type="number"
+						min={1}
+						max={1440}
+						placeholder="ttl minutes (60)"
+						className="w-40"
+					/>
 					<Button type="submit" variant="primary" size="sm" disabled={mint.isPending}>
 						Mint token
 					</Button>
@@ -251,10 +278,27 @@ function GeoEditor({ runner, onDone }: { runner: Runner; onDone: () => void }) {
 
 	return (
 		<form onSubmit={submit} className="ml-[23px] mt-2 flex flex-wrap items-center gap-2">
-			<Input name="lat" placeholder="lat" defaultValue={runner.geo_lat ?? ""} className="w-24" required />
-			<Input name="lng" placeholder="lng" defaultValue={runner.geo_lng ?? ""} className="w-24" required />
+			<Input
+				name="lat"
+				placeholder="lat"
+				defaultValue={runner.geo_lat ?? ""}
+				className="w-24"
+				required
+			/>
+			<Input
+				name="lng"
+				placeholder="lng"
+				defaultValue={runner.geo_lng ?? ""}
+				className="w-24"
+				required
+			/>
 			<Input name="city" placeholder="city" defaultValue={runner.geo_city} className="w-32" />
-			<Input name="country" placeholder="country" defaultValue={runner.geo_country} className="w-28" />
+			<Input
+				name="country"
+				placeholder="country"
+				defaultValue={runner.geo_country}
+				className="w-28"
+			/>
 			<Button type="submit" variant="primary" size="sm" disabled={save.isPending}>
 				Save
 			</Button>
@@ -272,7 +316,9 @@ function GeoEditor({ runner, onDone }: { runner: Runner; onDone: () => void }) {
 			</Button>
 			{save.error && <span className="text-xs text-[var(--err)]">{save.error.message}</span>}
 			<span className="text-[10px] text-[var(--faint)]">
-				{runner.geo_source === "auto" && runner.geo_ip ? `auto via ${runner.geo_ip}` : "manual wins over auto"}
+				{runner.geo_source === "auto" && runner.geo_ip
+					? `auto via ${runner.geo_ip}`
+					: "manual wins over auto"}
 			</span>
 		</form>
 	);
