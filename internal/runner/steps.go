@@ -277,7 +277,7 @@ func (e *executor) harvestEnv() {
 		}
 	}
 	if data, err := os.ReadFile(filepath.Join(e.cmdDir(), "PATH_LINES")); err == nil {
-		e.enc.persistPaths(strings.Split(strings.TrimRight(string(data), "\n"), "\n"))
+		e.enc.persistPaths(parsePathLines(string(data)))
 	}
 }
 
@@ -651,12 +651,29 @@ func (b *envBuilder) render(step StepSpec) (string, map[string]string) {
 	return out.String(), extra
 }
 
-// parseKeyValue reads `KEY=value` lines (the file-command format).
+// parseKeyValue reads GitHub file-command content: `KEY=value` lines plus
+// heredoc blocks (`KEY<<DELIM` … `DELIM`). @actions/core ≥1.11 emits the
+// heredoc form for every export, so both shapes must parse or env written by
+// modern node actions (ANDROID_HOME, JAVA_HOME, step outputs, STATE_*) drops
+// silently. Heredoc values keep inner newlines verbatim.
 func parseKeyValue(s string) (map[string]string, error) {
 	out := map[string]string{}
-	for _, line := range strings.Split(s, "\n") {
-		line = strings.TrimSpace(line)
+	lines := strings.Split(s, "\n")
+	for i := 0; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
 		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if key, delim, ok := cutHeredoc(line); ok {
+			var val strings.Builder
+			for i++; i < len(lines); i++ {
+				if strings.TrimRight(lines[i], "\r") == delim {
+					break
+				}
+				val.WriteString(lines[i])
+				val.WriteByte('\n')
+			}
+			out[key] = strings.TrimSuffix(val.String(), "\n")
 			continue
 		}
 		k, v, ok := strings.Cut(line, "=")
@@ -666,6 +683,47 @@ func parseKeyValue(s string) (map[string]string, error) {
 		out[strings.TrimSpace(k)] = v
 	}
 	return out, nil
+}
+
+// cutHeredoc recognises a `KEY<<DELIM` file-command opener. The key must not
+// contain `=` or whitespace so `A=B<<C` still parses as a plain assignment.
+func cutHeredoc(line string) (key, delim string, ok bool) {
+	k, d, found := strings.Cut(line, "<<")
+	if !found {
+		return "", "", false
+	}
+	k, d = strings.TrimSpace(k), strings.TrimSpace(d)
+	if k == "" || d == "" || strings.ContainsAny(k, "= \t") {
+		return "", "", false
+	}
+	return k, d, true
+}
+
+// parsePathLines extracts directories from GITHUB_PATH content: bare lines
+// (`echo "dir" >> $GITHUB_PATH`, and KERN's own persisted entries) plus
+// heredoc blocks emitted by @actions/core addPath.
+func parsePathLines(s string) []string {
+	var out []string
+	lines := strings.Split(s, "\n")
+	for i := 0; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if _, delim, ok := cutHeredoc(line); ok {
+			for i++; i < len(lines); i++ {
+				if strings.TrimRight(lines[i], "\r") == delim {
+					break
+				}
+				if v := strings.TrimSpace(lines[i]); v != "" {
+					out = append(out, v)
+				}
+			}
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
 }
 
 // shellQuote applies minimal POSIX shell quoting to a parameter.
