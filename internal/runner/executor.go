@@ -123,6 +123,10 @@ type executor struct {
 	// KERN-managed. Nil when concurrency > 1 — parallel jobs cannot tell
 	// their own spawns from a sibling's.
 	preJobContainers map[string]bool
+
+	// portReleases frees host-port holds taken by acquireServicePorts;
+	// stopServices runs them once the service containers are gone.
+	portReleases []func()
 }
 
 type stepOutcome struct {
