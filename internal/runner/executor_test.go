@@ -54,6 +54,46 @@ func TestParseKeyValue(t *testing.T) {
 	}
 }
 
+// @actions/core ≥1.11 emits every file command as `KEY<<ghadelimiter_<uuid>`
+// heredoc blocks; both shapes must parse or node-action env/outputs vanish.
+func TestParseKeyValueHeredoc(t *testing.T) {
+	in := "ANDROID_HOME<<ghadelimiter_aaa\n/github/home/.android/sdk\nghadelimiter_aaa\n" +
+		"MULTI<<ghadelimiter_bbb\nline1\nline2=x\nghadelimiter_bbb\n" +
+		"PLAIN=still\n"
+	got, err := parseKeyValue(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"ANDROID_HOME": "/github/home/.android/sdk",
+		"MULTI":        "line1\nline2=x",
+		"PLAIN":        "still",
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("key %q: want %q got %q", k, v, got[k])
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("unexpected keys: %v", got)
+	}
+}
+
+func TestParsePathLines(t *testing.T) {
+	in := "/kern/node/v20.18.1/bin\n" +
+		"PATH<<ghadelimiter_x\n/kern/cache/_toolcache/go/1.26.10/x64/bin\nghadelimiter_x\n" +
+		"/usr/local/custom/bin\n"
+	got := parsePathLines(in)
+	want := []string{
+		"/kern/node/v20.18.1/bin",
+		"/kern/cache/_toolcache/go/1.26.10/x64/bin",
+		"/usr/local/custom/bin",
+	}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
 func TestPathLinesTrailingNewline(t *testing.T) {
 	b := newEnvBuilder(&Claim{}, nil)
 	if got := b.pathLines(); got != "" {
@@ -64,7 +104,8 @@ func TestPathLinesTrailingNewline(t *testing.T) {
 	if got != "/kern/node/v20.18.1/bin\n" {
 		t.Fatalf("%q", got)
 	}
-	// @actions/core addPath appends "<dir>\n" onto this file.
+	// File commands append onto this file (bare lines or PATH<<delim blocks);
+	// a missing trailing newline would glue the next entry onto this path.
 	appended := got + "/kern/cache/_toolcache/go/1.26.10/x64/bin\n"
 	lines := strings.Split(strings.TrimRight(appended, "\n"), "\n")
 	if len(lines) != 2 || lines[0] != "/kern/node/v20.18.1/bin" || lines[1] != "/kern/cache/_toolcache/go/1.26.10/x64/bin" {
