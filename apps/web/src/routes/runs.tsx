@@ -193,15 +193,6 @@ export function RunsPage() {
 									</Link>
 								);
 							})}
-							<div className="runscale">
-								<div className="labs">
-									<span>0</span>
-									<span>2m</span>
-									<span>4m</span>
-									<span>6m</span>
-									<span>8m</span>
-								</div>
-							</div>
 							<div className="flex items-baseline gap-3.5 py-[11px] text-[11px] text-[var(--faint)]">
 								<span>
 									{visible.length} of {data?.total ?? visible.length} runs
