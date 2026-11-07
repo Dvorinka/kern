@@ -199,3 +199,24 @@ func TestJobStatusSoFarAndContext(t *testing.T) {
 		t.Errorf("context missing steps")
 	}
 }
+
+func TestOrphanedContainers(t *testing.T) {
+	pre := map[string]bool{"aaa111": true, "bbb222": true}
+	ps := "aaa111|kern-job-old-1\n" +
+		"ccc333|cal\n" +
+		"ddd444|workspace-postgres-1\n" +
+		"eee555|buildx_buildkit_builder-abc0\n" +
+		"fff666|kern-svc-123-postgres\n" +
+		"ggg777|\n" + // anonymous spawn
+		"hhh888|\n"
+	got := orphanedContainers(pre, ps)
+	want := map[string]bool{"ccc333": true, "ddd444": true, "ggg777": true, "hhh888": true}
+	if len(got) != len(want) {
+		t.Fatalf("orphanedContainers = %v, want %v", got, want)
+	}
+	for _, id := range got {
+		if !want[id] {
+			t.Errorf("unexpected id %s in %v", id, got)
+		}
+	}
+}

@@ -2,7 +2,8 @@ package runner
 
 // Composite action runtime. A `uses: ./path` step reads action.yml from the
 // checked-out workspace; `uses: owner/repo[/path]@ref` is fetched by the
-// runner into the job's actions dir (mounted read-only at /kern/actions).
+// runner into the job's actions dir (mounted at /kern/actions — read-only
+// for sandboxed jobs, writable for trusted ones).
 // runs.using: composite executes its steps inline through the same docker-exec
 // machinery as workflow steps; node*/docker runtimes fail with an explicit
 // diagnostic rather than being skipped.

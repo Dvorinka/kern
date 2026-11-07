@@ -117,6 +117,12 @@ type executor struct {
 	postByKey map[string]*actionHook // dedup between pre-time and main-time arms
 	preDone   map[string]bool        // top-level uses-steps whose pre phase was decided
 	preFailed map[int]string         // step number -> setup/pre failure; main never runs
+
+	// preJobContainers snapshots daemon container IDs before this job's
+	// container is created; cleanup reaps anything new that is not
+	// KERN-managed. Nil when concurrency > 1 — parallel jobs cannot tell
+	// their own spawns from a sibling's.
+	preJobContainers map[string]bool
 }
 
 type stepOutcome struct {
@@ -267,6 +273,9 @@ func (e *executor) imageExists(ctx context.Context, image string) bool {
 
 // startContainer creates and starts the idle job container.
 func (e *executor) startContainer(ctx context.Context) error {
+	if e.cfg.Concurrency <= 1 {
+		e.preJobContainers = containerIDs(ctx)
+	}
 	workRoot := e.workRoot()
 	// GITHUB_EVENT_PATH: third-party actions read github.event.* from this
 	// file. A write failure degrades to today's behaviour (no payload), so
@@ -326,13 +335,21 @@ func (e *executor) startContainer(ctx context.Context) error {
 			e.log.Warn("docker cli seed failed; docker steps will lack the client", zap.Error(serr))
 		}
 	}
+	// GitHub's _actions dir is writable — setup-* actions chmod and copy
+	// files inside their own dir. Keep it read-only for sandboxed jobs so a
+	// fork PR cannot poison the shared action cache; trusted jobs run as
+	// root and get the writable mount.
+	actionsMount := filepath.Join(workRoot, "actions") + ":" + containerActionsDir
+	if !e.privileged() {
+		actionsMount += ":ro"
+	}
 	args = append(args,
 		"--memory", valueOr(e.cfg.JobMemory, "1g"),
 		"--cpus", valueOr(e.cfg.JobCPUs, "1"),
 		"-v", filepath.Join(workRoot, "workspace")+":"+containerWorkspace,
 		"-v", cmdHome+":"+containerCmdDir,
 		"-v", scriptDir+":"+containerScriptDir+":ro",
-		"-v", filepath.Join(workRoot, "actions")+":"+containerActionsDir+":ro",
+		"-v", actionsMount,
 		"-v", filepath.Join(e.cfg.WorkRoot, "_node")+":"+containerNodeRoot+":ro",
 		"-v", cacheDir(e.cfg.WorkRoot)+":"+containerCacheDir,
 		"-v", filepath.Join(workRoot, "home")+":"+containerActionHome,
@@ -574,7 +591,68 @@ func (e *executor) cleanup() {
 	defer cancel()
 	_ = exec.CommandContext(ctx, "docker", "rm", "-f", e.container).Run()
 	e.stopServices(ctx)
+	e.reapOrphanContainers(ctx)
 	_ = os.RemoveAll(e.workRoot())
+}
+
+// containerIDs snapshots every container ID the daemon knows about.
+func containerIDs(ctx context.Context) map[string]bool {
+	out, err := exec.CommandContext(ctx, "docker", "ps", "-aq", "--format", "{{.ID}}").Output()
+	if err != nil {
+		return nil
+	}
+	ids := map[string]bool{}
+	for _, id := range strings.Fields(string(out)) {
+		ids[id] = true
+	}
+	return ids
+}
+
+// reapOrphanContainers removes containers the job spawned through the mounted
+// docker socket (`docker run -d`, `compose up`) once the job ends. GitHub's
+// runners are ephemeral so nothing survives a job; on a persistent fleet a
+// leaked `docker run --name cal -p 8080` squats the name and port for every
+// later run. Only new containers are touched — anything the daemon already
+// knew at job start is left alone — and kern-*/buildx_* names are excluded:
+// the former are KERN-managed, the latter carry build cache.
+// ponytail: orphans leaked before this runner version are not reaped; the
+// upgrade path is a `kern doctor` sweep or a name allowlist.
+func (e *executor) reapOrphanContainers(ctx context.Context) {
+	if e.preJobContainers == nil {
+		return
+	}
+	out, err := exec.CommandContext(ctx, "docker", "ps", "-aq", "--format", "{{.ID}}|{{.Names}}").Output()
+	if err != nil {
+		return
+	}
+	for _, id := range orphanedContainers(e.preJobContainers, string(out)) {
+		if err := exec.CommandContext(ctx, "docker", "rm", "-f", id).Run(); err == nil {
+			e.log.Info("reaped orphan container", zap.String("id", id))
+		}
+	}
+}
+
+// orphanedContainers picks the IDs of containers that appeared after the
+// pre-job snapshot and are not KERN-managed or buildx builders. Input lines
+// are `docker ps --format '{{.ID}}|{{.Names}}'` rows; unnamed containers
+// (empty name) are reaped like any other spawn.
+func orphanedContainers(pre map[string]bool, psOut string) []string {
+	var out []string
+	for _, line := range strings.Split(strings.TrimSpace(psOut), "\n") {
+		id, name, ok := strings.Cut(line, "|")
+		if !ok || id == "" {
+			continue
+		}
+		name = strings.TrimPrefix(strings.TrimSpace(name), "/")
+		if pre[id] {
+			continue
+		}
+		if strings.HasPrefix(name, "kern-") || strings.HasPrefix(name, "buildx_") {
+			continue
+		}
+		out = append(out, id)
+	}
+	return out
 }
 
 // chownTree gives every workspace entry to the job user. Best-effort: a
