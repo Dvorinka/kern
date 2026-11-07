@@ -81,6 +81,10 @@ type ClaimRun struct {
 	BundleRef     string `json:"bundle_ref"`
 	HeadRef       string `json:"head_ref"`
 	HeadSHA       string `json:"head_sha"`
+	// Source carries the webhook extras (pr_number, before, base_ref, …) the
+	// API merged into the run source; CommitMessage feeds head_commit.message.
+	Source        map[string]any `json:"source"`
+	CommitMessage string         `json:"commit_message"`
 }
 
 type StepSpec struct {

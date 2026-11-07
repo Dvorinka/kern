@@ -88,9 +88,18 @@ func (e *executor) startService(ctx context.Context, net string, svc ClaimServic
 		"run", "-d", "--rm",
 		"--name", e.serviceContainerName(svc),
 	}
-	if len(svc.Ports) > 0 {
+	switch {
+	case e.privileged() && len(svc.Ports) > 0:
+		// Host-net job: publish real port mappings on the host's localhost —
+		// the same netns the job sees, so host:container remaps work.
+		for _, p := range svc.Ports {
+			args = append(args, "-p", "127.0.0.1:"+publishSpec(p))
+		}
+	case len(svc.Ports) > 0 || e.privileged():
+		// Localhost-mode service shares the job netns. On host networking
+		// that is the host netns; the job's /etc/hosts entry covers the name.
 		args = append(args, "--network", "container:"+e.container)
-	} else {
+	default:
 		args = append(args, "--network", net, "--network-alias", svc.Name)
 	}
 	args = append(args, svc.Options...) // compile keeps only --health-* flags
@@ -103,6 +112,17 @@ func (e *executor) startService(ctx context.Context, net string, svc ClaimServic
 		return fmt.Errorf("start: %s", tailStr(string(out), 300))
 	}
 	return nil
+}
+
+// publishSpec normalises a workflow `ports:` entry ("5433:5432", "5432",
+// "8080:80/tcp") into docker's host:container publish form.
+func publishSpec(p string) string {
+	p = strings.TrimSuffix(p, "/tcp")
+	p = strings.TrimSuffix(p, "/udp")
+	if i := strings.Index(p, ":"); i >= 0 {
+		return p
+	}
+	return p + ":" + p
 }
 
 // waitServiceHealthy polls until the container reports healthy, or simply
@@ -144,7 +164,7 @@ func (e *executor) stopServices(ctx context.Context) {
 	for _, svc := range e.claim.Job.Services {
 		_ = exec.CommandContext(ctx, "docker", "rm", "-f", e.serviceContainerName(svc)).Run()
 	}
-	if len(e.networkedServices()) > 0 {
+	if len(e.networkedServices()) > 0 && !e.privileged() {
 		_ = exec.CommandContext(ctx, "docker", "network", "rm", e.serviceNet()).Run()
 	}
 }

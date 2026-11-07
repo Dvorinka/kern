@@ -557,6 +557,8 @@ func githubContext(run store.Run, project store.Project, job store.Job) map[stri
 		if sha, ok := src["head_sha"].(string); ok && sha != "" {
 			ctx["head_sha"] = sha
 		}
+		ctx["event"] = workflows.EventPayload(run.Event, run.Ref, run.SHA, run.Actor,
+			run.CommitMessage, project.RepoFullName, project.RepoURL, project.DefaultBranch, src)
 	}
 	if run.Ref == "" {
 		ctx["ref"] = "refs/heads/" + project.DefaultBranch

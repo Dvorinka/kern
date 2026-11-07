@@ -235,6 +235,10 @@ func (s *Server) respondWithClaim(c *gin.Context, claimed *store.ClaimedJob) {
 			"default_branch": claimed.Source["default_branch"], "local_path": claimed.Source["local_path"],
 			"bundle_ref": claimed.Source["bundle_ref"], "head_ref": claimed.Source["head_ref"],
 			"head_sha": claimed.Source["head_sha"],
+			// The full source map feeds the GITHUB_EVENT_PATH payload (PR
+			// numbers, before SHAs, base refs) that third-party actions read.
+			"source":         claimed.Source,
+			"commit_message": claimed.Run.CommitMessage,
 		},
 		"steps":            steps,
 		"secrets":          secretNames,
