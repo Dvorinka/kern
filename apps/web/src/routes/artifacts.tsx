@@ -33,16 +33,27 @@ export function ArtifactsPage() {
 							<Row key={a.id}>
 								<span className="font-mono min-w-0 flex-1 truncate text-[13px]">{a.name}</span>
 								<Link
+									to={`/projects/${a.project_slug}`}
+									className="shrink-0 text-xs text-[var(--faint)] hover:text-[var(--ink)]"
+									title={`Open project ${a.project_slug}`}
+								>
+									{a.project_slug}
+								</Link>
+								<Link
 									to={`/runs/${a.run_id}`}
 									className="shrink-0 text-xs text-[var(--dim)] hover:text-[var(--ink)]"
+									title={`Open run #${a.run_number}`}
 								>
-									{a.project_slug}#{a.run_number}
+									#{a.run_number}
 								</Link>
 								<span className="w-16 shrink-0 text-right text-xs text-[var(--faint)]">
 									{bytes(a.size_bytes)}
 								</span>
-								<span className="w-20 shrink-0 text-right text-xs text-[var(--faint)]">
-									{relTime(a.created_at)}
+								<span
+									className="w-28 shrink-0 text-right text-xs text-[var(--faint)]"
+									title={a.expires_at ? `Expires ${a.expires_at}` : "No expiry"}
+								>
+									{a.expires_at ? `exp ${relTime(a.expires_at)}` : relTime(a.created_at)}
 								</span>
 								<a
 									href={`/api/v1/artifacts/${a.id}/download`}

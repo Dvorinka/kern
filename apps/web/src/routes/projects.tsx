@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, Link } from "react-router-dom";
 import { useState, type FormEvent } from "react";
-import { Play, RefreshCw } from "lucide-react";
+import { Activity, Play, RefreshCw } from "lucide-react";
 import { api } from "../lib/api";
 import { connectGitHubApp } from "../lib/github";
 import type { Project, Workflow } from "../lib/types";
@@ -36,7 +36,9 @@ export function ProjectsPage() {
 						<Button size="sm" onClick={() => connect.mutate()} disabled={connect.isPending}>
 							Connect GitHub
 						</Button>
-						<Button size="sm" variant="primary" onClick={() => setCreating((c) => !c)}>New project</Button>
+						<Button size="sm" variant="primary" onClick={() => setCreating((c) => !c)}>
+							New project
+						</Button>
 					</div>
 				}
 			/>
@@ -57,15 +59,31 @@ export function ProjectsPage() {
 						<EmptyState
 							title="No projects"
 							hint="Create a project with a local_path or repo_url, then sync its .github/workflows."
+							action={
+								<Button size="sm" variant="primary" onClick={() => setCreating(true)}>
+									New project
+								</Button>
+							}
 						/>
 					) : (
 						data.projects.map((p) => (
 							<Row key={p.id} onClick={() => nav(`/projects/${p.slug}`)}>
 								<span className="min-w-0 flex-1 truncate font-medium">{p.name}</span>
 								<span className="text-xs text-[var(--dim)]">{p.slug}</span>
-								<span className="font-mono w-64 truncate text-xs text-[var(--faint)]">
+								<span className="hidden font-mono w-64 truncate text-xs text-[var(--faint)] md:inline">
 									{p.repo_full_name || p.local_path || p.repo_url}
 								</span>
+								<span className="w-20 shrink-0 text-right text-[11px] text-[var(--faint)]">
+									{relTime(p.updated_at)}
+								</span>
+								<Link
+									to={`/runs?project=${p.slug}`}
+									onClick={(e) => e.stopPropagation()}
+									className="shrink-0 rounded p-1.5 text-[var(--faint)] hover:bg-[var(--raise2)] hover:text-[var(--ink)]"
+									title={`Runs for ${p.slug}`}
+								>
+									<Activity size={13} />
+								</Link>
 							</Row>
 						))
 					)}
@@ -156,11 +174,15 @@ export function ProjectDetailPage() {
 				sub={project.repo_full_name || project.local_path || project.repo_url}
 				actions={
 					<>
+						<Button size="sm" onClick={() => nav(`/runs?project=${slug}`)}>
+							<Play size={12} /> Runs
+						</Button>
 						<Button size="sm" onClick={() => nav(`/environments?project=${slug}`)}>
 							Environments
 						</Button>
 						<Button size="sm" onClick={() => sync.mutate()} disabled={sync.isPending}>
-							<RefreshCw size={13} className={sync.isPending ? "animate-spin" : ""} /> Sync workflows
+							<RefreshCw size={13} className={sync.isPending ? "animate-spin" : ""} /> Sync
+							workflows
 						</Button>
 					</>
 				}
@@ -207,23 +229,35 @@ export function ProjectDetailPage() {
 				</div>
 			</Card>
 			{sync.data != null && (
-				<SyncResult result={sync.data as { sha: string; workflows: { path: string; valid: boolean; diagnostics: { level: string; message: string }[] | null }[] }} />
+				<SyncResult
+					result={
+						sync.data as {
+							sha: string;
+							workflows: {
+								path: string;
+								valid: boolean;
+								diagnostics: { level: string; message: string }[] | null;
+							}[];
+						}
+					}
+				/>
 			)}
 			{sync.error && <p className="mb-3 text-xs text-[var(--err)]">{sync.error.message}</p>}
 			<h2 className="mb-2 text-[13px] font-semibold">Workflows</h2>
 			<Card>
 				{workflows.length === 0 ? (
-					<EmptyState title="No workflows" hint="Run sync to discover .github/workflows in the project source." />
+					<EmptyState
+						title="No workflows"
+						hint="Run sync to discover .github/workflows in the project source."
+					/>
 				) : (
 					workflows.map((w) => (
 						<Row key={w.id}>
 							<span className="min-w-0 flex-1 truncate font-medium">{w.name}</span>
-							<span className="font-mono flex-1 truncate text-xs text-[var(--faint)]">{w.path}</span>
-							<Button
-								size="sm"
-								onClick={() => trigger.mutate(w.id)}
-								disabled={trigger.isPending}
-							>
+							<span className="font-mono flex-1 truncate text-xs text-[var(--faint)]">
+								{w.path}
+							</span>
+							<Button size="sm" onClick={() => trigger.mutate(w.id)} disabled={trigger.isPending}>
 								<Play size={12} /> Run
 							</Button>
 						</Row>
@@ -237,7 +271,14 @@ export function ProjectDetailPage() {
 function SyncResult({
 	result,
 }: {
-	result: { sha: string; workflows: { path: string; valid: boolean; diagnostics: { level: string; message: string }[] | null }[] };
+	result: {
+		sha: string;
+		workflows: {
+			path: string;
+			valid: boolean;
+			diagnostics: { level: string; message: string }[] | null;
+		}[];
+	};
 }) {
 	return (
 		<Card className="mb-4 p-4">
@@ -246,7 +287,9 @@ function SyncResult({
 			</div>
 			{result.workflows.map((w) => (
 				<div key={w.path} className="text-xs">
-					<span className={w.valid ? "text-[var(--ok)]" : "text-[var(--err)]"}>{w.valid ? "valid" : "invalid"}</span>
+					<span className={w.valid ? "text-[var(--ok)]" : "text-[var(--err)]"}>
+						{w.valid ? "valid" : "invalid"}
+					</span>
 					<span className="font-mono ml-2 text-[var(--dim)]">{w.path}</span>
 					{(w.diagnostics ?? []).map((d, i) => (
 						<div key={i} className="ml-4 text-[var(--warn)]">

@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useMemo, useState } from "react";
 import { api } from "../lib/api";
 import type { UsageResponse } from "../lib/types";
@@ -30,8 +30,7 @@ export function UsagePage() {
 
 	const u = data?.usage;
 	const t = u?.totals;
-	const successRate =
-		t && t.runs > 0 ? `${Math.round((t.runs_success / t.runs) * 100)}%` : "—";
+	const successRate = t && t.runs > 0 ? `${Math.round((t.runs_success / t.runs) * 100)}%` : "—";
 
 	const kpis = t
 		? [
@@ -67,11 +66,7 @@ export function UsagePage() {
 				actions={
 					<div className="tabs" style={{ border: 0 }}>
 						{WINDOWS.map((w) => (
-							<button
-								key={w}
-								className={w === days ? "on" : ""}
-								onClick={() => setDays(w)}
-							>
+							<button key={w} className={w === days ? "on" : ""} onClick={() => setDays(w)}>
 								{w}d
 							</button>
 						))}
@@ -100,6 +95,11 @@ export function UsagePage() {
 							<CardHeader
 								title="Failure causes"
 								sub="failed steps by diagnosis kind — which workflow line keeps breaking"
+								actions={
+									<Link to="/runs?tab=failed" className="lnk text-xs">
+										failed runs
+									</Link>
+								}
 							/>
 							<table className="tbl">
 								<thead>
@@ -195,10 +195,11 @@ export function UsagePage() {
 }
 
 function MinutesChart({ u, days }: { u: UsageResponse["usage"]; days: number }) {
+	const nav = useNavigate();
 	// Backfill days the fleet was idle so the axis reads as a real calendar.
 	const buckets = useMemo(() => {
 		const byDate = new Map(u.days.map((d) => [d.date.slice(0, 10), d]));
-		const out: { label: string; mins: number; failed: number; today: boolean }[] = [];
+		const out: { label: string; date: string; mins: number; failed: number; today: boolean }[] = [];
 		for (let i = days - 1; i >= 0; i--) {
 			const d = new Date();
 			d.setDate(d.getDate() - i);
@@ -206,6 +207,7 @@ function MinutesChart({ u, days }: { u: UsageResponse["usage"]; days: number }) 
 			const row = byDate.get(key);
 			out.push({
 				label: d.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+				date: key,
 				mins: row?.billable_minutes ?? 0,
 				failed: row?.failed_jobs ?? 0,
 				today: i === 0,
@@ -234,7 +236,18 @@ function MinutesChart({ u, days }: { u: UsageResponse["usage"]; days: number }) 
 				</div>
 				{!any && <div className="empty-lbl">No completed jobs in this window.</div>}
 				{buckets.map((b, i) => (
-					<div className={`col${b.today ? " today" : ""}`} key={i}>
+					<div
+						className={`col${b.today ? " today" : ""}`}
+						key={i}
+						role="link"
+						tabIndex={0}
+						style={{ cursor: "pointer" }}
+						title={`${b.label} · ${b.mins} billed min — open runs for ${b.date}`}
+						onClick={() => nav(`/runs?day=${b.date}`)}
+						onKeyDown={(e) => {
+							if (e.key === "Enter") nav(`/runs?day=${b.date}`);
+						}}
+					>
 						<div
 							className="b"
 							style={{ height: `${(b.mins / yMax) * 100}%` }}

@@ -75,6 +75,11 @@ export function RunnersPage() {
 						<EmptyState
 							title="No runners"
 							hint="Start `just runner` (or the kern-runner binary) on any host with Docker to register one."
+							action={
+								<Button size="sm" variant="primary" onClick={() => setEnrolling(true)}>
+									<Plus size={12} /> Enroll runner
+								</Button>
+							}
 						/>
 					) : (
 						data.runners.map((r) => {
@@ -110,7 +115,11 @@ export function RunnersPage() {
 												: "—"}
 										</span>
 										<span className="text-[11px] text-[var(--faint)]">
-											{r.draining ? "draining" : busy ? `${r.active_jobs} job${r.active_jobs === 1 ? "" : "s"}` : "idle"}
+											{r.draining
+												? "draining"
+												: busy
+													? `${r.active_jobs} job${r.active_jobs === 1 ? "" : "s"}`
+													: "idle"}
 										</span>
 										<span className="w-20 shrink-0 text-right font-mono text-[11px] text-[var(--faint)]">
 											{relTime(r.last_heartbeat_at)}
@@ -151,8 +160,16 @@ export function RunnersPage() {
 										</Button>
 									</div>
 									<div className="ml-[23px] mt-2 flex flex-wrap items-center gap-x-8 gap-y-1">
-										<Meter label="cpu" pct={cpu} sub={busy ? `${r.active_jobs} job${r.active_jobs === 1 ? "" : "s"}` : ""} />
-										<Meter label="mem" pct={mem} sub={r.memory_bytes > 0 ? bytes(r.memory_bytes) : ""} />
+										<Meter
+											label="cpu"
+											pct={cpu}
+											sub={busy ? `${r.active_jobs} job${r.active_jobs === 1 ? "" : "s"}` : ""}
+										/>
+										<Meter
+											label="mem"
+											pct={mem}
+											sub={r.memory_bytes > 0 ? bytes(r.memory_bytes) : ""}
+										/>
 										<Meter
 											label="disk"
 											pct={disk}
@@ -211,7 +228,14 @@ function EnrollCard({ onDone }: { onDone: () => void }) {
 			) : (
 				<form onSubmit={submit} className="flex flex-wrap items-center gap-3">
 					<Input name="name" placeholder="runner name" required className="w-48" />
-					<Input name="ttl" type="number" min={1} max={1440} placeholder="ttl minutes (60)" className="w-40" />
+					<Input
+						name="ttl"
+						type="number"
+						min={1}
+						max={1440}
+						placeholder="ttl minutes (60)"
+						className="w-40"
+					/>
 					<Button type="submit" variant="primary" size="sm" disabled={mint.isPending}>
 						Mint token
 					</Button>
@@ -251,10 +275,27 @@ function GeoEditor({ runner, onDone }: { runner: Runner; onDone: () => void }) {
 
 	return (
 		<form onSubmit={submit} className="ml-[23px] mt-2 flex flex-wrap items-center gap-2">
-			<Input name="lat" placeholder="lat" defaultValue={runner.geo_lat ?? ""} className="w-24" required />
-			<Input name="lng" placeholder="lng" defaultValue={runner.geo_lng ?? ""} className="w-24" required />
+			<Input
+				name="lat"
+				placeholder="lat"
+				defaultValue={runner.geo_lat ?? ""}
+				className="w-24"
+				required
+			/>
+			<Input
+				name="lng"
+				placeholder="lng"
+				defaultValue={runner.geo_lng ?? ""}
+				className="w-24"
+				required
+			/>
 			<Input name="city" placeholder="city" defaultValue={runner.geo_city} className="w-32" />
-			<Input name="country" placeholder="country" defaultValue={runner.geo_country} className="w-28" />
+			<Input
+				name="country"
+				placeholder="country"
+				defaultValue={runner.geo_country}
+				className="w-28"
+			/>
 			<Button type="submit" variant="primary" size="sm" disabled={save.isPending}>
 				Save
 			</Button>
@@ -272,7 +313,9 @@ function GeoEditor({ runner, onDone }: { runner: Runner; onDone: () => void }) {
 			</Button>
 			{save.error && <span className="text-xs text-[var(--err)]">{save.error.message}</span>}
 			<span className="text-[10px] text-[var(--faint)]">
-				{runner.geo_source === "auto" && runner.geo_ip ? `auto via ${runner.geo_ip}` : "manual wins over auto"}
+				{runner.geo_source === "auto" && runner.geo_ip
+					? `auto via ${runner.geo_ip}`
+					: "manual wins over auto"}
 			</span>
 		</form>
 	);

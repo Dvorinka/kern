@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { useState } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
@@ -16,6 +16,7 @@ import { bytes, duration, refName, shortSha } from "../lib/format";
 
 export function RunDetailPage() {
 	const { id } = useParams<{ id: string }>();
+	const nav = useNavigate();
 	const qc = useQueryClient();
 	const { data, isLoading } = useQuery({
 		queryKey: ["run", id],
@@ -61,7 +62,14 @@ export function RunDetailPage() {
 				sub={
 					<div className="flex flex-wrap items-baseline gap-x-3.5">
 						<span>
-							{run.workflow_name} ·{" "}
+							<Link
+								to={`/projects/${run.project_slug}`}
+								className="lnk"
+								title={`Open project ${run.project_name || run.project_slug}`}
+							>
+								{run.project_name || run.project_slug}
+							</Link>{" "}
+							· {run.workflow_name} ·{" "}
 							<b className="font-medium text-[var(--ink)]">#{run.run_number}</b>
 						</span>
 						<span className="font-mono">{refName(run.ref)}</span>
@@ -72,12 +80,22 @@ export function RunDetailPage() {
 						<span>
 							{run.event} by {run.actor}
 						</span>
+						<Link
+							to={`/runs?project=${run.project_slug}`}
+							className="lnk"
+							title="All runs for this project"
+						>
+							project runs
+						</Link>
 						<span>started {new Date(run.started_at ?? run.created_at).toLocaleTimeString()}</span>
 					</div>
 				}
 				actions={
 					<>
 						<StatusPill status={run.status} conclusion={run.conclusion} className="normal-case" />
+						<Button size="sm" variant="ghost" onClick={() => nav(`/projects/${run.project_slug}`)}>
+							Project
+						</Button>
 						{run.status === "awaiting_approval" && (
 							<Button
 								variant="primary"
@@ -114,11 +132,20 @@ export function RunDetailPage() {
 				jobs={jobs}
 				onDone={() => qc.invalidateQueries({ queryKey: ["run", id] })}
 			/>
-			<RunGantt run={run} jobs={jobs} runners={runnerNames} />
+			<RunGantt
+				run={run}
+				jobs={jobs}
+				runners={runnerNames}
+				onPickJob={(jid) => {
+					setJobId(jid);
+					setStepN(null);
+				}}
+			/>
 			{job && (
 				<StepsPanel
 					jobs={jobs}
 					job={job}
+					projectSlug={run.project_slug}
 					onPickJob={setJobId}
 					stepN={stepN}
 					onPickStep={setStepN}
@@ -133,6 +160,7 @@ export function RunDetailPage() {
 function StepsPanel({
 	jobs,
 	job,
+	projectSlug,
 	onPickJob,
 	stepN,
 	onPickStep,
@@ -140,6 +168,7 @@ function StepsPanel({
 }: {
 	jobs: Job[];
 	job: Job;
+	projectSlug: string;
 	onPickJob: (id: string) => void;
 	stepN: number | null;
 	onPickStep: (n: number | null) => void;
@@ -155,7 +184,18 @@ function StepsPanel({
 			<div className="phead">
 				<span className="pt">
 					Steps · {job.name}
-					{job.environment ? ` · ${job.environment}` : ""}
+					{job.environment && (
+						<>
+							{" · "}
+							<Link
+								to={`/environments?project=${projectSlug}`}
+								className="lnk"
+								title="Open environments for this project"
+							>
+								{job.environment}
+							</Link>
+						</>
+					)}
 				</span>
 				{jobs.length > 1 && (
 					<span className="flex gap-3">
@@ -192,7 +232,9 @@ function StepsPanel({
 				<div className="slist">
 					{steps.length === 0 && (
 						<div className="px-4 py-3 text-[11px] text-[var(--faint)]">
-							{job.status === "waiting_approval" ? "Waiting for deployment approval." : "No steps yet."}
+							{job.status === "waiting_approval"
+								? "Waiting for deployment approval."
+								: "No steps yet."}
 						</div>
 					)}
 					{steps.map((s) => (
@@ -370,21 +412,38 @@ function ApprovalGate({
 				<span className="r">{pending.length} waiting</span>
 			</div>
 			{pending.map((d) => (
-				<ApprovalRow key={d.id} d={d} email={user?.email ?? ""} role={user?.role ?? ""} onDone={onDone} />
+				<ApprovalRow
+					key={d.id}
+					d={d}
+					email={user?.email ?? ""}
+					role={user?.role ?? ""}
+					onDone={onDone}
+				/>
 			))}
 		</div>
 	);
 }
 
-function ApprovalRow({ d, email, role, onDone }: { d: Deployment; email: string; role: string; onDone: () => void }) {
+function ApprovalRow({
+	d,
+	email,
+	role,
+	onDone,
+}: {
+	d: Deployment;
+	email: string;
+	role: string;
+	onDone: () => void;
+}) {
 	const qc = useQueryClient();
 	const approvals = d.approvals ?? [];
 	const mine = approvals.some((a) => a.email === email);
 	const list = d.reviewer_emails ?? [];
 	const allowed = role === "owner" || role === "admin" || list.length === 0 || list.includes(email);
-	const timer = d.wait_until && new Date(d.wait_until).getTime() > Date.now()
-		? `wait ${Math.max(1, Math.round((new Date(d.wait_until).getTime() - Date.now()) / 60000))}m`
-		: "";
+	const timer =
+		d.wait_until && new Date(d.wait_until).getTime() > Date.now()
+			? `wait ${Math.max(1, Math.round((new Date(d.wait_until).getTime() - Date.now()) / 60000))}m`
+			: "";
 	const act = useMutation({
 		mutationFn: (op: "approve" | "reject") => api.post(`/jobs/${d.job_id}/${op}`),
 		onSuccess: () => {
@@ -412,7 +471,12 @@ function ApprovalRow({ d, email, role, onDone }: { d: Deployment; email: string;
 						>
 							{mine ? "Approved" : "Approve"}
 						</Button>
-						<Button size="sm" variant="danger" disabled={act.isPending} onClick={() => act.mutate("reject")}>
+						<Button
+							size="sm"
+							variant="danger"
+							disabled={act.isPending}
+							onClick={() => act.mutate("reject")}
+						>
 							Reject
 						</Button>
 					</>

@@ -5,6 +5,7 @@ import { api } from "../lib/api";
 import type { WebhookDelivery } from "../lib/types";
 import { Card, EmptyState, PageHeader, Spinner, cn } from "../components/ui";
 import { StatusSq } from "../components/status";
+import { CopyButton } from "./settings";
 import { relTime } from "../lib/format";
 
 export function DeliveriesPage() {
@@ -43,7 +44,9 @@ function DeliveryRow({ d }: { d: WebhookDelivery }) {
 		enabled: open,
 	});
 	return (
-		<div className={cn("border-b border-[var(--line)] last:border-0", open && "bg-[var(--raise2)]/50")}>
+		<div
+			className={cn("border-b border-[var(--line)] last:border-0", open && "bg-[var(--raise2)]/50")}
+		>
 			<button
 				onClick={() => setOpen((o) => !o)}
 				className="flex w-full cursor-pointer items-center gap-3 px-4 py-2 text-left hover:bg-[var(--raise2)]"
@@ -74,11 +77,25 @@ function DeliveryRow({ d }: { d: WebhookDelivery }) {
 				</span>
 			</button>
 			{open && (
-				<pre className="max-h-96 overflow-auto border-t border-[var(--line)] px-4 py-3 font-mono text-[11px] leading-relaxed text-[var(--dim)]">
-					{detail?.delivery.payload
-						? JSON.stringify(detail.delivery.payload, null, 2)
-						: "Loading payload…"}
-				</pre>
+				<div className="border-t border-[var(--line)]">
+					<div className="flex items-center gap-3 px-4 py-1.5 text-[11px] text-[var(--faint)]">
+						<span>
+							{d.processed_at ? `processed ${relTime(d.processed_at)}` : "not yet processed"}
+							{d.provider ? ` · ${d.provider}` : ""}
+						</span>
+						{detail?.delivery.payload && (
+							<span className="ml-auto flex items-center gap-1">
+								Copy JSON
+								<CopyButton text={JSON.stringify(detail.delivery.payload, null, 2)} />
+							</span>
+						)}
+					</div>
+					<pre className="max-h-96 overflow-auto px-4 pb-3 font-mono text-[11px] leading-relaxed text-[var(--dim)]">
+						{detail?.delivery.payload
+							? JSON.stringify(detail.delivery.payload, null, 2)
+							: "Loading payload…"}
+					</pre>
+				</div>
 			)}
 		</div>
 	);

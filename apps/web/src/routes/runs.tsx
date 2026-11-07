@@ -51,10 +51,7 @@ export function RunsPage() {
 
 	const runs = useMemo(() => data?.runs ?? [], [data]);
 	const branches = useMemo(() => [...new Set(runs.map((r) => refName(r.ref)))].sort(), [runs]);
-	const projects = useMemo(
-		() => [...new Set(runs.map((r) => r.project_slug))].sort(),
-		[runs],
-	);
+	const projects = useMemo(() => [...new Set(runs.map((r) => r.project_slug))].sort(), [runs]);
 	const counts = useMemo(() => TABS.map((t) => runs.filter(t.match).length), [runs]);
 	const match = TABS.find((t) => t.key === tab)?.match ?? TABS[0]!.match;
 	const dayStart = day ? new Date(day).getTime() : null;
@@ -149,7 +146,17 @@ export function RunsPage() {
 							{visible.map((r, i) => {
 								const live = r.status === "in_progress" || r.status === "queued";
 								return (
-									<Link key={r.id} to={`/runs/${r.id}`} className="runrow" data-testid="run-row">
+									<div
+										key={r.id}
+										className="runrow cursor-pointer"
+										data-testid="run-row"
+										role="link"
+										tabIndex={0}
+										onClick={() => nav(`/runs/${r.id}`)}
+										onKeyDown={(e) => {
+											if (e.key === "Enter") nav(`/runs/${r.id}`);
+										}}
+									>
 										<StatusSq status={r.status} conclusion={r.conclusion} />
 										<div className="min-w-0">
 											<div className="truncate text-[13px] font-medium text-[var(--ink)]">
@@ -159,9 +166,15 @@ export function RunsPage() {
 												{r.commit_message?.split("\n")[0] || r.workflow_name}
 											</div>
 											<div className="mt-[3px] truncate font-mono text-[11px] text-[var(--faint)]">
-												<span style={{ color: projectColor(r.project_slug) }}>
+												<Link
+													to={`/projects/${r.project_slug}`}
+													onClick={(e) => e.stopPropagation()}
+													className="lnk"
+													style={{ color: projectColor(r.project_slug) }}
+													title={`Open project ${r.project_name || r.project_slug}`}
+												>
 													{r.project_slug}
-												</span>
+												</Link>
 												<i className="mx-1.5 not-italic text-[#3d3d3d]">·</i>
 												{refName(r.ref)}
 												<i className="mx-1.5 not-italic text-[#3d3d3d]">·</i>
@@ -190,7 +203,7 @@ export function RunsPage() {
 										<div className="when text-right text-[11px] text-[var(--faint)]">
 											{live ? "now" : relTime(r.created_at)}
 										</div>
-									</Link>
+									</div>
 								);
 							})}
 							<div className="flex items-baseline gap-3.5 py-[11px] text-[11px] text-[var(--faint)]">

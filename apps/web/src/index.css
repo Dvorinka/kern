@@ -1079,7 +1079,7 @@ input:focus-visible {
 }
 
 /* Run list. The fingerprint stays on the shared 8m axis. On a phone the
-   bar drops to its own row so the fixed columns do not overflow. */
+	 bar drops to its own row so the fixed columns do not overflow. */
 .runrow {
 	display: grid;
 	grid-template-columns: 20px minmax(0, 1fr) 150px 90px 60px;
@@ -1264,7 +1264,9 @@ input:focus-visible {
 	color: var(--faint);
 	cursor: pointer;
 	background: none;
-	transition: color 0.12s, border-color 0.12s;
+	transition:
+		color 0.12s,
+		border-color 0.12s;
 }
 .nbell:hover {
 	color: var(--ink);
@@ -1333,6 +1335,30 @@ input:focus-visible {
 	display: flex;
 	align-items: center;
 	gap: 6px;
+}
+
+/* ── sidebar nav badges — attention counts beside the item, not a banner ── */
+.nbadge {
+	margin-left: auto;
+	min-width: 16px;
+	height: 15px;
+	padding: 0 5px;
+	border-radius: 999px;
+	background: var(--raise2);
+	color: var(--dim);
+	font-family: var(--mono);
+	font-size: 9.5px;
+	font-weight: 600;
+	display: inline-grid;
+	place-items: center;
+}
+.nbadge.warn {
+	background: color-mix(in srgb, var(--warn) 18%, transparent);
+	color: var(--warn);
+}
+.nbadge.err {
+	background: color-mix(in srgb, var(--err) 16%, transparent);
+	color: var(--err);
 }
 
 /* ── update affordance — the sidebar version earns a dot, not a banner ── */
@@ -1699,4 +1725,15 @@ input:focus-visible {
 	letter-spacing: 0.06em;
 	text-transform: uppercase;
 	color: var(--faint);
+}
+
+/* ── gantt drill-down — lanes and segments select their job's steps ── */
+.lnames .ln.pick {
+	cursor: pointer;
+}
+.lnames .ln.pick:hover {
+	color: var(--ink);
+}
+.seg.pick {
+	cursor: pointer;
 }

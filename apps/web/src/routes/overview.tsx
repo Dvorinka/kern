@@ -43,7 +43,10 @@ export function OverviewPage() {
 	// the live run earns its own slot in the detail fan-out — it is not
 	// necessarily inside the recent-six window
 	const detailRuns = useMemo(
-		() => (liveRun && !runs.slice(0, 6).includes(liveRun) ? [liveRun, ...runs.slice(0, 5)] : runs.slice(0, 6)),
+		() =>
+			liveRun && !runs.slice(0, 6).includes(liveRun)
+				? [liveRun, ...runs.slice(0, 5)]
+				: runs.slice(0, 6),
 		[runs, liveRun],
 	);
 	const recent = detailRuns.slice(0, 6);
@@ -103,7 +106,13 @@ export function OverviewPage() {
 			cls: "fl",
 			to: "/runners",
 		},
-		{ k: "Cache", v: String(data.cache.entries), c: bytes(data.cache.bytes), cls: "fl", to: "/cache" },
+		{
+			k: "Cache",
+			v: String(data.cache.entries),
+			c: bytes(data.cache.bytes),
+			cls: "fl",
+			to: "/cache",
+		},
 	];
 
 	return (
@@ -164,7 +173,7 @@ export function OverviewPage() {
 						<span className="font-medium text-[var(--err)]">
 							{data.webhooks!.failed_24h} webhook{data.webhooks!.failed_24h === 1 ? "" : "s"}
 						</span>{" "}
-					failed in the last 24h — pushes may not have become runs.
+						failed in the last 24h — pushes may not have become runs.
 						{data.webhooks!.last_error && (
 							<span className="block truncate font-mono text-[11px] text-[var(--faint)]">
 								{data.webhooks!.last_error}
@@ -238,13 +247,11 @@ export function OverviewPage() {
 					)}
 					{o.jobs_queued ? (
 						<Link className="emptynote rowlink block" to="/runs?tab=running">
-							{o.jobs_queued} job{o.jobs_queued === 1 ? "" : "s"} queued for a runner —
-							click to watch.
+							{o.jobs_queued} job{o.jobs_queued === 1 ? "" : "s"} queued for a runner — click to
+							watch.
 						</Link>
 					) : (
-						<div className="emptynote">
-							Queue is clear. A push picks a runner on contact.
-						</div>
+						<div className="emptynote">Queue is clear. A push picks a runner on contact.</div>
 					)}
 				</div>
 				{fleetMap && (
@@ -293,28 +300,35 @@ export function OverviewPage() {
 					{recent.map((r, i) => {
 						const live = r.status === "in_progress" || r.status === "queued";
 						return (
-							<Link
+							<div
 								key={r.id}
-								to={`/runs/${r.id}`}
-								className="rowlink grid grid-cols-[14px_44px_minmax(0,1fr)_84px_76px_52px] items-center gap-3 border-b border-[var(--line)] px-4 py-[9px] last:border-0"
+								role="link"
+								tabIndex={0}
+								onClick={() => nav(`/runs/${r.id}`)}
+								onKeyDown={(e) => {
+									if (e.key === "Enter") nav(`/runs/${r.id}`);
+								}}
+								className="rowlink cursor-pointer grid grid-cols-[14px_44px_minmax(0,1fr)_84px_76px_52px] items-center gap-3 border-b border-[var(--line)] px-4 py-[9px] last:border-0"
 							>
 								<StatusSq status={r.status} conclusion={r.conclusion} />
 								<span className="font-mono text-xs text-[var(--faint)]">#{r.run_number}</span>
 								<Fingerprint run={r} jobs={details[i]?.data?.jobs} small />
-								<span
-									className="truncate text-right font-mono text-[10px]"
+								<Link
+									to={`/projects/${r.project_slug}`}
+									onClick={(e) => e.stopPropagation()}
+									className="lnk truncate text-right font-mono text-[10px]"
 									style={{ color: projectColor(r.project_slug) }}
-									title={r.project_name}
+									title={`Open project ${r.project_name || r.project_slug}`}
 								>
 									{r.project_slug}
-								</span>
+								</Link>
 								<span className="text-right font-mono text-xs text-[var(--dim)]">
 									{duration(r.started_at, r.completed_at)}
 								</span>
 								<span className="text-right text-[11px] text-[var(--faint)]">
 									{live ? "now" : relTime(r.created_at)}
 								</span>
-							</Link>
+							</div>
 						);
 					})}
 				</div>
@@ -346,5 +360,3 @@ export function OverviewPage() {
 		</>
 	);
 }
-
-

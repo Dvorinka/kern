@@ -98,16 +98,19 @@ export function EmptyState({
 	icon,
 	title,
 	hint,
+	action,
 }: {
 	icon?: ReactNode;
 	title: string;
 	hint?: string;
+	action?: ReactNode;
 }) {
 	return (
 		<div className="emptynote" style={{ margin: "14px 16px" }}>
 			{icon}
 			{title}
 			{hint ? ` — ${hint}` : ""}
+			{action && <div className="mt-2">{action}</div>}
 		</div>
 	);
 }

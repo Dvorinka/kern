@@ -1,17 +1,30 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { Check, Copy, PlugZap, RefreshCw, Trash2 } from "lucide-react";
+import { Link } from "react-router-dom";
 import { api } from "../lib/api";
 import { connectGitHubApp } from "../lib/github";
 import type { APIToken, AuditEvent, Member, UpdateInfo } from "../lib/types";
-import { Button, Card, CardHeader, EmptyState, Input, KV, PageHeader, Spinner } from "../components/ui";
+import {
+	Button,
+	Card,
+	CardHeader,
+	EmptyState,
+	Input,
+	KV,
+	PageHeader,
+	Spinner,
+} from "../components/ui";
 import { Row } from "../components/layout";
 import { relTime } from "../lib/format";
 
 export function SettingsPage() {
 	return (
 		<>
-			<PageHeader title="Settings" sub="Access tokens, automation policy, and instance information" />
+			<PageHeader
+				title="Settings"
+				sub="Access tokens, automation policy, and instance information"
+			/>
 			<GitHubCard />
 			<PublicCICard />
 			<SelfHealCard />
@@ -26,16 +39,20 @@ export function SettingsPage() {
 	);
 }
 
-type GitHubAppRow = { id: string; slug: string; name: string; html_url: string; created_at: string };
+type GitHubAppRow = {
+	id: string;
+	slug: string;
+	name: string;
+	html_url: string;
+	created_at: string;
+};
 
 function GitHubCard() {
 	const qc = useQueryClient();
 	const { data, isLoading } = useQuery({
 		queryKey: ["github-app"],
 		queryFn: () =>
-			api.get<{ env_app: { app_id: string } | null; apps: GitHubAppRow[] }>(
-				"/github-app/status",
-			),
+			api.get<{ env_app: { app_id: string } | null; apps: GitHubAppRow[] }>("/github-app/status"),
 	});
 	const connect = useMutation({ mutationFn: connectGitHubApp });
 	const disconnect = useMutation({
@@ -65,8 +82,8 @@ function GitHubCard() {
 				<Spinner />
 			) : !connected ? (
 				<div className="px-4 py-3 text-xs text-[var(--dim)]">
-					No GitHub app connected. Connect one to link repositories — GitHub walks you through
-					app creation and installation.
+					No GitHub app connected. Connect one to link repositories — GitHub walks you through app
+					creation and installation.
 				</div>
 			) : (
 				<>
@@ -130,7 +147,8 @@ function PublicCICard() {
 			<CardHeader title="Public runs" />
 			<Row>
 				<span className="min-w-0 flex-1 text-xs text-[var(--dim)]">
-					GitHub check links open without a login. Status, jobs, and step names only. Logs stay private.
+					GitHub check links open without a login. Status, jobs, and step names only. Logs stay
+					private.
 				</span>
 				<select
 					className="fsel"
@@ -172,9 +190,9 @@ function SelfHealCard() {
 			<Row>
 				<span className="min-w-0 flex-1 text-xs text-[var(--dim)]">
 					<b className="font-medium text-[var(--ink)]">off</b> diagnoses only ·{" "}
-					<b className="font-medium text-[var(--ink)]">approve</b> queues the fix for your
-					approval in the bell menu · <b className="font-medium text-[var(--ink)]">auto</b>{" "}
-					applies the allow-listed fix and retries once.
+					<b className="font-medium text-[var(--ink)]">approve</b> queues the fix for your approval
+					in the bell menu · <b className="font-medium text-[var(--ink)]">auto</b> applies the
+					allow-listed fix and retries once.
 				</span>
 				<select
 					className="fsel"
@@ -199,7 +217,8 @@ function AutoUpdateCard() {
 	const qc = useQueryClient();
 	const { data } = useQuery({
 		queryKey: ["settings"],
-		queryFn: () => api.get<{ self_heal: string; public_ci: string; auto_update: string }>("/settings"),
+		queryFn: () =>
+			api.get<{ self_heal: string; public_ci: string; auto_update: string }>("/settings"),
 	});
 	const setAuto = useMutation({
 		mutationFn: (v: string) => api.put("/settings", { auto_update: v }),
@@ -216,9 +235,10 @@ function AutoUpdateCard() {
 			/>
 			<Row>
 				<span className="min-w-0 flex-1 text-xs text-[var(--dim)]">
-					When on, the host updater fast-forwards the checkout and rebuilds the API. The API
-					process cannot replace its own container. Runners with <span className="font-mono">KERN_RUNNER_UPDATE=1</span> pull
-					the signed image and replace themselves, one at a time. An unsigned release is shown and not applied.
+					When on, the host updater fast-forwards the checkout and rebuilds the API. The API process
+					cannot replace its own container. Runners with{" "}
+					<span className="font-mono">KERN_RUNNER_UPDATE=1</span> pull the signed image and replace
+					themselves, one at a time. An unsigned release is shown and not applied.
 				</span>
 				<select
 					className="fsel"
@@ -255,7 +275,12 @@ function UpdateCard() {
 				title="Updates"
 				sub={data?.checked_at ? `checked ${relTime(data.checked_at)}` : "checking releases"}
 				actions={
-					<Button size="sm" variant="ghost" disabled={refresh.isPending} onClick={() => refresh.mutate()}>
+					<Button
+						size="sm"
+						variant="ghost"
+						disabled={refresh.isPending}
+						onClick={() => refresh.mutate()}
+					>
 						<RefreshCw size={12} className={refresh.isPending ? "animate-spin" : ""} />
 						Check now
 					</Button>
@@ -319,6 +344,25 @@ function UpdateCard() {
 	);
 }
 
+// Audit targets point at the resource that changed — send the reader to the
+// page that owns it instead of making them hunt for the id.
+function auditHref(action: string, target: string): string | null {
+	if (action.startsWith("run.")) return `/runs/${target}`;
+	if (action.startsWith("environment.") || action.startsWith("deployment.")) return "/environments";
+	if (action.startsWith("secret.")) return "/secrets";
+	if (action.startsWith("cache.")) return "/cache";
+	if (action.startsWith("artifact.")) return "/artifacts";
+	if (action.startsWith("runner.")) return "/runners";
+	if (
+		action.startsWith("member.") ||
+		action.startsWith("token.") ||
+		action.startsWith("github_app.") ||
+		action.startsWith("settings.")
+	)
+		return "/settings";
+	return null;
+}
+
 function AuditCard() {
 	const { data, isLoading } = useQuery({
 		queryKey: ["audit"],
@@ -332,20 +376,29 @@ function AuditCard() {
 			) : !data || data.events.length === 0 ? (
 				<EmptyState title="No audit events yet" hint="Approvals and settings changes land here." />
 			) : (
-				data.events.map((e) => (
-					<Row key={e.id}>
-						<span className="w-44 flex-none font-mono text-xs text-[var(--ink)]">{e.action}</span>
-						<span className="min-w-0 flex-1 truncate font-mono text-xs text-[var(--dim)]">
-							{e.target || "—"}
-						</span>
-						<span className="w-40 flex-none truncate text-right text-xs text-[var(--faint)]">
-							{e.actor || "system"}
-						</span>
-						<span className="w-20 flex-none text-right text-xs text-[var(--faint)]">
-							{relTime(e.created_at)}
-						</span>
-					</Row>
-				))
+				data.events.map((e) => {
+					const href = auditHref(e.action, e.target);
+					return (
+						<Row key={e.id}>
+							<span className="w-44 flex-none font-mono text-xs text-[var(--ink)]">{e.action}</span>
+							<span className="min-w-0 flex-1 truncate font-mono text-xs text-[var(--dim)]">
+								{href ? (
+									<Link to={href} className="lnk">
+										{e.target || "—"}
+									</Link>
+								) : (
+									e.target || "—"
+								)}
+							</span>
+							<span className="w-40 flex-none truncate text-right text-xs text-[var(--faint)]">
+								{e.actor || "system"}
+							</span>
+							<span className="w-20 flex-none text-right text-xs text-[var(--faint)]">
+								{relTime(e.created_at)}
+							</span>
+						</Row>
+					);
+				})
 			)}
 		</Card>
 	);
@@ -404,10 +457,20 @@ function MembersCard() {
 				}
 			/>
 			{creating && (
-				<form onSubmit={submit} className="flex flex-wrap items-center gap-3 border-b border-[var(--line)] px-4 py-3">
+				<form
+					onSubmit={submit}
+					className="flex flex-wrap items-center gap-3 border-b border-[var(--line)] px-4 py-3"
+				>
 					<Input name="email" type="email" placeholder="email" required className="w-56" />
 					<Input name="name" placeholder="name" className="w-40" />
-					<Input name="password" type="password" placeholder="password (8+)" required minLength={8} className="w-44" />
+					<Input
+						name="password"
+						type="password"
+						placeholder="password (8+)"
+						required
+						minLength={8}
+						className="w-44"
+					/>
 					<select name="role" className="fsel" defaultValue="member" aria-label="Role">
 						<option value="member">member</option>
 						<option value="admin">admin</option>
@@ -416,7 +479,9 @@ function MembersCard() {
 					<Button type="submit" variant="primary" size="sm" disabled={create.isPending}>
 						Create
 					</Button>
-					{create.error && <span className="text-xs text-[var(--err)]">{create.error.message}</span>}
+					{create.error && (
+						<span className="text-xs text-[var(--err)]">{create.error.message}</span>
+					)}
 				</form>
 			)}
 			{isLoading ? (
@@ -430,7 +495,9 @@ function MembersCard() {
 							{m.email}
 							{m.id === me?.user.id && <span className="text-[var(--faint)]"> · you</span>}
 						</span>
-						<span className="w-32 flex-none truncate text-xs text-[var(--dim)]">{m.name || "—"}</span>
+						<span className="w-32 flex-none truncate text-xs text-[var(--dim)]">
+							{m.name || "—"}
+						</span>
 						<select
 							className="fsel"
 							aria-label={`Role for ${m.email}`}
@@ -448,7 +515,12 @@ function MembersCard() {
 								variant="ghost"
 								disabled={del.isPending}
 								onClick={() => {
-									if (confirm(`Remove ${m.email} from the org? Their sessions and tokens are revoked.`)) del.mutate(m.id);
+									if (
+										confirm(
+											`Remove ${m.email} from the org? Their sessions and tokens are revoked.`,
+										)
+									)
+										del.mutate(m.id);
 								}}
 							>
 								<Trash2 size={13} />
@@ -460,9 +532,7 @@ function MembersCard() {
 			{setRole.error && (
 				<div className="px-4 py-2 text-xs text-[var(--err)]">{setRole.error.message}</div>
 			)}
-			{del.error && (
-				<div className="px-4 py-2 text-xs text-[var(--err)]">{del.error.message}</div>
-			)}
+			{del.error && <div className="px-4 py-2 text-xs text-[var(--err)]">{del.error.message}</div>}
 		</Card>
 	);
 }
@@ -471,8 +541,7 @@ function NotifyCard() {
 	const qc = useQueryClient();
 	const { data } = useQuery({
 		queryKey: ["settings"],
-		queryFn: () =>
-			api.get<{ notify_url: string; notify_secret_set: boolean }>("/settings"),
+		queryFn: () => api.get<{ notify_url: string; notify_secret_set: boolean }>("/settings"),
 	});
 	const save = useMutation({
 		mutationFn: (body: { notify_url: string; notify_secret?: string }) =>
@@ -505,7 +574,9 @@ function NotifyCard() {
 				<Input
 					name="secret"
 					type="password"
-					placeholder={data?.notify_secret_set ? "secret set — enter to rotate" : "signing secret (optional)"}
+					placeholder={
+						data?.notify_secret_set ? "secret set — enter to rotate" : "signing secret (optional)"
+					}
 					className="w-56"
 				/>
 				<Button type="submit" variant="primary" size="sm" disabled={save.isPending}>
@@ -565,32 +636,58 @@ function TokensCard() {
 			/>
 			{minted && (
 				<div className="flex items-center gap-2 border-b border-[var(--line)] bg-[var(--ok)]/5 px-4 py-2.5">
-					<span className="text-xs text-[var(--ok)]">Token created — copy it now, it will not be shown again:</span>
+					<span className="text-xs text-[var(--ok)]">
+						Token created — copy it now, it will not be shown again:
+					</span>
 					<code className="min-w-0 flex-1 truncate font-mono text-xs">{minted}</code>
 					<CopyButton text={minted} />
-					<Button size="sm" variant="ghost" onClick={() => setMinted(null)}>Dismiss</Button>
+					<Button size="sm" variant="ghost" onClick={() => setMinted(null)}>
+						Dismiss
+					</Button>
 				</div>
 			)}
 			{creating && (
-				<form onSubmit={submit} className="flex flex-wrap items-center gap-3 border-b border-[var(--line)] px-4 py-3">
+				<form
+					onSubmit={submit}
+					className="flex flex-wrap items-center gap-3 border-b border-[var(--line)] px-4 py-3"
+				>
 					<Input name="name" placeholder="token name" required className="w-48" />
 					{["read", "write", "admin"].map((s) => (
-						<label key={s} className="flex cursor-pointer items-center gap-1.5 text-xs text-[var(--dim)]">
-							<input type="checkbox" name={`scope_${s}`} defaultChecked={s === "read"} className="accent-[#f2f2f2]" />
+						<label
+							key={s}
+							className="flex cursor-pointer items-center gap-1.5 text-xs text-[var(--dim)]"
+						>
+							<input
+								type="checkbox"
+								name={`scope_${s}`}
+								defaultChecked={s === "read"}
+								className="accent-[#f2f2f2]"
+							/>
 							{s}
 						</label>
 					))}
-					<Input name="days" type="number" min={0} placeholder="days (0 = never)" className="w-32" />
+					<Input
+						name="days"
+						type="number"
+						min={0}
+						placeholder="days (0 = never)"
+						className="w-32"
+					/>
 					<Button type="submit" variant="primary" size="sm" disabled={create.isPending}>
 						Create
 					</Button>
-					{create.error && <span className="text-xs text-[var(--err)]">{create.error.message}</span>}
+					{create.error && (
+						<span className="text-xs text-[var(--err)]">{create.error.message}</span>
+					)}
 				</form>
 			)}
 			{isLoading ? (
 				<Spinner />
 			) : !data || data.tokens.length === 0 ? (
-				<EmptyState title="No tokens" hint="Create one to authenticate the kern CLI or external scripts." />
+				<EmptyState
+					title="No tokens"
+					hint="Create one to authenticate the kern CLI or external scripts."
+				/>
 			) : (
 				data.tokens.map((t) => (
 					<Row key={t.id}>

@@ -1,4 +1,4 @@
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
 	Activity,
 	BarChart3,
@@ -17,7 +17,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import type { Project, Run, Runner, UpdateInfo } from "../lib/types";
+import type { OverviewResponse, Project, Run, Runner, UpdateInfo } from "../lib/types";
 import { NotificationsBell } from "./notifications";
 import { cn } from "./ui";
 
@@ -56,11 +56,27 @@ export function KernelMark({ size = 15 }: { size?: number }) {
 	);
 }
 
-function crumbs(pathname: string): string[] {
+// Breadcrumb trail: every segment except the current page is a real link, so
+// any page is two clicks from root even without the sidebar.
+function crumbs(pathname: string): { label: string; to: string | null }[] {
 	const parts = pathname.split("/").filter(Boolean);
-	if (parts.length === 0) return ["kern", "overview"];
-	if (parts[0] === "runs" && parts[1]) return ["runs", `#${parts[1].slice(0, 8)}`];
-	return ["kern", ...parts];
+	const out: { label: string; to: string | null }[] = [{ label: "kern", to: "/" }];
+	if (parts.length === 0) {
+		out.push({ label: "overview", to: null });
+		return out;
+	}
+	const section = `/${parts[0]}`;
+	const seg = parts[0] ?? "";
+	out.push({
+		label: seg === "ci" ? "public run" : seg,
+		to: parts.length > 1 ? section : null,
+	});
+	if (seg === "runs" && parts[1]) {
+		out.push({ label: `#${parts[1].slice(0, 8)}`, to: null });
+	} else if (parts.length > 1 && parts[1]) {
+		out.push({ label: decodeURIComponent(parts[1]), to: null });
+	}
+	return out;
 }
 
 export function Layout() {
@@ -78,6 +94,11 @@ export function Layout() {
 		queryKey: ["runners"],
 		queryFn: () => api.get<{ runners: Runner[] }>("/runners"),
 		refetchInterval: 10000,
+	});
+	const { data: overview } = useQuery({
+		queryKey: ["overview"],
+		queryFn: () => api.get<OverviewResponse>("/overview"),
+		refetchInterval: 15000,
 	});
 	const { data: update } = useQuery({
 		queryKey: ["update"],
@@ -105,6 +126,19 @@ export function Layout() {
 		const rs = runners?.runners ?? [];
 		return { online: rs.filter((r) => r.status === "online").length, total: rs.length };
 	}, [runners]);
+
+	// Nav badges surface what needs attention without opening the page:
+	// queued jobs on Runs, offline runners on Runners, failed deliveries on Webhooks.
+	const badges = useMemo(() => {
+		const o = overview?.overview;
+		const m = new Map<string, { n: number; tone: "warn" | "err" }>();
+		if (o && o.jobs_queued > 0) m.set("/runs", { n: o.jobs_queued, tone: "warn" });
+		const offline = fleet.total - fleet.online;
+		if (offline > 0) m.set("/runners", { n: offline, tone: "warn" });
+		const failed = overview?.webhooks?.failed_24h ?? 0;
+		if (failed > 0) m.set("/deliveries", { n: failed, tone: "err" });
+		return m;
+	}, [overview, fleet]);
 
 	if (loading || !user) {
 		return <div className="flex h-full items-center justify-center text-[var(--faint)]">…</div>;
@@ -146,6 +180,11 @@ export function Layout() {
 								>
 									<n.icon size={13} strokeWidth={1.7} className="opacity-65" />
 									{n.label}
+									{badges.has(n.to) && (
+										<span className={cn("nbadge", badges.get(n.to)!.tone)}>
+											{badges.get(n.to)!.n}
+										</span>
+									)}
 								</NavLink>
 							))}
 						</div>
@@ -186,10 +225,12 @@ export function Layout() {
 					{parts.map((p, i) => (
 						<span key={i} className="contents">
 							{i > 0 && <span className="text-[var(--faint)]">/</span>}
-							{i === parts.length - 1 ? (
-								<b className="font-medium text-[var(--ink)]">{p}</b>
+							{p.to ? (
+								<Link to={p.to} className="text-[var(--dim)] hover:text-[var(--ink)]">
+									{p.label}
+								</Link>
 							) : (
-								<span>{p}</span>
+								<b className="font-medium text-[var(--ink)]">{p.label}</b>
 							)}
 						</span>
 					))}
@@ -227,8 +268,22 @@ export function Layout() {
 	);
 }
 
-// ⌘K palette — searches projects and recent runs via the endpoints the app
-// already queries, navigates on select.
+// ⌘K palette — every page is reachable, plus projects, runners and recent
+// runs via the endpoints the app already queries. Navigates on select.
+const PAGES: { label: string; sub: string; to: string }[] = [
+	{ label: "Overview", sub: "page", to: "/" },
+	{ label: "Projects", sub: "page", to: "/projects" },
+	{ label: "Runs", sub: "page", to: "/runs" },
+	{ label: "Runners", sub: "page", to: "/runners" },
+	{ label: "Usage", sub: "page", to: "/usage" },
+	{ label: "Artifacts", sub: "page", to: "/artifacts" },
+	{ label: "Cache", sub: "page", to: "/cache" },
+	{ label: "Secrets", sub: "page", to: "/secrets" },
+	{ label: "Environments", sub: "page", to: "/environments" },
+	{ label: "Webhooks", sub: "page", to: "/deliveries" },
+	{ label: "Settings", sub: "page", to: "/settings" },
+];
+
 function CommandK({ onClose }: { onClose: () => void }) {
 	const nav = useNavigate();
 	const [q, setQ] = useState("");
@@ -241,10 +296,29 @@ function CommandK({ onClose }: { onClose: () => void }) {
 		queryKey: ["runs", ""],
 		queryFn: () => api.get<{ runs: Run[]; total: number }>("/runs?limit=50"),
 	});
+	const { data: runners } = useQuery({
+		queryKey: ["runners"],
+		queryFn: () => api.get<{ runners: Runner[] }>("/runners"),
+	});
 
 	const items = useMemo(() => {
 		const needle = q.trim().toLowerCase();
 		const out: { label: string; sub: string; to: string }[] = [];
+		for (const p of PAGES) {
+			if (!needle || p.label.toLowerCase().includes(needle)) out.push(p);
+		}
+		for (const r of runners?.runners ?? []) {
+			if (
+				!needle ||
+				`${r.name} ${r.hostname} ${r.labels.join(" ")}`.toLowerCase().includes(needle)
+			) {
+				out.push({
+					label: r.name,
+					sub: `runner · ${r.status}${r.active_jobs ? ` · ${r.active_jobs} jobs` : ""}`,
+					to: "/runners",
+				});
+			}
+		}
 		for (const p of projects?.projects ?? []) {
 			if (!needle || `${p.name} ${p.slug}`.toLowerCase().includes(needle)) {
 				out.push({ label: p.name, sub: `project · ${p.slug}`, to: `/projects/${p.slug}` });
@@ -261,8 +335,8 @@ function CommandK({ onClose }: { onClose: () => void }) {
 				});
 			}
 		}
-		return out.slice(0, 12);
-	}, [q, projects, runs]);
+		return out.slice(0, 14);
+	}, [q, projects, runs, runners]);
 
 	const go = (to: string) => {
 		onClose();
@@ -298,7 +372,7 @@ function CommandK({ onClose }: { onClose: () => void }) {
 							setQ(e.target.value);
 							setSel(0);
 						}}
-						placeholder="Search projects and runs…"
+						placeholder="Search pages, projects, runners, runs…"
 						className="w-full bg-transparent text-[13px] text-[var(--ink)] outline-none placeholder:text-[var(--faint)]"
 					/>
 				</div>

@@ -38,10 +38,12 @@ export function RunGantt({
 	run,
 	jobs,
 	runners,
+	onPickJob,
 }: {
 	run: Run;
 	jobs: Job[];
 	runners: Map<string, string>;
+	onPickJob?: (jobID: string) => void;
 }) {
 	const t0 = Date.parse(run.started_at ?? run.created_at);
 	const live = run.status === "in_progress" || run.status === "queued";
@@ -97,7 +99,21 @@ export function RunGantt({
 					<div className="axis" />
 					<div className="lnames">
 						{laneData.map(({ j }) => (
-							<div className="ln" key={j.id}>
+							<div
+								className={`ln${onPickJob ? " pick" : ""}`}
+								key={j.id}
+								role={onPickJob ? "button" : undefined}
+								tabIndex={onPickJob ? 0 : undefined}
+								onClick={onPickJob ? () => onPickJob(j.id) : undefined}
+								onKeyDown={
+									onPickJob
+										? (e) => {
+												if (e.key === "Enter") onPickJob(j.id);
+											}
+										: undefined
+								}
+								title={onPickJob ? `Show steps for ${j.name}` : undefined}
+							>
 								{j.name}
 								<small>{j.runner_id ? (runners.get(j.runner_id) ?? "runner") : "unassigned"}</small>
 							</div>
@@ -128,17 +144,19 @@ export function RunGantt({
 							)}
 							{st != null && en != null && (
 								<div
-									className={`seg ${failed ? "fail" : running ? "live" : `done ${jobHue(j.job_key || j.name)}`}`}
+									className={`seg ${onPickJob ? "pick " : ""}${failed ? "fail" : running ? "live" : `done ${jobHue(j.job_key || j.name)}`}`}
 									style={{ left: `${pct(st)}%`, width: `${Math.max(0.6, pct(en) - pct(st))}%` }}
 									title={`${j.name} · ${duration(j.started_at, j.completed_at)}`}
+									onClick={onPickJob ? () => onPickJob(j.id) : undefined}
 								>
 									{pct(en) - pct(st) > 7 ? duration(j.started_at, j.completed_at) : ""}
 								</div>
 							)}
 							{st == null && (
 								<div
-									className="seg wait"
+									className={`seg wait${onPickJob ? " pick" : ""}`}
 									style={{ left: `${pct(qs)}%`, width: `${Math.max(1.5, pct(now) - pct(qs))}%` }}
+									onClick={onPickJob ? () => onPickJob(j.id) : undefined}
 									title={
 										j.status === "waiting_approval"
 											? `${j.name} · waiting for approval`
