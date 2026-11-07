@@ -18,24 +18,117 @@ import {
 import { Row } from "../components/layout";
 import { relTime } from "../lib/format";
 
+const SECTIONS: { id: string; label: string }[] = [
+	{ id: "s-github", label: "GitHub" },
+	{ id: "s-public", label: "Public runs" },
+	{ id: "s-heal", label: "Self-heal" },
+	{ id: "s-auto", label: "Auto-update" },
+	{ id: "s-members", label: "Members" },
+	{ id: "s-notify", label: "Notifications" },
+	{ id: "s-tokens", label: "Tokens" },
+	{ id: "s-update", label: "Update" },
+	{ id: "s-instance", label: "Instance" },
+	{ id: "s-audit", label: "Audit" },
+];
+
 export function SettingsPage() {
+	const [active, setActive] = useState("s-github");
 	return (
 		<>
-			<PageHeader
+			<PageHeader mark="ok"
 				title="Settings"
 				sub="Access tokens, automation policy, and instance information"
 			/>
-			<GitHubCard />
-			<PublicCICard />
-			<SelfHealCard />
-			<AutoUpdateCard />
-			<MembersCard />
-			<NotifyCard />
-			<TokensCard />
-			<UpdateCard />
-			<InstanceCard />
-			<AuditCard />
+			<SettingsStatus />
+			<div className="sidx">
+				{SECTIONS.map((s) => (
+					<a
+						key={s.id}
+						href={`#${s.id}`}
+						className={active === s.id ? "on" : ""}
+						onClick={() => setActive(s.id)}
+					>
+						{s.label}
+					</a>
+				))}
+			</div>
+			<div id="s-github"><GitHubCard /></div>
+			<div id="s-public"><PublicCICard /></div>
+			<div id="s-heal"><SelfHealCard /></div>
+			<div id="s-auto"><AutoUpdateCard /></div>
+			<div id="s-members"><MembersCard /></div>
+			<div id="s-notify"><NotifyCard /></div>
+			<div id="s-tokens"><TokensCard /></div>
+			<div id="s-update"><UpdateCard /></div>
+			<div id="s-instance"><InstanceCard /></div>
+			<div id="s-audit"><AuditCard /></div>
 		</>
+	);
+}
+
+// SettingsStatus is the page's own dashboard: what is wired, who is here,
+// and whether the instance is current — before the ten cards below.
+function SettingsStatus() {
+	const gh = useQuery({
+		queryKey: ["github-app"],
+		queryFn: () =>
+			api.get<{ env_app: { app_id: string } | null; apps: { id: string }[] }>(
+				"/github-app/status",
+			),
+	});
+	const members = useQuery({
+		queryKey: ["members"],
+		queryFn: () => api.get<{ members: Member[] }>("/members"),
+	});
+	const tokens = useQuery({
+		queryKey: ["tokens"],
+		queryFn: () => api.get<{ tokens: APIToken[] }>("/auth/tokens"),
+	});
+	const update = useQuery({
+		queryKey: ["update"],
+		queryFn: () => api.get<UpdateInfo>("/instance/update"),
+	});
+	const ghConnected = Boolean(gh.data?.env_app) || (gh.data?.apps.length ?? 0) > 0;
+	const cells = [
+		{
+			k: "github",
+			v: gh.data ? (ghConnected ? "linked" : "off") : "…",
+			c: ghConnected ? "app credentials active" : "no app connected",
+			bad: gh.data != null && !ghConnected,
+			to: "s-github",
+		},
+		{
+			k: "members",
+			v: members.data ? String(members.data.members.length) : "…",
+			c: "people with access",
+			to: "s-members",
+		},
+		{
+			k: "api tokens",
+			v: tokens.data ? String(tokens.data.tokens.length) : "…",
+			c: "live credentials",
+			to: "s-tokens",
+		},
+		{
+			k: "update",
+			v: update.data ? (update.data.available ? update.data.latest ?? "new" : "current") : "…",
+			c: update.data?.available ? "new version available" : "instance is current",
+			bad: Boolean(update.data?.available),
+			to: "s-update",
+		},
+	];
+	return (
+		<div className="panel kpis mb-4">
+			{cells.map((c) => (
+				<a className="kpi rowlink" key={c.k} href={`#${c.to}`}>
+					<div className="k">{c.k}</div>
+					<div className="v" style={c.bad ? { color: "var(--err)" } : undefined}>
+						{c.v}
+					</div>
+					<div className="c">{c.c}</div>
+				</a>
+			))}
+		</div>
 	);
 }
 

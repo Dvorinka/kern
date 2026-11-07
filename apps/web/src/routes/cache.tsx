@@ -26,13 +26,45 @@ export function CachePage() {
 	const totalBytes = entries.reduce((n, e) => n + e.size_bytes, 0);
 	const largest = Math.max(...entries.map((e) => e.size_bytes), 1);
 	const slugOf = new Map((projects?.projects ?? []).map((p) => [p.id, p.slug]));
+	// entries unused for 7 days are evicted — count down honestly
+	const EVICT = 7 * 86_400_000;
+	const evictIn = (e: CacheEntry) =>
+		Math.max(0, EVICT - (Date.now() - Date.parse(e.last_used_at)));
 
 	return (
 		<>
-			<PageHeader
+			<PageHeader mark="lint"
 				title="Cache"
 				sub={`${entries.length} entr${entries.length === 1 ? "y" : "ies"} · ${bytes(totalBytes)} stored · entries unused for 7 days are evicted`}
 			/>
+			{entries.length > 0 && (
+				<div className="panel kpis mb-4">
+					<div className="kpi">
+						<div className="k">entries</div>
+						<div className="v">{entries.length}</div>
+						<div className="c">{new Set(entries.map((e) => e.project_id)).size} project{new Set(entries.map((e) => e.project_id)).size === 1 ? "" : "s"}</div>
+					</div>
+					<div className="kpi">
+						<div className="k">stored</div>
+						<div className="v">{bytes(totalBytes)}</div>
+						<div className="c">across all keys</div>
+					</div>
+					<div className="kpi">
+						<div className="k">largest</div>
+						<div className="v">{bytes(largest)}</div>
+						<div className="c">single entry</div>
+					</div>
+					<div className="kpi">
+						<div className="k">next eviction</div>
+						<div className="v" style={{ fontSize: 24 }}>
+							{evictIn(entries.reduce((a, b) => (Date.parse(a.last_used_at) < Date.parse(b.last_used_at) ? a : b))) < 86_400_000
+								? "<1d"
+								: `${Math.ceil(evictIn(entries.reduce((a, b) => (Date.parse(a.last_used_at) < Date.parse(b.last_used_at) ? a : b))) / 86_400_000)}d`}
+						</div>
+						<div className="c">oldest unused entry</div>
+					</div>
+				</div>
+			)}
 			<div className="panel">
 				<div className="phead">
 					<span className="pt">Entries</span>
@@ -69,9 +101,12 @@ export function CachePage() {
 							</span>
 							<span
 								className="w-24 shrink-0 text-right text-[11px] text-[var(--faint)]"
-								title={`Last used ${e.last_used_at}`}
+								title={`Last used ${e.last_used_at} — evicts after 7 unused days`}
 							>
 								{relTime(e.last_used_at)}
+								<small className="block" style={{ color: evictIn(e) < 86_400_000 ? "var(--err)" : undefined }}>
+									{evictIn(e) < 86_400_000 ? "evicts <1d" : `evicts ${Math.floor(evictIn(e) / 86_400_000)}d`}
+								</small>
 							</span>
 							<Button
 								size="sm"

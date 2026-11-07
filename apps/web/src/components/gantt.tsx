@@ -2,36 +2,44 @@ import type { Job, Run } from "../lib/types";
 import { duration } from "../lib/format";
 import { jobHue } from "./fingerprint";
 
-// Pipeline gantt: every job lane on one shared clock. Done carries the job
-// hue tint, live is white with stripes under a now-cursor, queued hatches
-// from its claim time. Lane labels carry the runner name.
+// Pipeline trace — the mockup's .plate: one shared clock for every job.
+// Pattern bars carry job identity, blue means live, the stop-x marks a
+// failure, dashed is a job still parked on a need or a runner.
+
+const LH = 56;
 
 // niceTicks picks a readable axis: ~7 divisions at a round interval.
 function niceTicks(spanMs: number): { tickMs: number; count: number; totalMs: number } {
 	const cands = [
-		5_000,
-		10_000,
-		15_000,
-		30_000,
-		60_000,
-		2 * 60_000,
-		5 * 60_000,
-		10 * 60_000,
-		15 * 60_000,
-		30 * 60_000,
-		60 * 60_000,
-		2 * 60 * 60_000,
+		5_000, 10_000, 15_000, 30_000, 60_000,
+		2 * 60_000, 5 * 60_000, 10 * 60_000, 15 * 60_000, 30 * 60_000,
+		60 * 60_000, 2 * 60 * 60_000,
 	];
 	const tick = cands.find((c) => spanMs / c <= 7) ?? 4 * 60 * 60_000;
 	const count = Math.max(1, Math.ceil(spanMs / tick));
 	return { tickMs: tick, count, totalMs: count * tick };
 }
 
+const mmss = (ms: number) =>
+	`${Math.floor(ms / 60000)}:${String(Math.floor((ms % 60000) / 1000)).padStart(2, "0")}`;
+
 function tickLabel(ms: number): string {
-	if (ms === 0) return "0";
-	if (ms % 3_600_000 === 0) return `${ms / 3_600_000}h`;
-	if (ms % 60_000 === 0) return `${ms / 60_000}m`;
-	return `${ms / 1000}s`;
+	if (ms === 0) return "0:00";
+	if (ms < 3_600_000) return mmss(ms);
+	if (ms % 3_600_000 === 0) return `${ms / 3_600_000}:00`;
+	const h = Math.floor(ms / 3_600_000);
+	return `${h}:${String(Math.round((ms % 3_600_000) / 60000)).padStart(2, "0")}`;
+}
+
+interface Lane {
+	j: Job;
+	qs: number;
+	st: number | null;
+	en: number | null;
+	running: boolean;
+	failed: boolean;
+	skipped: boolean;
+	waiting: boolean;
 }
 
 export function RunGantt({
@@ -53,160 +61,183 @@ export function RunGantt({
 	);
 	const now = Date.now();
 	const spanMs = Math.max(live ? now - t0 : lastEnd - t0, 30_000);
-	const { tickMs, count, totalMs } = niceTicks(spanMs);
+	let { count, totalMs } = niceTicks(spanMs * 1.06);
+	while (count > 8) {
+		count = Math.ceil(count / 2);
+	}
+	const tickMs = totalMs / count;
 	const pct = (t: number) => Math.min(100, Math.max(0, ((t - t0) / totalMs) * 100));
 
-	const laneData = jobs.map((j) => {
+	const laneData: Lane[] = jobs.map((j) => {
 		const qs = Date.parse(j.queued_at);
 		const st = j.started_at ? Date.parse(j.started_at) : null;
 		const en = j.completed_at ? Date.parse(j.completed_at) : live ? now : st;
 		const running = j.status === "in_progress" || j.status === "waiting";
 		const failed = j.conclusion === "failure" || j.status === "cancelled";
-		return { j, qs, st, en, running, failed };
+		const skipped = j.status === "skipped" || j.status === "cancelled";
+		const waiting = st == null && !skipped;
+		return { j, qs, st, en, running, failed, skipped, waiting };
 	});
 
-	const elapsed = duration(run.started_at ?? run.created_at, run.completed_at);
+	const elapsed = now - t0;
+	const flagHide = totalMs * 0.085;
+
+	const laneSub = ({ j, waiting, skipped }: Lane): string => {
+		if (skipped) return "did not run";
+		if (j.status === "waiting_approval") return "needs an approval";
+		if (waiting) return j.needs.length ? `waiting for ${j.needs.join(", ")}` : "queued";
+		return j.runner_id ? (runners.get(j.runner_id) ?? "runner") : "unassigned";
+	};
+
+	const laneDur = ({ j, st, running, failed, skipped, waiting }: Lane) => {
+		if (skipped) return <b className="mute">skipped</b>;
+		if (waiting) return <b className="mute">{j.status === "waiting_approval" ? "approval" : "waiting"}</b>;
+		if (running) return <b className="live">{mmss(now - st!)}</b>;
+		if (failed)
+			return (
+				<b className="fail">
+					failed {j.completed_at ? duration(j.started_at, j.completed_at) : ""}
+				</b>
+			);
+		return <b>{j.completed_at && st != null ? duration(j.started_at, j.completed_at) : "—"}</b>;
+	};
+
+	// dependency connector: the need a job actually waited on (latest finisher)
+	const conns = laneData
+		.map((l, i) => {
+			if (l.skipped) return null;
+			const best = (l.j.needs ?? [])
+				.map((k) => laneData.findIndex((x) => !x.skipped && (x.j.job_key === k || x.j.name === k || x.j.key === k)))
+				.filter((x) => x >= 0)
+				.sort((a, b) => (laneData[b]!.en ?? now) - (laneData[a]!.en ?? now))[0];
+			if (best == null) return null;
+			const p = laneData[best]!;
+			const x1 = pct(p.en ?? now);
+			const x2 = l.st != null ? pct(l.st) : pct(l.qs);
+			if (x2 <= x1 + 0.01) return null;
+			return { i, best, x1, x2, dashed: l.st == null };
+		})
+		.filter(Boolean) as { i: number; best: number; x1: number; x2: number; dashed: boolean }[];
 
 	return (
-		<div className="panel mt-4">
-			<div className="gt-head">
-				<span className="pt">Pipeline</span>
-				<span className="gt-sub">
-					{jobs.length} job{jobs.length === 1 ? "" : "s"} · elapsed{" "}
-					<b className="mono">{elapsed}</b>
-				</span>
-				<span className="legend">
-					<span>
-						<i className="sw-done" />
-						done
-					</span>
-					<span>
-						<i className="sw-run" />
-						running
-					</span>
-					<span>
-						<i className="sw-wait" />
-						queued
-					</span>
-					<span>
-						<i className="sw-err" />
-						failed
-					</span>
+		<div className="tsec">
+			<div className="sec2">
+				<h3>Trace</h3>
+				<span>
+					{jobs.length} job{jobs.length === 1 ? "" : "s"} · one clock for every job
 				</span>
 			</div>
-			<div className="gbody">
-				<div className="axis-col">
-					<div className="axis" />
-					<div className="lnames">
-						{laneData.map(({ j }) => (
+			<div className="plate">
+				<div className="tw">
+					{/* lane labels */}
+					<div className="tcol">
+						<div className="axis" />
+						{laneData.map((l) => (
 							<div
-								className={`ln${onPickJob ? " pick" : ""}`}
-								key={j.id}
+								className={`lane${onPickJob ? " pick" : ""}`}
+								style={{ height: LH }}
+								key={l.j.id}
 								role={onPickJob ? "button" : undefined}
 								tabIndex={onPickJob ? 0 : undefined}
-								onClick={onPickJob ? () => onPickJob(j.id) : undefined}
+								onClick={onPickJob ? () => onPickJob(l.j.id) : undefined}
 								onKeyDown={
 									onPickJob
 										? (e) => {
-												if (e.key === "Enter") onPickJob(j.id);
+												if (e.key === "Enter") onPickJob(l.j.id);
 											}
 										: undefined
 								}
-								title={onPickJob ? `Show steps for ${j.name}` : undefined}
+								title={onPickJob ? `Show steps for ${l.j.name}` : undefined}
 							>
-								{j.name}
-								<small>{j.runner_id ? (runners.get(j.runner_id) ?? "runner") : "unassigned"}</small>
+								<b>{l.j.name}</b>
+								<small>{laneSub(l)}</small>
+							</div>
+						))}
+					</div>
+					{/* axis + tracks */}
+					<div className="tcol mid">
+						<div className="axis">
+							{Array.from({ length: count + 1 }, (_, i) => {
+								const t = i * tickMs;
+								const hide = live && Math.abs(t - elapsed) < flagHide && i !== 0;
+								return (
+									<i key={i} style={{ left: `${(t / totalMs) * 100}%`, visibility: hide ? "hidden" : undefined }}>
+										{tickLabel(t)}
+									</i>
+								);
+							})}
+							{live && (
+								<i className="flag" style={{ left: `${pct(now)}%` }}>
+									{mmss(elapsed)}
+								</i>
+							)}
+						</div>
+						<div className="tracks">
+							<svg
+								viewBox={`0 0 100 ${laneData.length * LH}`}
+								preserveAspectRatio="none"
+								aria-hidden="true"
+							>
+								{Array.from({ length: count + 1 }, (_, i) => (
+									<path
+										key={i}
+										d={`M${(i * tickMs * 100) / totalMs} 0V${laneData.length * LH}`}
+										className="gline"
+										vectorEffect="non-scaling-stroke"
+									/>
+								))}
+								{conns.map((c) => {
+									const y1 = c.best * LH + LH / 2;
+									const y2 = c.i * LH + LH / 2;
+									const xm = (c.x1 + c.x2) / 2;
+									return (
+										<path
+											key={c.i}
+											d={`M${c.x1} ${y1}C${xm} ${y1} ${xm} ${y2} ${c.x2} ${y2}`}
+											className="conn"
+											vectorEffect="non-scaling-stroke"
+											strokeDasharray={c.dashed ? "1 4" : undefined}
+										/>
+									);
+								})}
+							</svg>
+							{laneData.map((l) => (
+								<div className="lane" style={{ height: LH }} key={l.j.id}>
+									{l.skipped ? null : l.st == null ? (
+										<i
+											className="bar q"
+											style={{ left: `${pct(l.qs)}%`, width: `${Math.max(1.5, pct(now) - pct(l.qs))}%` }}
+										/>
+									) : (
+										<>
+											<i
+												className={`bar pat-${jobHue(l.j.job_key || l.j.name)}`}
+												style={{
+													left: `${pct(l.st)}%`,
+													width: `${Math.max(0.6, pct(l.en ?? now) - pct(l.st))}%`,
+												}}
+												title={`${l.j.name} · ${duration(l.j.started_at, l.j.completed_at)}`}
+											/>
+											{l.running && <i className="head" style={{ left: `${pct(now)}%` }} />}
+											{l.failed && l.en != null && <i className="stopx" style={{ left: `${pct(l.en)}%` }} />}
+										</>
+									)}
+								</div>
+							))}
+						</div>
+						{live && <i className="nowline" style={{ left: `${pct(now)}%` }} />}
+					</div>
+					{/* per-lane duration */}
+					<div className="tcol e">
+						<div className="axis" />
+						{laneData.map((l) => (
+							<div className="lane end" style={{ height: LH }} key={l.j.id}>
+								{laneDur(l)}
 							</div>
 						))}
 					</div>
 				</div>
-				<div className="lanes">
-					<div className="axis">
-						{Array.from({ length: count + 1 }, (_, i) => (
-							<span key={i} style={{ left: `${(i / count) * 100}%` }}>
-								{tickLabel(i * tickMs)}
-							</span>
-						))}
-					</div>
-					<div
-						className="ggrid"
-						style={{
-							background: `repeating-linear-gradient(to right, transparent 0 calc(${100 / count}% - 1px), var(--line) calc(${100 / count}% - 1px) ${100 / count}%)`,
-						}}
-					/>
-					{laneData.map(({ j, qs, st, en, running, failed }) => (
-						<div className="lane" key={j.id}>
-							{st != null && qs < st && (
-								<div
-									className="seg gap"
-									style={{ left: `${pct(qs)}%`, width: `${Math.max(0.3, pct(st) - pct(qs))}%` }}
-								/>
-							)}
-							{st != null && en != null && (
-								<div
-									className={`seg ${onPickJob ? "pick " : ""}${failed ? "fail" : running ? "live" : `done ${jobHue(j.job_key || j.name)}`}`}
-									style={{ left: `${pct(st)}%`, width: `${Math.max(0.6, pct(en) - pct(st))}%` }}
-									title={`${j.name} · ${duration(j.started_at, j.completed_at)}`}
-									onClick={onPickJob ? () => onPickJob(j.id) : undefined}
-								>
-									{pct(en) - pct(st) > 7 ? duration(j.started_at, j.completed_at) : ""}
-								</div>
-							)}
-							{st == null && (
-								<div
-									className={`seg wait${onPickJob ? " pick" : ""}`}
-									style={{ left: `${pct(qs)}%`, width: `${Math.max(1.5, pct(now) - pct(qs))}%` }}
-									onClick={onPickJob ? () => onPickJob(j.id) : undefined}
-									title={
-										j.status === "waiting_approval"
-											? `${j.name} · waiting for approval`
-											: `${j.name} · queued since ${new Date(qs).toLocaleTimeString()}`
-									}
-								>
-									{j.status === "waiting_approval" ? "approval" : "queued"}
-								</div>
-							)}
-						</div>
-					))}
-					{live && <div className="now" style={{ left: `${pct(now)}%` }} data-t={elapsed} />}
-				</div>
-			</div>
-			<div
-				className="cells"
-				style={{ gridTemplateColumns: `repeat(${Math.min(4, laneData.length + 3)}, 1fr)` }}
-			>
-				<div className="cell">
-					<div className="k">Runner</div>
-					<div className="v mono">
-						{laneData.find((l) => l.j.runner_id)?.j.runner_id
-							? (runners.get(laneData.find((l) => l.j.runner_id)!.j.runner_id!) ?? "—")
-							: "—"}
-					</div>
-				</div>
-				<div className="cell">
-					<div className="k">Image</div>
-					<div className="v mono">{laneData.find((l) => l.j.image)?.j.image ?? "—"}</div>
-				</div>
-				<div className="cell">
-					<div className="k">Duration</div>
-					<div className="v mono">{elapsed}</div>
-				</div>
-				<div className="cell">
-					<div className="k">Queued wait</div>
-					<div className="v mono">{queueWait(jobs)}</div>
-				</div>
 			</div>
 		</div>
 	);
-}
-
-function queueWait(jobs: Job[]): string {
-	const waits = jobs
-		.filter((j) => j.started_at && j.queued_at)
-		.map((j) => Date.parse(j.started_at!) - Date.parse(j.queued_at));
-	if (waits.length === 0) return "—";
-	const max = Math.max(...waits);
-	if (max < 1000) return `${max}ms`;
-	const s = Math.round(max / 1000);
-	return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
 }

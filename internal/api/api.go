@@ -203,6 +203,7 @@ func (s *Server) buildRouter() *gin.Engine {
 		auth.POST("/mcp", s.mcp)
 		auth.GET("/projects/:project/settings", s.getProjectSettings)
 		admin.PUT("/projects/:project/settings", s.putProjectSettings)
+		auth.GET("/projects/:project/icon", s.projectIcon)
 		write.POST("/jobs/:id/remediate", s.approveRemediation)
 		write.POST("/jobs/:id/remediate-dismiss", s.dismissRemediation)
 

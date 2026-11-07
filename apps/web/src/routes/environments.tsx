@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Trash2 } from "lucide-react";
+import { Globe, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import type { Deployment, Environment, Project } from "../lib/types";
@@ -46,7 +46,7 @@ export function EnvironmentsPage() {
 
 	return (
 		<>
-			<PageHeader
+			<PageHeader mark="live"
 				title="Environments"
 				sub="A protected environment can require reviewers, a wait, and a branch pattern"
 				actions={
@@ -86,19 +86,47 @@ export function EnvironmentsPage() {
 					{envs.isLoading ? (
 						<Spinner />
 					) : (
-						<Card>
-							{!envs.data || envs.data.environments.length === 0 ? (
-								<EmptyState
-									title="No environments"
-									hint="A job's environment: key creates one on first use. Protect it here before that run."
-								/>
-							) : (
-								envs.data.environments.map((env) => <EnvRow key={env.id} slug={slug} env={env} />)
+						<>
+							{(envs.data?.environments.length ?? 0) > 0 && (
+								<div className="panel kpis mb-4">
+									<div className="kpi">
+										<div className="k">environments</div>
+										<div className="v">{envs.data!.environments.length}</div>
+										<div className="c">in {slug}</div>
+									</div>
+									<div className="kpi">
+										<div className="k">protected</div>
+										<div className="v">
+											{envs.data!.environments.filter((e) => e.protected).length}
+										</div>
+										<div className="c">with gates on</div>
+									</div>
+									<div className="kpi">
+										<div className="k">waiting</div>
+										<div className="v">
+											{(deps.data?.deployments ?? []).filter((d) => d.status === "queued").length}
+										</div>
+										<div className="c">for approval</div>
+									</div>
+								</div>
 							)}
-						</Card>
+							<Card>
+								{!envs.data || envs.data.environments.length === 0 ? (
+									<EmptyState icon={<Globe size={19} />}
+										title="No environments"
+										hint="A job's environment: key creates one on first use. Protect it here before that run."
+									/>
+								) : (
+									envs.data.environments.map((env) => <EnvRow key={env.id} slug={slug} env={env} />)
+								)}
+							</Card>
+						</>
 					)}
 					{envs.error && <p className="mt-2 text-xs text-[var(--err)]">{envs.error.message}</p>}
-					<h2 className="mb-2 mt-6 text-[13px] font-semibold">Deployments</h2>
+					<div className="sec2">
+						<h3>Deployments</h3>
+						<span>{slug} history</span>
+					</div>
 					{deps.isLoading ? (
 						<Spinner />
 					) : (

@@ -119,6 +119,17 @@ func (s *Server) actOnGithubEvent(c *gin.Context, delivery, event string, body [
 				hold = true
 			}
 		}
+		// pr_trust: a project can opt same-repo pull_request runs into the
+		// trusted tier (privileged executor + secrets), matching GitHub's
+		// semantics where same-repo PRs get full runner capabilities. Fork
+		// heads are never promoted.
+		trust := t.trust
+		if trust == "pull_request" {
+			if raw, err := s.Store.ProjectSettings(c.Request.Context(), proj.ID); err == nil &&
+				prTrustPromoted(raw) {
+				trust = "trusted"
+			}
+		}
 		wfs, err := s.Store.Workflows(c.Request.Context(), proj.ID)
 		if err != nil {
 			return "failed", err.Error()
@@ -159,7 +170,7 @@ func (s *Server) actOnGithubEvent(c *gin.Context, delivery, event string, body [
 				SHA:               t.sha,
 				CommitMessage:     t.message,
 				Actor:             t.actor,
-				TrustLevel:        t.trust,
+				TrustLevel:        trust,
 				Source:            source,
 				HoldForApproval:   hold,
 			})
@@ -343,6 +354,12 @@ func forkGateHold(gate, association string) bool {
 		return true
 	}
 	return false
+}
+
+// prTrustPromoted reports whether a project's pr_trust setting opts
+// same-repo pull_request runs into the trusted tier.
+func prTrustPromoted(raw json.RawMessage) bool {
+	return settingsValue(raw, "pr_trust", "off") == "trusted"
 }
 
 // pullRequestMatchesPlan applies on:pull_request / on:pull_request_target

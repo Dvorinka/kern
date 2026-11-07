@@ -1,11 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Pencil, Trash2 } from "lucide-react";
+import { Code2, Copy, KeyRound, Pencil, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import type { Environment, Project, SecretSummary } from "../lib/types";
 import { Button, Card, EmptyState, Input, PageHeader, Spinner } from "../components/ui";
-import { Row } from "../components/layout";
 import { relTime } from "../lib/format";
 
 // Secrets are scoped org → project → environment. The API filters by
@@ -50,6 +49,7 @@ export function SecretsPage() {
 
 	const [adding, setAdding] = useState(false);
 	const [rotating, setRotating] = useState<SecretSummary | null>(null);
+	const [q, setQ] = useState("");
 
 	const put = useMutation({
 		mutationFn: ({ name, value, qs }: { name: string; value: string; qs: string }) =>
@@ -88,9 +88,38 @@ export function SecretsPage() {
 
 	const scopeLabel = slug ? (env ? `${slug} / ${env}` : slug) : "organization + projects";
 
+	// group by scope: organization first, then each project alphabetically
+	const STALE = 90 * 86_400_000;
+	const groups = useMemo(() => {
+		const out = new Map<string, { label: string; slug?: string; items: SecretSummary[] }>();
+		const needle = q.trim().toLowerCase();
+		for (const s of data?.secrets ?? []) {
+			if (needle && !s.name.toLowerCase().includes(needle)) continue;
+			const scopeSlug = s.project_id ? slugByID.get(s.project_id) : undefined;
+			const envLabel = s.environment_id ? env : undefined;
+			const key = envLabel ? `${scopeSlug ?? slug}/${envLabel}` : scopeSlug ?? "_org";
+			if (!out.has(key)) {
+				out.set(key, {
+					label: envLabel ? `${scopeSlug ?? slug} / ${envLabel}` : scopeSlug ?? "organization",
+					slug: scopeSlug,
+					items: [],
+				});
+			}
+			out.get(key)!.items.push(s);
+		}
+		return [...out.values()].sort((a, b) =>
+			a.label === "organization" ? -1 : b.label === "organization" ? 1 : a.label.localeCompare(b.label),
+		);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [data, q]);
+
+	const allSecrets = data?.secrets ?? [];
+	const stale = allSecrets.filter((s) => Date.now() - Date.parse(s.updated_at) > STALE).length;
+	const fresh = allSecrets.filter((s) => Date.now() - Date.parse(s.updated_at) < 7 * 86_400_000).length;
+
 	return (
 		<>
-			<PageHeader
+			<PageHeader mark="ok"
 				title="Secrets"
 				sub={`Encrypted at rest; delivered only to trusted runs and masked in logs — showing ${scopeLabel}`}
 				actions={
@@ -135,6 +164,30 @@ export function SecretsPage() {
 					</div>
 				}
 			/>
+			{allSecrets.length > 0 && (
+				<div className="panel kpis mb-4">
+					<div className="kpi">
+						<div className="k">secrets</div>
+						<div className="v">{allSecrets.length}</div>
+						<div className="c">in {scopeLabel}</div>
+					</div>
+					<div className="kpi">
+						<div className="k">scopes</div>
+						<div className="v">{groups.length}</div>
+						<div className="c">org + projects</div>
+					</div>
+					<div className="kpi">
+						<div className="k">stale</div>
+						<div className="v" style={stale ? { color: "var(--err)" } : undefined}>{stale}</div>
+						<div className="c">older than 90d — rotate</div>
+					</div>
+					<div className="kpi">
+						<div className="k">rotated 7d</div>
+						<div className="v">{fresh}</div>
+						<div className="c">fresh values</div>
+					</div>
+				</div>
+			)}
 			{adding && (
 				<Card className="mb-4 p-4">
 					<form onSubmit={submit} className="flex gap-2">
@@ -164,12 +217,20 @@ export function SecretsPage() {
 					/>
 				</Card>
 			)}
+			{!isLoading && allSecrets.length > 0 && (
+				<input
+					className="fsel mb-3 w-64"
+					placeholder="Filter by name…"
+					value={q}
+					onChange={(e) => setQ(e.target.value)}
+				/>
+			)}
 			{isLoading ? (
 				<Spinner />
 			) : (
 				<Card>
 					{!data || data.secrets.length === 0 ? (
-						<EmptyState
+						<EmptyState icon={<KeyRound size={19} />}
 							title="No secrets"
 							hint={
 								slug
@@ -178,47 +239,70 @@ export function SecretsPage() {
 							}
 						/>
 					) : (
-						data.secrets.map((s) => {
-							const scopeSlug = s.project_id ? slugByID.get(s.project_id) : undefined;
-							return (
-								<Row key={s.id}>
-									<span className="font-mono min-w-0 flex-1 truncate text-[13px]">{s.name}</span>
-									{!slug && (
-										<span className="w-28 shrink-0 truncate text-right text-[11px] text-[var(--faint)]">
-											{scopeSlug ? (
-												<Link to={`/projects/${scopeSlug}`} className="lnk">
-													{scopeSlug}
-												</Link>
-											) : (
-												"org"
-											)}
+						groups.map((g) => (
+							<div key={g.label}>
+								{groups.length > 1 && (
+									<div className="vgh">
+										{g.slug ? (
+											<Link to={`/projects/${g.slug}`} className="lnk">
+												{g.label}
+											</Link>
+										) : (
+											g.label
+										)}
+										<span>{g.items.length} secret{g.items.length === 1 ? "" : "s"}</span>
+									</div>
+								)}
+								{g.items.map((s) => {
+									const isStale = Date.now() - Date.parse(s.updated_at) > STALE;
+									return (
+									<div className="vrow" key={s.id}>
+										<i className={isStale ? "vkey stale" : "vkey"} />
+										<span className="font-mono min-w-0 truncate text-[13px]">{s.name}</span>
+										{isStale && <span className="vstale">stale</span>}
+										<span className="vdots" aria-hidden="true">••••••••••</span>
+										<span className="vacts">
+											<button
+												className="ract"
+												title={`Copy name ${s.name}`}
+												onClick={() => navigator.clipboard.writeText(s.name)}
+											>
+												<Copy size={12} />
+											</button>
+											<button
+												className="ract"
+												title={`Copy workflow snippet  secrets.${s.name}`}
+												onClick={() =>
+													navigator.clipboard.writeText(`\${{ secrets.${s.name} }}`)
+												}
+											>
+												<Code2 size={12} />
+											</button>
+											<button
+												className="ract"
+												title="Rotate value"
+												onClick={() => setRotating(s)}
+											>
+												<Pencil size={12} />
+											</button>
+											<button
+												className="ract err"
+												title="Delete secret"
+												disabled={del.isPending}
+												onClick={() => {
+													if (confirm(`Delete secret ${s.name}?`))
+														del.mutate({ name: s.name, qs: rowQs(s) });
+												}}
+											>
+												<Trash2 size={12} />
+											</button>
 										</span>
-									)}
-									<span className="text-xs text-[var(--faint)]">
-										updated {relTime(s.updated_at)}
-									</span>
-									<Button
-										size="sm"
-										variant="ghost"
-										title="Rotate value"
-										onClick={() => setRotating(s)}
-									>
-										<Pencil size={13} />
-									</Button>
-									<Button
-										size="sm"
-										variant="ghost"
-										disabled={del.isPending}
-										onClick={() => {
-											if (confirm(`Delete secret ${s.name}?`))
-												del.mutate({ name: s.name, qs: rowQs(s) });
-										}}
-									>
-										<Trash2 size={13} />
-									</Button>
-								</Row>
-							);
-						})
+										<span className="vwhen">updated {relTime(s.updated_at)}</span>
+									</div>
+									);
+								})}
+							</div>
+						))
 					)}
 				</Card>
 			)}

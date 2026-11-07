@@ -1,13 +1,15 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams, Link } from "react-router-dom";
-import { useState, type FormEvent } from "react";
-import { Activity, Play, RefreshCw } from "lucide-react";
+import { useMemo, useState, type FormEvent } from "react";
+import { FolderGit2, Play, RefreshCw } from "lucide-react";
 import { api } from "../lib/api";
 import { connectGitHubApp } from "../lib/github";
-import type { Project, Workflow } from "../lib/types";
-import { Button, Card, EmptyState, Input, KV, PageHeader, Spinner } from "../components/ui";
+import type { Project, Run, Workflow } from "../lib/types";
+import { Button, EmptyState, Input, KV, PageHeader, ProjectIcon, Spinner } from "../components/ui";
+import { StatusSq } from "../components/status";
 import { Row } from "../components/layout";
-import { relTime } from "../lib/format";
+import { jobHue } from "../components/fingerprint";
+import { duration, refName, relTime, seconds, shortSha } from "../lib/format";
 
 export function ProjectsPage() {
 	const nav = useNavigate();
@@ -15,6 +17,10 @@ export function ProjectsPage() {
 	const { data, isLoading } = useQuery({
 		queryKey: ["projects"],
 		queryFn: () => api.get<{ projects: Project[] }>("/projects"),
+	});
+	const { data: runsData } = useQuery({
+		queryKey: ["runs", "all"],
+		queryFn: () => api.get<{ runs: Run[]; total: number }>("/runs?limit=200"),
 	});
 	const [creating, setCreating] = useState(false);
 	const create = useMutation({
@@ -25,10 +31,27 @@ export function ProjectsPage() {
 		},
 	});
 	const connect = useMutation({ mutationFn: connectGitHubApp });
+	const icons = useProjectIcons(data?.projects ?? []);
+
+	// roll recent run history into a health line per project
+	const stats = useMemo(() => {
+		const m = new Map<string, { total: number; ok: number; fail: number; last: Run | null; hist: Run[] }>();
+		for (const r of runsData?.runs ?? []) {
+			const s =
+				m.get(r.project_slug) ??
+				m.set(r.project_slug, { total: 0, ok: 0, fail: 0, last: null, hist: [] }).get(r.project_slug)!;
+			s.total++;
+			if (r.conclusion === "success") s.ok++;
+			if (r.conclusion === "failure") s.fail++;
+			if (!s.last) s.last = r;
+			if (s.hist.length < 14) s.hist.push(r);
+		}
+		return m;
+	}, [runsData]);
 
 	return (
 		<>
-			<PageHeader
+			<PageHeader mark="lint"
 				title="Projects"
 				sub="Repositories wired into KERN"
 				actions={
@@ -43,55 +66,126 @@ export function ProjectsPage() {
 				}
 			/>
 			{creating && (
-				<Card className="mb-4 p-4">
+				<div className="panel mb-4 p-5">
 					<CreateProjectForm
 						busy={create.isPending}
 						onSubmit={(body) => create.mutate(body)}
 						error={create.error?.message}
 					/>
-				</Card>
+				</div>
 			)}
 			{isLoading ? (
 				<Spinner />
+			) : !data || data.projects.length === 0 ? (
+				<div className="panel">
+					<EmptyState icon={<FolderGit2 size={19} />}
+						title="No projects"
+						hint="Create a project with a local_path or repo_url, then sync its .github/workflows."
+						action={
+							<Button size="sm" variant="primary" onClick={() => setCreating(true)}>
+								New project
+							</Button>
+						}
+					/>
+				</div>
 			) : (
-				<Card>
-					{!data || data.projects.length === 0 ? (
-						<EmptyState
-							title="No projects"
-							hint="Create a project with a local_path or repo_url, then sync its .github/workflows."
-							action={
-								<Button size="sm" variant="primary" onClick={() => setCreating(true)}>
-									New project
-								</Button>
-							}
-						/>
-					) : (
-						data.projects.map((p) => (
-							<Row key={p.id} onClick={() => nav(`/projects/${p.slug}`)}>
-								<span className="min-w-0 flex-1 truncate font-medium">{p.name}</span>
-								<span className="text-xs text-[var(--dim)]">{p.slug}</span>
-								<span className="hidden font-mono w-64 truncate text-xs text-[var(--faint)] md:inline">
-									{p.repo_full_name || p.local_path || p.repo_url}
-								</span>
-								<span className="w-20 shrink-0 text-right text-[11px] text-[var(--faint)]">
-									{relTime(p.updated_at)}
-								</span>
-								<Link
-									to={`/runs?project=${p.slug}`}
-									onClick={(e) => e.stopPropagation()}
-									className="shrink-0 rounded p-1.5 text-[var(--faint)] hover:bg-[var(--raise2)] hover:text-[var(--ink)]"
-									title={`Runs for ${p.slug}`}
-								>
-									<Activity size={13} />
-								</Link>
-							</Row>
-						))
-					)}
-				</Card>
+				<div className="pgrid">
+					{data.projects.map((p) => {
+						const s = stats.get(p.slug);
+						const rate = s && s.total - liveCount(s.hist) > 0
+							? Math.round((s.ok / (s.total - liveCount(s.hist))) * 100)
+							: null;
+						return (
+							<div
+								key={p.id}
+								className="pcard"
+								role="link"
+								tabIndex={0}
+								onClick={() => nav(`/projects/${p.slug}`)}
+								onKeyDown={(e) => {
+									if (e.key === "Enter") nav(`/projects/${p.slug}`);
+								}}
+							>
+								<div className="pt2">
+									<ProjTile p={p} iconPath={icons[p.slug]} />
+									<div className="min-w-0">
+										<b>{p.name}</b>
+										<small>{p.repo_full_name || p.local_path || p.repo_url || p.slug}</small>
+									</div>
+									{s?.last && <StatusSq status={s.last.conclusion === "failure" ? "failed" : s.last.status} className="ml-auto" />}
+								</div>
+								<div className="pmeta">
+									{s?.last ? (
+										<>
+											<Link
+												to={`/runs/${s.last.id}`}
+												onClick={(e) => e.stopPropagation()}
+												className="lnk truncate"
+											>
+												{s.last.commit_message?.split("\n")[0] || s.last.workflow_name}
+											</Link>
+											<span className="flex-none text-[var(--faint)]">
+												{refName(s.last.ref)} · {shortSha(s.last.sha)} · {relTime(s.last.created_at)}
+											</span>
+										</>
+									) : (
+										<span className="text-[var(--faint)]">no runs yet</span>
+									)}
+								</div>
+								<div className="prow">
+									{s?.hist.map((r) => (
+										<i
+											key={r.id}
+											className={`pdot ${r.conclusion === "failure" ? "f" : r.status === "in_progress" || r.status === "queued" ? "l" : ""}`}
+											title={`${r.workflow_name} #${r.run_number} · ${relTime(r.created_at)}`}
+											onClick={(e) => {
+												e.stopPropagation();
+												nav(`/runs/${r.id}`);
+											}}
+										/>
+									))}
+									<span className="prate">
+											{rate != null ? `${rate}% ok` : ""}{s?.total ? ` · ${s.total} runs` : ""}
+									</span>
+								</div>
+							</div>
+						);
+					})}
+				</div>
 			)}
 		</>
 	);
 }
+
+function ProjTile({ p, iconPath }: { p: Project; iconPath?: string | null }) {
+	const img = ProjectIcon({
+		slug: p.slug,
+		repoFullName: p.repo_full_name,
+		defaultBranch: p.default_branch,
+		iconPath,
+		localPath: p.local_path,
+	});
+	return img ?? <i className={`phm pat-${jobHue(p.slug)}`} />;
+}
+
+// icon_path lives in the project settings doc — one cached read per project
+// is fine at this fleet size.
+function useProjectIcons(projects: Project[]): Record<string, string | null> {
+	const q = useQueries({
+		queries: projects.map((p) => ({
+			queryKey: ["project-settings", p.slug],
+			queryFn: () => api.get<{ icon_path?: string }>(`/projects/${p.slug}/settings`),
+			staleTime: 60_000,
+		})),
+	});
+	const out: Record<string, string | null> = {};
+	projects.forEach((p, i) => {
+		out[p.slug] = q[i]?.data?.icon_path || null;
+	});
+	return out;
+}
+
+const liveCount = (runs: Run[]) => runs.filter((r) => r.status === "in_progress" || r.status === "queued").length;
 
 function CreateProjectForm({
 	busy,
@@ -140,7 +234,19 @@ export function ProjectDetailPage() {
 	});
 	const { data: psettings } = useQuery({
 		queryKey: ["project-settings", slug],
-		queryFn: () => api.get<{ self_heal: string; fork_gate: string }>(`/projects/${slug}/settings`),
+		queryFn: () =>
+			api.get<{ self_heal: string; fork_gate: string; icon_path?: string }>(
+				`/projects/${slug}/settings`,
+			),
+	});
+	const setIcon = useMutation({
+		mutationFn: (v: string) => api.put(`/projects/${slug}/settings`, { icon_path: v }),
+		onSuccess: () => qc.invalidateQueries({ queryKey: ["project-settings", slug] }),
+	});
+	const { data: runsData } = useQuery({
+		queryKey: ["runs", "all"],
+		queryFn: () => api.get<{ runs: Run[]; total: number }>("/runs?limit=200"),
+		refetchInterval: 8000,
 	});
 	const setHeal = useMutation({
 		mutationFn: (v: string) => api.put(`/projects/${slug}/settings`, { self_heal: v }),
@@ -165,11 +271,34 @@ export function ProjectDetailPage() {
 		onSuccess: (res) => nav(`/runs/${res.run.id}`),
 	});
 
+	const runs = useMemo(
+		() => (runsData?.runs ?? []).filter((r) => r.project_slug === slug),
+		[runsData, slug],
+	);
+	const health = useMemo(() => {
+		const done = runs.filter((r) => r.status === "completed");
+		const ok = done.filter((r) => r.conclusion === "success").length;
+		const secs = done
+			.map((r) =>
+				r.started_at && r.completed_at
+					? (Date.parse(r.completed_at) - Date.parse(r.started_at)) / 1000
+					: 0,
+			)
+			.filter((x) => x > 0)
+			.sort((a, b) => a - b);
+		return {
+			rate: done.length ? Math.round((ok / done.length) * 100) : null,
+			median: secs.length ? secs[Math.floor(secs.length / 2)]! : null,
+			fails: done.length - ok,
+		};
+	}, [runs]);
+
 	if (isLoading || !data) return <Spinner />;
 	const { project, workflows } = data;
 	return (
 		<>
 			<PageHeader
+				mark="lint"
 				title={project.name}
 				sub={project.repo_full_name || project.local_path || project.repo_url}
 				actions={
@@ -187,7 +316,7 @@ export function ProjectDetailPage() {
 					</>
 				}
 			/>
-			<Card className="mb-4 p-4">
+			<div className="panel mb-4 p-5">
 				<div className="grid grid-cols-2 gap-x-8 md:grid-cols-3">
 					<KV k="Slug" v={project.slug} mono />
 					<KV k="Provider" v={project.provider} />
@@ -195,6 +324,27 @@ export function ProjectDetailPage() {
 					<KV k="Repo" v={project.repo_url || "—"} mono />
 					<KV k="Local path" v={project.local_path || "—"} mono />
 					<KV k="Created" v={relTime(project.created_at)} />
+					<KV
+						k="Icon"
+						v={
+							<span className="flex items-center gap-2">
+								<ProjTile p={project} iconPath={psettings?.icon_path} />
+								<input
+									className="h-7 w-44 rounded-lg border border-[var(--ctl)] bg-transparent px-2 font-mono text-[11px]"
+									placeholder="logo.png — path in repo"
+									defaultValue={psettings?.icon_path ?? ""}
+									onKeyDown={(e) => {
+										if (e.key === "Enter") setIcon.mutate((e.target as HTMLInputElement).value.trim());
+									}}
+									onBlur={(e) => {
+										if (e.target.value.trim() !== (psettings?.icon_path ?? ""))
+											setIcon.mutate(e.target.value.trim());
+									}}
+								/>
+								{setIcon.isPending && <span className="text-[10px] text-[var(--faint)]">saving…</span>}
+							</span>
+						}
+					/>
 					<KV
 						k="Self-heal"
 						v={
@@ -227,7 +377,29 @@ export function ProjectDetailPage() {
 						}
 					/>
 				</div>
-			</Card>
+			</div>
+
+			{/* health strip — the project's own report card */}
+			{runs.length > 0 && (
+				<div className="panel kpis mb-4">
+					<div className="kpi">
+						<div className="k">success</div>
+						<div className="v">{health.rate != null ? `${health.rate}%` : "—"}</div>
+						<div className="c">{health.fails} failed of {runs.length}</div>
+					</div>
+					<div className="kpi">
+						<div className="k">median run</div>
+						<div className="v">{health.median != null ? seconds(health.median) : "—"}</div>
+						<div className="c">across completed runs</div>
+					</div>
+					<div className="kpi">
+						<div className="k">runs</div>
+						<div className="v">{runs.length}</div>
+						<div className="c">{workflows.length} workflow{workflows.length === 1 ? "" : "s"}</div>
+					</div>
+				</div>
+			)}
+
 			{sync.data != null && (
 				<SyncResult
 					result={
@@ -243,8 +415,11 @@ export function ProjectDetailPage() {
 				/>
 			)}
 			{sync.error && <p className="mb-3 text-xs text-[var(--err)]">{sync.error.message}</p>}
-			<h2 className="mb-2 text-[13px] font-semibold">Workflows</h2>
-			<Card>
+			<div className="sec2">
+				<h3>Workflows</h3>
+				<span>{workflows.length} discovered</span>
+			</div>
+			<div className="panel mb-6">
 				{workflows.length === 0 ? (
 					<EmptyState
 						title="No workflows"
@@ -263,7 +438,47 @@ export function ProjectDetailPage() {
 						</Row>
 					))
 				)}
-			</Card>
+			</div>
+
+			<div className="sec2">
+				<h3>Recent runs</h3>
+				<span>this project's history</span>
+				<Link to={`/runs?project=${slug}`} className="keygo" style={{ marginLeft: "auto" }}>
+					All runs
+				</Link>
+			</div>
+			<div className="panel">
+				{runs.length === 0 ? (
+					<EmptyState title="No runs" hint="Push to a wired repo or trigger a workflow above." />
+				) : (
+					runs.slice(0, 10).map((r) => (
+						<div
+							key={r.id}
+							className="rowlink flex cursor-pointer items-center gap-3 border-b border-[var(--line)] px-6 py-3 last:border-0"
+							role="link"
+							tabIndex={0}
+							onClick={() => nav(`/runs/${r.id}`)}
+							onKeyDown={(e) => {
+								if (e.key === "Enter") nav(`/runs/${r.id}`);
+							}}
+						>
+							<StatusSq status={r.conclusion === "failure" ? "failed" : r.status} />
+							<span className="min-w-0 flex-1 truncate text-[13px]">
+								{r.commit_message?.split("\n")[0] || `${r.workflow_name} #${r.run_number}`}
+							</span>
+							<span className="hidden w-28 truncate text-[11px] text-[var(--faint)] sm:inline">
+								{refName(r.ref)}
+							</span>
+							<span className="w-16 text-right font-mono text-[11px] text-[var(--dim)]">
+								{duration(r.started_at, r.completed_at)}
+							</span>
+							<span className="w-16 text-right text-[11px] text-[var(--faint)]">
+								{relTime(r.created_at)}
+							</span>
+						</div>
+					))
+				)}
+			</div>
 		</>
 	);
 }
@@ -281,7 +496,7 @@ function SyncResult({
 	};
 }) {
 	return (
-		<Card className="mb-4 p-4">
+		<div className="panel mb-4 p-5">
 			<div className="mb-2 text-xs text-[var(--faint)]">
 				Synced at <span className="font-mono">{result.sha.slice(0, 8)}</span>
 			</div>
@@ -298,6 +513,6 @@ function SyncResult({
 					))}
 				</div>
 			))}
-		</Card>
+		</div>
 	);
 }

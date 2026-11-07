@@ -2,7 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { useMemo, useState } from "react";
 import { api } from "../lib/api";
-import type { UsageResponse } from "../lib/types";
+import type { Run, UsageResponse } from "../lib/types";
+import { ActivityMap } from "../components/activitymap";
 import { Card, CardHeader, EmptyState, PageHeader, Spinner } from "../components/ui";
 import { seconds } from "../lib/format";
 
@@ -26,6 +27,10 @@ export function UsagePage() {
 	const { data, isLoading } = useQuery({
 		queryKey: ["usage", days],
 		queryFn: () => api.get<UsageResponse>(`/usage?days=${days}`),
+	});
+	const { data: runsData } = useQuery({
+		queryKey: ["runs", "all"],
+		queryFn: () => api.get<{ runs: Run[] }>("/runs?limit=200"),
 	});
 
 	const u = data?.usage;
@@ -55,12 +60,28 @@ export function UsagePage() {
 					c: "per job, wall clock",
 				},
 				{ k: "Success rate", v: successRate, c: `${t.runs_success} of ${t.runs} runs` },
+				{
+					k: "Billed waste dodged",
+					v: (() => {
+						const waste = t.billable_minutes * 60 - t.runner_seconds;
+						return waste > 0 ? minutes(waste) : "—";
+					})(),
+					c:
+						t.billable_minutes * 60 - t.runner_seconds > 0
+							? `GitHub would meter ${Math.round(((t.billable_minutes * 60 - t.runner_seconds) / Math.max(t.runner_seconds, 1)) * 100)}% beyond real compute`
+							: "billing matches compute exactly",
+				},
+				{
+					k: "Queue-free share",
+					v: `${Math.max(0, Math.round(100 - (t.queue_median_seconds / Math.max(t.job_median_seconds, 1)) * 100))}%`,
+					c: `jobs spend ${seconds(t.queue_median_seconds) || "0s"} waiting — the rest is work`,
+				},
 			]
 		: [];
 
 	return (
 		<>
-			<PageHeader
+			<PageHeader mark="web"
 				title="Usage"
 				sub="What the fleet consumed — and what GitHub-hosted runners would have billed for the same work. Billable minutes round each job up to the whole minute, exactly as GitHub meters."
 				actions={
@@ -89,6 +110,17 @@ export function UsagePage() {
 					</div>
 
 					<MinutesChart u={u} days={days} />
+
+					<div className="mt-4 grid grid-cols-[3fr_2fr] items-stretch gap-4 max-lg:grid-cols-1">
+						<div className="panel">
+							<div className="phead">
+								<span className="pt">Activity</span>
+								<span className="r">cell = dominant status · weight = run count</span>
+							</div>
+							<ActivityMap runs={runsData?.runs ?? []} weeks={14} />
+						</div>
+						<ShareDonut u={u} />
+					</div>
 
 					{u.failures.length > 0 && (
 						<Card className="mt-4">
@@ -148,9 +180,16 @@ export function UsagePage() {
 												<td className="num">{p.runs}</td>
 												<td className="num">{minutes(p.seconds)}</td>
 												<td className="num">
-													{t!.runner_seconds > 0
-														? `${Math.round((p.seconds / t!.runner_seconds) * 100)}%`
-														: "—"}
+													{t!.runner_seconds > 0 ? (
+														<span className="shcell">
+															<span className="meter sm">
+																<i style={{ width: `${(p.seconds / t!.runner_seconds) * 100}%` }} />
+															</span>
+															{Math.round((p.seconds / t!.runner_seconds) * 100)}%
+														</span>
+													) : (
+														"—"
+													)}
 												</td>
 											</tr>
 										))}
@@ -222,50 +261,121 @@ function MinutesChart({ u, days }: { u: UsageResponse["usage"]; days: number }) 
 	const skip = Math.max(1, Math.floor(days / 6));
 
 	return (
-		<Card className="mt-4">
-			<CardHeader
-				title="Billable minutes per day"
-				sub="per-job ceiling — the meter GitHub would read"
-			/>
-			<div className="chart">
-				<div className="ct">
-					<span>{yMax}m</span>
-					<span>{Math.round((yMax * 2) / 3)}m</span>
-					<span>{Math.round(yMax / 3)}m</span>
-					<span>0</span>
-				</div>
-				{!any && <div className="empty-lbl">No completed jobs in this window.</div>}
-				{buckets.map((b, i) => (
-					<div
-						className={`col${b.today ? " today" : ""}`}
-						key={i}
-						role="link"
-						tabIndex={0}
-						style={{ cursor: "pointer" }}
-						title={`${b.label} · ${b.mins} billed min — open runs for ${b.date}`}
-						onClick={() => nav(`/runs?day=${b.date}`)}
-						onKeyDown={(e) => {
-							if (e.key === "Enter") nav(`/runs?day=${b.date}`);
-						}}
-					>
-						<div
-							className="b"
-							style={{ height: `${(b.mins / yMax) * 100}%` }}
-							title={`${b.label} · ${b.mins} billed min${b.failed ? `, ${b.failed} failed jobs` : ""}`}
-						>
-							{b.failed > 0 && (
-								<div
-									className="f"
-									style={{ height: `${Math.min((b.failed / Math.max(b.mins, 1)) * 100, 100)}%` }}
-								/>
-							)}
-						</div>
-						{(b.today || i % skip === 0) && (
-							<span className="lbl">{b.today ? "today" : b.label}</span>
-						)}
-					</div>
-				))}
+		<div className="panel mt-4">
+			<div className="phead">
+				<span className="pt">Billable minutes per day</span>
+				<span className="r">
+					per-job ceiling — the meter GitHub would read
+					<span className="g3" style={{ marginLeft: 10 }}>0–{yMax}m</span>
+				</span>
 			</div>
-		</Card>
+			{!any && <div className="emptynote">No completed jobs in this window.</div>}
+			{any && (
+				<div className="runschart">
+					<div className="bars" style={{ height: 96 }}>
+						{buckets.map((b, i) => (
+							<i
+								key={i}
+								className={b.today ? "tdy" : ""}
+								role="link"
+								tabIndex={0}
+								style={{ height: `${Math.max((b.mins / yMax) * 100, b.mins > 0 ? 3 : 0)}%` }}
+								title={`${b.label} · ${b.mins} billed min${b.failed ? `, ${b.failed} failed jobs` : ""} — open runs`}
+								onClick={() => nav(`/runs?day=${b.date}`)}
+								onKeyDown={(e) => {
+									if (e.key === "Enter") nav(`/runs?day=${b.date}`);
+								}}
+							>
+								{b.failed > 0 && (
+									<em
+										style={{
+											height: `${Math.min((b.failed / Math.max(b.mins, 1)) * 100, 100)}%`,
+										}}
+									/>
+								)}
+							</i>
+						))}
+					</div>
+					<div className="bax">
+						{buckets.map((b, i) => (
+							<span key={i} style={{ visibility: b.today || i % skip === 0 ? undefined : "hidden" }}>
+								{b.today ? "today" : b.label}
+							</span>
+						))}
+					</div>
+				</div>
+			)}
+		</div>
+	);
+}
+
+// Runner-time share by project as a monochrome donut — slices reuse the
+// pattern idiom (solid, stripes, dots) instead of invented colours.
+function ShareDonut({ u }: { u: UsageResponse["usage"] }) {
+	const total = Math.max(
+		u.projects.reduce((n, p) => n + p.seconds, 0),
+		1,
+	);
+	const R = 42;
+	const C = 2 * Math.PI * R;
+	let acc = 0;
+	const pats = ["solid", "stripes", "dots"];
+	return (
+		<div className="panel">
+			<div className="phead">
+				<span className="pt">Time by project</span>
+				<span className="r">share of runner seconds</span>
+			</div>
+			<div className="donut">
+				<svg viewBox="0 0 120 120" className="dsvg">
+					<defs>
+						<pattern id="dstripes" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+							<rect width="5" height="5" fill="var(--ink)" opacity="0.55" />
+							<rect width="2" height="5" fill="var(--paper)" opacity="0.55" />
+						</pattern>
+						<pattern id="ddots" width="6" height="6" patternUnits="userSpaceOnUse">
+							<rect width="6" height="6" fill="var(--ink)" opacity="0.55" />
+							<circle cx="3" cy="3" r="1.3" fill="var(--paper)" opacity="0.6" />
+						</pattern>
+					</defs>
+					<circle cx="60" cy="60" r={R} fill="none" stroke="var(--raise2)" strokeWidth="18" />
+					{u.projects.map((p, i) => {
+						const frac = p.seconds / total;
+						const dash = frac * C;
+						const el = (
+							<circle
+								key={p.slug}
+								cx="60"
+								cy="60"
+								r={R}
+								fill="none"
+								stroke={pats[i % 3] === "solid" ? "var(--ink)" : pats[i % 3] === "stripes" ? "url(#dstripes)" : "url(#ddots)"}
+								strokeWidth="18"
+								strokeDasharray={`${dash} ${C - dash}`}
+								strokeDashoffset={-acc * C}
+								transform="rotate(-90 60 60)"
+							/>
+						);
+						acc += frac;
+						return el;
+					})}
+					<text x="60" y="57" textAnchor="middle" className="dv">
+						{minutes(total)}
+					</text>
+					<text x="60" y="70" textAnchor="middle" className="dk">
+						{u.projects.length} project{u.projects.length === 1 ? "" : "s"}
+					</text>
+				</svg>
+				<div className="dleg">
+					{u.projects.slice(0, 6).map((p, i) => (
+						<Link key={p.slug} to={`/projects/${p.slug}`} className="dl">
+							<i className={`phm pat-${pats[i % 3]}`} style={{ width: 10, height: 10, borderWidth: 1.5, borderRadius: 3 }} />
+							<span className="truncate">{p.name || p.slug}</span>
+							<b>{Math.round((p.seconds / total) * 100)}%</b>
+						</Link>
+					))}
+				</div>
+			</div>
+		</div>
 	);
 }
