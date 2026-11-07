@@ -30,6 +30,11 @@ export function RunDetailPage() {
 		queryKey: ["runners"],
 		queryFn: () => api.get<{ runners: Runner[] }>("/runners"),
 	});
+	const { data: settings } = useQuery({
+		queryKey: ["settings"],
+		queryFn: () => api.get<{ public_ci: string }>("/settings"),
+		staleTime: 60_000,
+	});
 	const cancel = useMutation({
 		mutationFn: () => api.post(`/runs/${id}/cancel`),
 		onSuccess: () => qc.invalidateQueries({ queryKey: ["run", id] }),
@@ -96,6 +101,11 @@ export function RunDetailPage() {
 						<Button size="sm" variant="ghost" onClick={() => nav(`/projects/${run.project_slug}`)}>
 							Project
 						</Button>
+						{settings?.public_ci === "on" && (
+							<Link to={`/ci/${run.id}`} className="lnk self-center text-xs" title="Open the public run page">
+								public
+							</Link>
+						)}
 						{run.status === "awaiting_approval" && (
 							<Button
 								variant="primary"
@@ -146,6 +156,7 @@ export function RunDetailPage() {
 					jobs={jobs}
 					job={job}
 					projectSlug={run.project_slug}
+					runners={runnerNames}
 					onPickJob={setJobId}
 					stepN={stepN}
 					onPickStep={setStepN}
@@ -161,6 +172,7 @@ function StepsPanel({
 	jobs,
 	job,
 	projectSlug,
+	runners,
 	onPickJob,
 	stepN,
 	onPickStep,
@@ -169,6 +181,7 @@ function StepsPanel({
 	jobs: Job[];
 	job: Job;
 	projectSlug: string;
+	runners: Map<string, string>;
 	onPickJob: (id: string) => void;
 	stepN: number | null;
 	onPickStep: (n: number | null) => void;
@@ -193,6 +206,14 @@ function StepsPanel({
 								title="Open environments for this project"
 							>
 								{job.environment}
+							</Link>
+						</>
+					)}
+					{job.runner_id && runners.get(job.runner_id) && (
+						<>
+							{" · on "}
+							<Link to="/runners" className="lnk" title="Open runners">
+								{runners.get(job.runner_id)}
 							</Link>
 						</>
 					)}
