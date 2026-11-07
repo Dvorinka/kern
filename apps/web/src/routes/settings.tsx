@@ -3,6 +3,7 @@ import { useState, type FormEvent } from "react";
 import { Check, Copy, PlugZap, RefreshCw, Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api } from "../lib/api";
+import { client, unwrap } from "../lib/client";
 import { connectGitHubApp } from "../lib/github";
 import type { APIToken, AuditEvent, Member, UpdateInfo } from "../lib/types";
 import {
@@ -24,6 +25,7 @@ const SECTIONS: { id: string; label: string }[] = [
 	{ id: "s-heal", label: "Self-heal" },
 	{ id: "s-auto", label: "Auto-update" },
 	{ id: "s-members", label: "Members" },
+	{ id: "s-sessions", label: "Sessions" },
 	{ id: "s-notify", label: "Notifications" },
 	{ id: "s-tokens", label: "Tokens" },
 	{ id: "s-update", label: "Update" },
@@ -57,6 +59,7 @@ export function SettingsPage() {
 			<div id="s-heal"><SelfHealCard /></div>
 			<div id="s-auto"><AutoUpdateCard /></div>
 			<div id="s-members"><MembersCard /></div>
+			<div id="s-sessions"><SessionsCard /></div>
 			<div id="s-notify"><NotifyCard /></div>
 			<div id="s-tokens"><TokensCard /></div>
 			<div id="s-update"><UpdateCard /></div>
@@ -630,15 +633,110 @@ function MembersCard() {
 	);
 }
 
+// SessionsCard is the first domain on the generated OpenAPI client
+// (src/lib/client.ts) — sessions endpoints exist only there.
+function SessionsCard() {
+	const qc = useQueryClient();
+	const { data, isLoading } = useQuery({
+		queryKey: ["sessions"],
+		queryFn: async () => unwrap(await client.GET("/auth/sessions")),
+	});
+	const revoke = useMutation({
+		mutationFn: async (id: string) => {
+			unwrap(await client.DELETE("/auth/sessions/{id}", { params: { path: { id } } }));
+		},
+		onSuccess: () => qc.invalidateQueries({ queryKey: ["sessions"] }),
+	});
+	const revokeOthers = useMutation({
+		mutationFn: async () => {
+			unwrap(await client.POST("/auth/sessions/revoke-others"));
+		},
+		onSuccess: () => qc.invalidateQueries({ queryKey: ["sessions"] }),
+	});
+	const sessions = data?.sessions ?? [];
+	return (
+		<Card className="mb-4">
+			<CardHeader
+				title="Sessions"
+				sub="Active sign-ins for your account — revoke any that are not yours"
+				actions={
+					sessions.length > 1 ? (
+						<Button
+							size="sm"
+							variant="ghost"
+							disabled={revokeOthers.isPending}
+							onClick={() => {
+								if (confirm("Sign out of every other session?")) revokeOthers.mutate();
+							}}
+						>
+							Sign out others
+						</Button>
+					) : undefined
+				}
+			/>
+			{isLoading ? (
+				<Spinner />
+			) : sessions.length === 0 ? (
+				<EmptyState title="No sessions" hint="Sign in again to create one." />
+			) : (
+				sessions.map((s) => (
+					<Row key={s.id}>
+						<span className="min-w-0 flex-1 truncate font-medium">
+							{s.current ? "This device" : "Session"}
+							{s.current && (
+								<span className="ml-2 rounded bg-[var(--ok)]/15 px-1.5 py-0.5 text-[10px] text-[var(--ok)]">
+									current
+								</span>
+							)}
+						</span>
+						<span className="w-32 text-right text-xs text-[var(--faint)]">
+							signed in {relTime(s.created_at)}
+						</span>
+						<span className="w-32 text-right text-xs text-[var(--faint)]">
+							expires {relTime(s.expires_at)}
+						</span>
+						<Button
+							size="sm"
+							variant="ghost"
+							disabled={revoke.isPending}
+							onClick={() => {
+								if (s.current ? confirm("Revoke this session? You will be signed out.") : confirm("Revoke this session?"))
+									revoke.mutate(s.id);
+							}}
+						>
+							<Trash2 size={13} />
+						</Button>
+					</Row>
+				))
+			)}
+			{(revoke.error || revokeOthers.error) && (
+				<div className="px-4 py-2 text-xs text-[var(--err)]">
+					{(revoke.error ?? revokeOthers.error)?.message}
+				</div>
+			)}
+		</Card>
+	);
+}
+
 function NotifyCard() {
 	const qc = useQueryClient();
 	const { data } = useQuery({
 		queryKey: ["settings"],
-		queryFn: () => api.get<{ notify_url: string; notify_secret_set: boolean }>("/settings"),
+		queryFn: () =>
+			api.get<{
+				notify_url: string;
+				notify_secret_set: boolean;
+				notify_events: string;
+				notify_format: string;
+			}>("/settings"),
 	});
 	const save = useMutation({
-		mutationFn: (body: { notify_url: string; notify_secret?: string }) =>
-			api.put("/settings", body),
+		mutationFn: (body: {
+			notify_url: string;
+			notify_secret?: string;
+			notify_events: string;
+			notify_format: string;
+		}) => api.put("/settings", body),
 		onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
 	});
 	const submit = (e: FormEvent<HTMLFormElement>) => {
@@ -647,6 +745,8 @@ function NotifyCard() {
 		const secret = String(fd.get("secret"));
 		save.mutate({
 			notify_url: String(fd.get("url")).trim(),
+			notify_events: String(fd.get("events")).trim(),
+			notify_format: String(fd.get("format")),
 			...(secret ? { notify_secret: secret } : {}),
 		});
 	};
@@ -654,7 +754,7 @@ function NotifyCard() {
 		<Card className="mb-4">
 			<CardHeader
 				title="Notifications"
-				sub="POST run.completed to a webhook when a run finishes — HMAC-signed if a secret is set"
+				sub="POST run.completed to a webhook when a run finishes — retried with backoff, HMAC-signed if a secret is set"
 			/>
 			<form onSubmit={submit} className="flex flex-wrap items-center gap-3 px-4 py-3">
 				<Input
@@ -664,6 +764,20 @@ function NotifyCard() {
 					defaultValue={data?.notify_url ?? ""}
 					className="min-w-0 flex-1"
 				/>
+				<Input
+					name="events"
+					placeholder="conclusions: failure,cancelled (empty = all)"
+					defaultValue={data?.notify_events ?? ""}
+					className="w-56"
+				/>
+				<select
+					name="format"
+					defaultValue={data?.notify_format ?? "kern"}
+					className="h-9 rounded-lg border border-[var(--ctl)] bg-transparent px-2 text-xs"
+				>
+					<option value="kern">kern envelope</option>
+					<option value="slack">slack text</option>
+				</select>
 				<Input
 					name="secret"
 					type="password"

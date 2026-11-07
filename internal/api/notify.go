@@ -7,31 +7,81 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/dvorinka/kern/internal/store"
+	"github.com/dvorinka/kern/internal/telemetry"
 )
 
-// notifyRunCompleted delivers the org's outbound webhook for a finished run.
-// It is best-effort and non-blocking: one POST, a short timeout, failures are
-// logged and audited nowhere — retries belong to the receiver, not here.
+// notifyMaxAttempts bounds send tries per delivery (handoff: 3).
+const notifyMaxAttempts = 3
+
+// notifyRunCompleted enqueues the org's outbound webhook for a finished run.
+// Delivery is persisted in notify_deliveries and driven by the leader-gated
+// tick, so an api restart mid-send loses nothing. Filters and the per-project
+// URL override resolve here, at enqueue time.
 func (s *Server) notifyRunCompleted(ctx context.Context, run store.Run) {
 	project, err := s.Store.ProjectByID(ctx, run.ProjectID)
 	if err != nil {
 		return
 	}
-	raw, err := s.Store.OrgSettings(ctx, project.OrgID)
+	orgRaw, err := s.Store.OrgSettings(ctx, project.OrgID)
 	if err != nil {
 		return
 	}
-	url := settingsValue(raw, "notify_url", "")
+	projRaw, _ := s.Store.ProjectSettings(ctx, project.ID)
+
+	projNotify := settingsValue(projRaw, "notify_url", "")
+	if projNotify == "off" {
+		return // project opted out of notifications entirely
+	}
+	url := strings.TrimSpace(projNotify)
 	if url == "" {
+		url = strings.TrimSpace(settingsValue(orgRaw, "notify_url", ""))
+	}
+	if url == "" || !notifyConclusionAllowed(settingsValue(orgRaw, "notify_events", ""), run.Conclusion) {
 		return
 	}
-	payload, err := json.Marshal(map[string]any{
+	payload, err := notifyPayload(run, project, url, settingsValue(orgRaw, "notify_format", "kern"), s.runPageURL(ctx, run))
+	if err != nil {
+		return
+	}
+	if err := s.Store.EnqueueNotify(ctx, project.OrgID, project.ID, run.ID, url, payload); err != nil {
+		s.Log.Warn("enqueue notify", zap.String("run", run.ID.String()), zap.Error(err))
+	}
+}
+
+// notifyConclusionAllowed reports whether a run conclusion passes the org's
+// notify_events filter. Empty filter means every conclusion notifies.
+func notifyConclusionAllowed(filter, conclusion string) bool {
+	filter = strings.TrimSpace(filter)
+	if filter == "" {
+		return true
+	}
+	for _, f := range strings.Split(filter, ",") {
+		if strings.EqualFold(strings.TrimSpace(f), conclusion) {
+			return true
+		}
+	}
+	return false
+}
+
+// notifyPayload builds the webhook body. format "slack" emits Slack's
+// incoming-webhook {"text": ...} shape; anything else keeps the kern event
+// envelope.
+func notifyPayload(run store.Run, project store.Project, url, format, pageURL string) ([]byte, error) {
+	if format == "slack" {
+		return json.Marshal(map[string]any{
+			"text": fmt.Sprintf("KERN %s/%s run #%d %s: %s",
+				project.Slug, run.WorkflowName, run.RunNumber, run.Conclusion, pageURL),
+		})
+	}
+	return json.Marshal(map[string]any{
 		"event": "run.completed",
 		"run": map[string]any{
 			"id":         run.ID,
@@ -42,35 +92,100 @@ func (s *Server) notifyRunCompleted(ctx context.Context, run store.Run) {
 			"event":      run.Event,
 			"ref":        run.Ref,
 			"sha":        run.SHA,
-			"url":        s.runPageURL(ctx, run),
+			"url":        pageURL,
 		},
 	})
+}
+
+// DeliverNotifyBatch sends every due notification. Wired as the
+// leader-gated orchestrator's NotifySweep, so exactly one replica delivers
+// at a time.
+func (s *Server) DeliverNotifyBatch(ctx context.Context) {
+	due, err := s.Store.DueNotifyDeliveries(ctx, 20)
 	if err != nil {
+		s.Log.Warn("notify sweep", zap.Error(err))
 		return
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	for _, d := range due {
+		s.deliverNotify(ctx, d)
+	}
+}
+
+// deliverNotify performs one send attempt and records the outcome. The HMAC
+// secret comes from current org settings — a rotated or cleared secret
+// applies to rows enqueued before the change.
+func (s *Server) deliverNotify(ctx context.Context, d store.NotifyDelivery) {
+	orgRaw, err := s.Store.OrgSettings(ctx, d.OrgID)
 	if err != nil {
+		s.finishNotify(ctx, d, "org settings: "+err.Error())
+		return
+	}
+	// A cleared or "off" notify_url disables delivery for rows already queued.
+	projRaw, _ := s.Store.ProjectSettings(ctx, d.ProjectID)
+	projNotify := settingsValue(projRaw, "notify_url", "")
+	if projNotify == "off" {
+		_ = s.Store.MarkNotifyDead(ctx, d.ID, d.Attempts+1, "project notify disabled")
+		return
+	}
+	live := strings.TrimSpace(projNotify)
+	if live == "" {
+		live = strings.TrimSpace(settingsValue(orgRaw, "notify_url", ""))
+	}
+	if live == "" {
+		_ = s.Store.MarkNotifyDead(ctx, d.ID, d.Attempts+1, "notify_url removed")
+		return
+	}
+
+	// The send target is the live setting, not the enqueued URL: retargeting
+	// notify_url moves pending deliveries to the new endpoint.
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, live, bytes.NewReader(d.Payload))
+	if err != nil {
+		s.finishNotify(ctx, d, "bad url: "+err.Error())
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Kern-Event", "run.completed")
-	if secret := settingsValue(raw, "notify_secret", ""); secret != "" {
+	if secret := settingsValue(orgRaw, "notify_secret", ""); secret != "" {
 		mac := hmac.New(sha256.New, []byte(secret))
-		mac.Write(payload)
+		mac.Write(d.Payload)
 		req.Header.Set("X-Kern-Signature", "sha256="+hex.EncodeToString(mac.Sum(nil)))
 	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		req = req.WithContext(ctx)
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			s.Log.Warn("notify webhook failed", zap.String("run", run.ID.String()), zap.Error(err))
-			return
-		}
-		resp.Body.Close()
-		if resp.StatusCode >= 400 {
-			s.Log.Warn("notify webhook rejected", zap.String("run", run.ID.String()), zap.Int("status", resp.StatusCode))
-		}
-	}()
+	resp, err := notifyHTTPClient.Do(req)
+	if err != nil {
+		telemetry.IncNotify("error")
+		s.finishNotify(ctx, d, err.Error())
+		return
+	}
+	resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		telemetry.IncNotify("error")
+		s.finishNotify(ctx, d, fmt.Sprintf("http %d", resp.StatusCode))
+		return
+	}
+	telemetry.IncNotify("sent")
+	if err := s.Store.MarkNotifySent(ctx, d.ID); err != nil {
+		s.Log.Warn("mark notify sent", zap.Error(err))
+	}
 }
+
+// finishNotify records a failed attempt: backoff-reschedule under the cap,
+// dead-letter beyond it.
+func (s *Server) finishNotify(ctx context.Context, d store.NotifyDelivery, cause string) {
+	n := d.Attempts + 1
+	if n >= notifyMaxAttempts {
+		telemetry.IncNotify("dead")
+		if err := s.Store.MarkNotifyDead(ctx, d.ID, n, cause); err != nil {
+			s.Log.Warn("mark notify dead", zap.Error(err))
+		}
+		s.Log.Warn("notify delivery failed permanently", zap.String("delivery", d.ID.String()), zap.String("cause", cause))
+		return
+	}
+	if err := s.Store.MarkNotifyFailed(ctx, d.ID, n, cause); err != nil {
+		s.Log.Warn("mark notify failed", zap.Error(err))
+	}
+	s.Log.Warn("notify delivery attempt failed", zap.String("delivery", d.ID.String()),
+		zap.Int("attempt", n), zap.String("cause", cause))
+}
+
+// notifyHTTPClient is the send path's client; a var so tests can stub it.
+var notifyHTTPClient = &http.Client{Timeout: 10 * time.Second}

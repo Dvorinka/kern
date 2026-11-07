@@ -98,6 +98,17 @@ func (s *Store) DeleteArtifact(ctx context.Context, orgID, id uuid.UUID) (string
 	return ref, err
 }
 
+// ArtifactBytesForProject totals live artifact bytes for quota checks.
+func (s *Store) ArtifactBytesForProject(ctx context.Context, projectID uuid.UUID) (int64, error) {
+	var total int64
+	err := s.pool.QueryRow(ctx, `
+		SELECT coalesce(sum(a.size_bytes), 0)
+		FROM artifacts a
+		JOIN workflow_runs r ON r.id = a.run_id
+		WHERE r.project_id = $1`, projectID).Scan(&total)
+	return total, err
+}
+
 func (s *Store) Artifacts(ctx context.Context, orgID uuid.UUID, runID *uuid.UUID, limit int) ([]Artifact, error) {
 	limit, _ = page(limit, 0)
 	rows, err := s.pool.Query(ctx, `

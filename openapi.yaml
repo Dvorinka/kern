@@ -1,0 +1,1186 @@
+openapi: 3.1.0
+info:
+  title: KERN API
+  version: 0.1.0
+  description: >-
+    KERN control-plane API. All routes are mounted under `/api/v1`.
+    Authentication is either the `kern_session` cookie set by `/auth/login`
+    or a `Bearer` API token minted at `/auth/token` (scopes: `read`, `write`,
+    `admin`). Runner-facing routes under `/runners/*` authenticate with a
+    runner token instead.
+servers:
+  - url: /api/v1
+security:
+  - sessionCookie: []
+  - bearerAuth: []
+tags:
+  - name: meta
+  - name: auth
+  - name: projects
+  - name: runs
+  - name: runners
+  - name: secrets
+  - name: artifacts
+  - name: cache
+  - name: environments
+  - name: members
+  - name: settings
+  - name: audit
+  - name: usage
+  - name: notifications
+  - name: webhooks
+  - name: deployments
+  - name: instance
+  - name: runner-protocol
+paths:
+  /meta:
+    get:
+      tags: [meta]
+      security: []
+      summary: Instance metadata (version, env)
+      responses:
+        "200": { description: Metadata object }
+  /healthz:
+    get:
+      tags: [meta]
+      security: []
+      summary: Liveness probe
+      responses:
+        "200": { description: "{status, uptime_seconds}" }
+  /readyz:
+    get:
+      tags: [meta]
+      security: []
+      summary: Readiness probe
+      responses:
+        "200": { description: Ready }
+        "503": { description: Not ready }
+
+  /auth/login:
+    post:
+      tags: [auth]
+      security: []
+      summary: Email+password login; sets kern_session cookie
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        "200":
+          description: Logged in
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: "#/components/schemas/User" }
+                  expires_at: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+  /auth/token:
+    post:
+      tags: [auth]
+      security: []
+      summary: CLI login — credentials in, API token out (no cookie)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        "201":
+          description: Token minted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  record: { $ref: "#/components/schemas/APIToken" }
+        "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+  /auth/logout:
+    post:
+      tags: [auth]
+      summary: Delete current session, clear cookie
+      responses:
+        "204": { description: Logged out }
+  /auth/me:
+    get:
+      tags: [auth]
+      summary: Current user
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Error" }
+  /auth/tokens:
+    get:
+      tags: [auth]
+      summary: List API tokens
+      responses:
+        "200":
+          description: Tokens
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tokens: { type: array, items: { $ref: "#/components/schemas/APIToken" } }
+    post:
+      tags: [auth]
+      summary: Mint an API token (plaintext returned once)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                scopes: { type: array, items: { type: string, enum: [read, write, admin] } }
+      responses:
+        "201":
+          description: Token minted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  record: { $ref: "#/components/schemas/APIToken" }
+  /auth/tokens/{id}:
+    delete:
+      tags: [auth]
+      summary: Revoke an API token
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "204": { description: Revoked }
+        "404": { $ref: "#/components/responses/Error" }
+  /auth/sessions:
+    get:
+      tags: [auth]
+      summary: List the caller's live sessions (current flagged)
+      responses:
+        "200":
+          description: Sessions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessions:
+                    type: array
+                    items: { $ref: "#/components/schemas/Session" }
+  /auth/sessions/{id}:
+    delete:
+      tags: [auth]
+      summary: Revoke one of the caller's sessions
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "204": { description: Revoked }
+        "404": { $ref: "#/components/responses/Error" }
+  /auth/sessions/revoke-others:
+    post:
+      tags: [auth]
+      summary: Sign out everywhere except the calling session
+      responses:
+        "200":
+          description: Revocation count
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  revoked: { type: integer }
+
+  /overview:
+    get:
+      tags: [meta]
+      summary: Dashboard counters and health summary
+      responses:
+        "200": { description: Overview object }
+  /usage:
+    get:
+      tags: [usage]
+      summary: Usage/cost estimate vs GitHub-hosted runners
+      responses:
+        "200": { description: Usage object }
+  /notifications:
+    get:
+      tags: [notifications]
+      summary: Recent outbound notification deliveries
+      responses:
+        "200": { description: Delivery list }
+  /metrics:
+    get:
+      tags: [meta]
+      summary: Prometheus text exposition (authenticated)
+      responses:
+        "200":
+          description: text/plain; version=0.0.4
+          content:
+            text/plain:
+              schema: { type: string }
+  /instance/update:
+    get:
+      tags: [instance]
+      summary: Update check against the release repo
+      responses:
+        "200": { description: Update info }
+  /instance/map:
+    get:
+      tags: [instance]
+      summary: Fleet/runner geography for the world map
+      responses:
+        "200": { description: Map data }
+  /instance/geo:
+    patch:
+      tags: [instance]
+      summary: Set the control plane's own geo override
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                lat: { type: number }
+                lon: { type: number }
+                label: { type: string }
+      responses:
+        "200": { description: Updated }
+
+  /projects:
+    get:
+      tags: [projects]
+      summary: List projects in the caller's org
+      responses:
+        "200":
+          description: Projects
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  projects: { type: array, items: { $ref: "#/components/schemas/Project" } }
+    post:
+      tags: [projects]
+      summary: Create a project (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProjectCreate" }
+      responses:
+        "201": { description: Created }
+        "403": { $ref: "#/components/responses/Error" }
+  /projects/{project}:
+    get:
+      tags: [projects]
+      summary: Project detail
+      parameters: [{ $ref: "#/components/parameters/Project" }]
+      responses:
+        "200": { description: Project }
+        "404": { $ref: "#/components/responses/Error" }
+  /projects/{project}/sync:
+    post:
+      tags: [projects]
+      summary: Sync workflows from the repo (write)
+      parameters: [{ $ref: "#/components/parameters/Project" }]
+      responses:
+        "200": { description: Sync result }
+  /projects/{project}/source:
+    put:
+      tags: [projects]
+      summary: Upload a source bundle for a local_path project (write)
+      parameters: [{ $ref: "#/components/parameters/Project" }]
+      responses:
+        "200": { description: Uploaded }
+  /projects/{project}/source/resolve:
+    get:
+      tags: [projects]
+      summary: Resolve the project's source checkout
+      parameters: [{ $ref: "#/components/parameters/Project" }]
+      responses:
+        "200": { description: Resolution }
+  /projects/{project}/icon:
+    get:
+      tags: [projects]
+      summary: Project icon image (local_path projects)
+      parameters: [{ $ref: "#/components/parameters/Project" }]
+      responses:
+        "200": { description: Image bytes }
+        "404": { $ref: "#/components/responses/Error" }
+  /projects/{project}/workflows:
+    get:
+      tags: [projects]
+      summary: List workflows discovered in the project
+      parameters: [{ $ref: "#/components/parameters/Project" }]
+      responses:
+        "200":
+          description: Workflows
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  workflows: { type: array, items: { $ref: "#/components/schemas/Workflow" } }
+  /projects/{project}/workflows/{workflowID}/runs:
+    post:
+      tags: [runs]
+      summary: Trigger a workflow run manually
+      parameters:
+        - { $ref: "#/components/parameters/Project" }
+        - { name: workflowID, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ref: { type: string }
+                inputs: { type: object, additionalProperties: true }
+      responses:
+        "201": { description: Run created }
+  /projects/{project}/environments:
+    get:
+      tags: [environments]
+      summary: List project environments
+      parameters: [{ $ref: "#/components/parameters/Project" }]
+      responses:
+        "200": { description: Environments }
+  /projects/{project}/environments/{name}:
+    put:
+      tags: [environments]
+      summary: Create/update an environment (admin)
+      parameters:
+        - { $ref: "#/components/parameters/Project" }
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Saved }
+    delete:
+      tags: [environments]
+      summary: Delete an environment (admin)
+      parameters:
+        - { $ref: "#/components/parameters/Project" }
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Deleted }
+  /projects/{project}/settings:
+    get:
+      tags: [settings]
+      summary: Project settings (fork_gate, pr_trust, notify_url, artifact_quota_mb, …)
+      parameters: [{ $ref: "#/components/parameters/Project" }]
+      responses:
+        "200": { description: Settings }
+    put:
+      tags: [settings]
+      summary: Update project settings (admin)
+      parameters: [{ $ref: "#/components/parameters/Project" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProjectSettingsWrite" }
+      responses:
+        "200": { description: Updated }
+        "400": { $ref: "#/components/responses/Error" }
+
+  /runs:
+    get:
+      tags: [runs]
+      summary: List runs (filter by project, status, …)
+      parameters:
+        - { name: project, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer } }
+      responses:
+        "200":
+          description: Runs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runs: { type: array, items: { $ref: "#/components/schemas/Run" } }
+  /runs/{id}:
+    get:
+      tags: [runs]
+      summary: Run detail with jobs and steps
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Run detail }
+        "404": { $ref: "#/components/responses/Error" }
+  /runs/{id}/cancel:
+    post:
+      tags: [runs]
+      summary: Cancel a run (write)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Cancelled }
+  /runs/{id}/approve:
+    post:
+      tags: [runs]
+      summary: Approve a gated/fork-held run (admin)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Approved }
+  /runs/{id}/rerun:
+    post:
+      tags: [runs]
+      summary: Re-run a workflow (write)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "201": { description: New run created }
+  /steps/{stepID}/logs:
+    get:
+      tags: [runs]
+      summary: Full step log text
+      parameters: [{ name: stepID, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Log text }
+  /steps/{stepID}/logs/stream:
+    get:
+      tags: [runs]
+      summary: SSE stream of step log appends
+      parameters: [{ name: stepID, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: text/event-stream }
+  /steps/{stepID}/summary:
+    get:
+      tags: [runs]
+      summary: Step summary markdown
+      parameters: [{ name: stepID, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Summary markdown }
+  /public/runs/{id}:
+    get:
+      tags: [runs]
+      security: []
+      summary: Public run page data (only when public_ci=on)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Public run view }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /runners:
+    get:
+      tags: [runners]
+      summary: List runners
+      responses:
+        "200":
+          description: Runners
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runners: { type: array, items: { $ref: "#/components/schemas/Runner" } }
+  /enroll-tokens:
+    post:
+      tags: [runners]
+      summary: Mint a runner enrollment token (admin)
+      responses:
+        "201": { description: Token }
+  /runners/{id}/drain:
+    post:
+      tags: [runners]
+      summary: Drain a runner — stop new claims (admin)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Draining }
+  /runners/{id}/geo:
+    patch:
+      tags: [runners]
+      summary: Override runner geography (admin)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                lat: { type: number }
+                lon: { type: number }
+                label: { type: string }
+      responses:
+        "200": { description: Updated }
+  /runners/{id}:
+    delete:
+      tags: [runners]
+      summary: Delete a runner (admin)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "204": { description: Deleted }
+
+  /secrets:
+    get:
+      tags: [secrets]
+      summary: List secret names/metadata (values never returned)
+      parameters:
+        - { name: project, in: query, schema: { type: string } }
+        - { name: environment, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Secret summaries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  secrets: { type: array, items: { $ref: "#/components/schemas/SecretSummary" } }
+  /secrets/{name}:
+    put:
+      tags: [secrets]
+      summary: Create/update a secret (admin; write-only)
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: project, in: query, schema: { type: string } }
+        - { name: environment, in: query, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value: { type: string }
+      responses:
+        "200": { description: Stored }
+    delete:
+      tags: [secrets]
+      summary: Delete a secret (admin)
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+        - { name: project, in: query, schema: { type: string } }
+        - { name: environment, in: query, schema: { type: string } }
+      responses:
+        "204": { description: Deleted }
+
+  /artifacts:
+    get:
+      tags: [artifacts]
+      summary: List artifacts (optionally ?run_id=)
+      parameters:
+        - { name: run_id, in: query, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, schema: { type: integer } }
+      responses:
+        "200":
+          description: Artifacts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  artifacts: { type: array, items: { $ref: "#/components/schemas/Artifact" } }
+  /artifacts/{id}/download:
+    get:
+      tags: [artifacts]
+      summary: Download an artifact archive
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: application/gzip archive }
+        "404": { $ref: "#/components/responses/Error" }
+  /artifacts/{id}:
+    delete:
+      tags: [artifacts]
+      summary: Delete an artifact
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "204": { description: Deleted }
+
+  /cache:
+    get:
+      tags: [cache]
+      summary: List cache entries
+      responses:
+        "200": { description: Cache entries }
+  /cache/{id}:
+    delete:
+      tags: [cache]
+      summary: Delete a cache entry (write)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "204": { description: Deleted }
+
+  /webhooks/deliveries:
+    get:
+      tags: [webhooks]
+      summary: List inbound webhook deliveries
+      responses:
+        "200": { description: Deliveries }
+  /webhooks/deliveries/{id}:
+    get:
+      tags: [webhooks]
+      summary: Webhook delivery detail incl. payload
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Delivery }
+  /webhooks/github:
+    post:
+      tags: [webhooks]
+      security: []
+      summary: GitHub webhook ingress (HMAC-verified)
+      parameters:
+        - { name: X-Hub-Signature-256, in: header, required: true, schema: { type: string } }
+        - { name: X-GitHub-Delivery, in: header, required: true, schema: { type: string } }
+        - { name: X-GitHub-Event, in: header, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "202": { description: Accepted }
+        "401": { description: Bad signature }
+
+  /deployments:
+    get:
+      tags: [deployments]
+      summary: List deployment-gated jobs
+      responses:
+        "200": { description: Deployments }
+  /jobs/{id}/approve:
+    post:
+      tags: [deployments]
+      summary: Approve a deployment gate (write)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Approved }
+  /jobs/{id}/reject:
+    post:
+      tags: [deployments]
+      summary: Reject a deployment gate (write)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Rejected }
+  /jobs/{id}/remediate:
+    post:
+      tags: [runs]
+      summary: Approve a self-heal remediation proposal
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [step]
+              properties: { step: { type: integer } }
+      responses:
+        "200": { description: Approved }
+  /jobs/{id}/remediate-dismiss:
+    post:
+      tags: [runs]
+      summary: Dismiss a remediation proposal
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Dismissed }
+
+  /members:
+    get:
+      tags: [members]
+      summary: List org members (admin)
+      responses:
+        "200":
+          description: Members
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  members: { type: array, items: { $ref: "#/components/schemas/Member" } }
+    post:
+      tags: [members]
+      summary: Create a member (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, role]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+                role: { type: string, enum: [owner, admin, member] }
+      responses:
+        "201": { description: Created }
+  /members/{id}:
+    patch:
+      tags: [members]
+      summary: Change a member's role (admin)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role: { type: string, enum: [owner, admin, member] }
+      responses:
+        "200": { description: Updated }
+    delete:
+      tags: [members]
+      summary: Remove a member; revokes sessions+tokens (admin)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "204": { description: Removed }
+
+  /settings:
+    get:
+      tags: [settings]
+      summary: Org settings (self_heal, public_ci, notify_*, …)
+      responses:
+        "200": { description: Settings }
+    put:
+      tags: [settings]
+      summary: Update org settings (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                self_heal: { type: string, enum: [off, auto, approve] }
+                public_ci: { type: string, enum: [on, off] }
+                auto_update: { type: string, enum: [on, off] }
+                notify_url: { type: string }
+                notify_secret: { type: string }
+                notify_events: { type: string, description: "CSV of success,failure,cancelled,skipped; empty = all" }
+                notify_format: { type: string, enum: [kern, slack] }
+      responses:
+        "200": { description: Updated }
+        "400": { $ref: "#/components/responses/Error" }
+
+  /audit:
+    get:
+      tags: [audit]
+      summary: Recent audit events (admin)
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, maximum: 200 } }
+      responses:
+        "200":
+          description: Events
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events: { type: array, items: { $ref: "#/components/schemas/AuditEvent" } }
+  /audit/export:
+    get:
+      tags: [audit]
+      summary: Audit trail as JSONL for compliance pulls (admin)
+      parameters:
+        - { name: from, in: query, schema: { type: string }, description: "RFC3339 or YYYY-MM-DD, inclusive" }
+        - { name: to, in: query, schema: { type: string }, description: "RFC3339 or YYYY-MM-DD, exclusive" }
+      responses:
+        "200":
+          description: application/x-ndjson, oldest first
+          content:
+            application/x-ndjson:
+              schema: { type: string }
+        "400": { $ref: "#/components/responses/Error" }
+
+  /github-app/manifest:
+    get:
+      tags: [instance]
+      summary: GitHub App manifest flow start (admin)
+      responses:
+        "200": { description: Manifest redirect }
+  /github-app/callback:
+    get:
+      tags: [instance]
+      summary: GitHub App manifest callback (admin)
+      responses:
+        "200": { description: App installed }
+  /github-app/status:
+    get:
+      tags: [instance]
+      summary: GitHub App connection status
+      responses:
+        "200": { description: Status }
+  /github-app/{id}:
+    delete:
+      tags: [instance]
+      summary: Disconnect a GitHub App (admin)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "204": { description: Disconnected }
+  /mcp:
+    post:
+      tags: [instance]
+      summary: MCP JSON-RPC endpoint (same auth/scopes as HTTP)
+      responses:
+        "200": { description: JSON-RPC response }
+
+  /runners/register:
+    post:
+      tags: [runner-protocol]
+      security: []
+      summary: Runner enrollment with join token
+      responses:
+        "201": { description: Runner token }
+        "401": { description: Bad join token }
+  /update/plan:
+    get:
+      tags: [runner-protocol]
+      security: []
+      summary: Self-update plan for a runner
+      responses:
+        "200": { description: Plan }
+  /update/status:
+    post:
+      tags: [runner-protocol]
+      security: []
+      summary: Runner update status report
+      responses:
+        "200": { description: Ack }
+  /runners/heartbeat:
+    post:
+      tags: [runner-protocol]
+      summary: Runner heartbeat (runner token)
+      responses:
+        "200": { description: Ack }
+  /runners/claim:
+    post:
+      tags: [runner-protocol]
+      summary: Claim the next queued job (runner token)
+      responses:
+        "200": { description: Job payload or empty }
+        "204": { description: No work }
+  /runners/jobs/{jobID}/heartbeat:
+    post:
+      tags: [runner-protocol]
+      summary: Renew a job lease
+      parameters: [{ name: jobID, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Lease renewed }
+  /runners/jobs/{jobID}/cancel-check:
+    get:
+      tags: [runner-protocol]
+      summary: Poll whether the job was cancelled
+      parameters: [{ name: jobID, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Cancel flag }
+  /runners/jobs/{jobID}/secrets:
+    get:
+      tags: [runner-protocol]
+      summary: Decrypted secrets for the claimed job's scope
+      parameters: [{ name: jobID, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Secret map }
+  /runners/jobs/{jobID}/source:
+    get:
+      tags: [runner-protocol]
+      summary: Source archive for the claimed job
+      parameters: [{ name: jobID, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Archive }
+  /runners/jobs/{jobID}/steps/{n}/start:
+    post:
+      tags: [runner-protocol]
+      summary: Mark step n started
+      parameters:
+        - { name: jobID, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: n, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: Ack }
+  /runners/jobs/{jobID}/steps/{n}/logs:
+    post:
+      tags: [runner-protocol]
+      summary: Append step log chunk
+      parameters:
+        - { name: jobID, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: n, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        content:
+          text/plain: { schema: { type: string } }
+          application/octet-stream: { schema: { type: string, format: binary } }
+      responses:
+        "200": { description: Ack }
+  /runners/jobs/{jobID}/steps/{n}/finish:
+    post:
+      tags: [runner-protocol]
+      summary: Finish step n with conclusion
+      parameters:
+        - { name: jobID, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: n, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                conclusion: { type: string }
+                error: { type: string }
+      responses:
+        "200": { description: Ack }
+  /runners/jobs/{jobID}/steps/{n}/summary:
+    put:
+      tags: [runner-protocol]
+      summary: Upload step summary markdown
+      parameters:
+        - { name: jobID, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: n, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        content:
+          text/markdown: { schema: { type: string } }
+      responses:
+        "200": { description: Ack }
+  /runners/jobs/{jobID}/finish:
+    post:
+      tags: [runner-protocol]
+      summary: Finish the claimed job
+      parameters: [{ name: jobID, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                conclusion: { type: string }
+                error: { type: string }
+      responses:
+        "200": { description: Ack }
+  /runners/jobs/{jobID}/artifacts:
+    get:
+      tags: [runner-protocol]
+      summary: List artifact names uploaded for this run
+      parameters: [{ name: jobID, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: "{artifacts: [names]}" }
+  /runners/jobs/{jobID}/artifacts/{name}:
+    put:
+      tags: [runner-protocol]
+      summary: Upload an artifact (tar.gz); subject to project artifact_quota_mb
+      parameters:
+        - { name: jobID, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: name, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/gzip: { schema: { type: string, format: binary } }
+      responses:
+        "201": { description: Stored }
+        "413": { description: "quota_exceeded" }
+    get:
+      tags: [runner-protocol]
+      summary: Download an artifact for actions/download-artifact
+      parameters:
+        - { name: jobID, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: application/gzip archive }
+  /runners/jobs/{jobID}/cache/restore:
+    get:
+      tags: [runner-protocol]
+      summary: Restore a cache entry
+      parameters:
+        - { name: jobID, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: key, in: query, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Archive or 404 }
+  /runners/jobs/{jobID}/cache/{key}:
+    put:
+      tags: [runner-protocol]
+      summary: Save a cache entry
+      parameters:
+        - { name: jobID, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: key, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/octet-stream: { schema: { type: string, format: binary } }
+      responses:
+        "200": { description: Stored }
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: kern_session
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: API token from POST /auth/token or /auth/tokens
+  parameters:
+    Project:
+      name: project
+      in: path
+      required: true
+      schema: { type: string }
+      description: Project slug or id
+  responses:
+    Error:
+      description: Error envelope
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string }
+        name: { type: string }
+        role: { type: string, enum: [owner, admin, member] }
+        org_id: { type: string, format: uuid }
+    Session:
+      type: object
+      required: [id]
+      properties:
+        id: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        current: { type: boolean }
+    APIToken:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        scopes: { type: array, items: { type: string } }
+        created_at: { type: string, format: date-time }
+        last_used_at: { type: string, format: date-time, nullable: true }
+    Member:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        email: { type: string }
+        role: { type: string, enum: [owner, admin, member] }
+        created_at: { type: string, format: date-time }
+    Project:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        org_id: { type: string, format: uuid }
+        slug: { type: string }
+        name: { type: string }
+        provider: { type: string }
+        repo_full_name: { type: string }
+        repo_url: { type: string }
+        default_branch: { type: string }
+        local_path: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ProjectCreate:
+      type: object
+      required: [slug, name]
+      properties:
+        slug: { type: string }
+        name: { type: string }
+        provider: { type: string, enum: [github, local] }
+        repo_full_name: { type: string }
+        repo_url: { type: string }
+        default_branch: { type: string }
+        local_path: { type: string }
+    ProjectSettingsWrite:
+      type: object
+      properties:
+        self_heal: { type: string, enum: [off, auto, approve, inherit] }
+        fork_gate: { type: string, enum: [off, all, first-time] }
+        pr_trust: { type: string, enum: [off, trusted] }
+        icon_path: { type: string, nullable: true }
+        notify_url: { type: string, description: "http(s) URL, 'off' to disable, '' to inherit org" }
+        artifact_quota_mb: { type: integer, minimum: 0, description: "0 disables the quota" }
+    Workflow:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        project_id: { type: string, format: uuid }
+        path: { type: string }
+        name: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    Run:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        project_id: { type: string, format: uuid }
+        workflow_id: { type: string, format: uuid }
+        run_number: { type: integer }
+        event: { type: string }
+        ref: { type: string }
+        sha: { type: string }
+        status: { type: string }
+        conclusion: { type: string }
+        trust_level: { type: string }
+        concurrency_group: { type: string }
+        started_at: { type: string, format: date-time, nullable: true }
+        completed_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+        workflow_name: { type: string }
+        workflow_path: { type: string }
+        project_slug: { type: string }
+        project_name: { type: string }
+    Runner:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        status: { type: string }
+        labels: { type: array, items: { type: string } }
+        last_seen_at: { type: string, format: date-time, nullable: true }
+        draining: { type: boolean }
+        created_at: { type: string, format: date-time }
+    SecretSummary:
+      type: object
+      properties:
+        name: { type: string }
+        project_id: { type: string, format: uuid, nullable: true }
+        environment_id: { type: string, format: uuid, nullable: true }
+        updated_at: { type: string, format: date-time }
+    Artifact:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        run_id: { type: string, format: uuid }
+        job_id: { type: string, format: uuid, nullable: true }
+        name: { type: string }
+        size_bytes: { type: integer, format: int64 }
+        sha256: { type: string }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time, nullable: true }
+        run_number: { type: integer }
+        project_slug: { type: string }
+    AuditEvent:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        org_id: { type: string, format: uuid }
+        action: { type: string }
+        target: { type: string }
+        actor: { type: string }
+        metadata: { type: object, additionalProperties: true }
+        created_at: { type: string, format: date-time }

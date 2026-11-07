@@ -57,8 +57,9 @@ func testStore(t testing.TB) (*Store, context.Context) {
 	for _, table := range []string{
 		"steps", "job_leases", "jobs", "artifacts", "cache_entries",
 		"workflow_runs", "workflow_versions", "workflows", "runners",
-		// Memberships too: Bootstrap's ON CONFLICT DO NOTHING never restores
-		// a demoted owner, so a prior run's leftovers break role tests.
+		// Membership rows are reset too: role mutations in one test (e.g.
+		// demoting the bootstrap owner) must not leak into the next, and
+		// Bootstrap's ON CONFLICT DO NOTHING cannot restore a changed role.
 		"org_members",
 	} {
 		if _, err := s.pool.Exec(ctx, "DELETE FROM "+table); err != nil {

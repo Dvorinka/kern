@@ -104,8 +104,11 @@ func run() int {
 	orch.CacheMaxAge = cfg.CacheMaxAge
 	orch.LogRetention = cfg.LogRetention
 	orch.WebhookRetention = cfg.WebhookRetention
+	orch.AuditRetention = cfg.AuditRetention
+	orch.NotifyRetention = cfg.NotifyRetention
 	orch.Blobs = blobStore
 	srv := api.New(cfg, st, orch, blobStore, cipher, log)
+	orch.NotifySweep = srv.DeliverNotifyBatch
 
 	// The scheduler advances gated runs between job completions.
 	go schedulerLoop(ctx, cfg, orch, log)

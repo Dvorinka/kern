@@ -31,6 +31,8 @@ type Config struct {
 	LogRetention     time.Duration
 	CacheMaxAge      time.Duration
 	WebhookRetention time.Duration
+	AuditRetention   time.Duration
+	NotifyRetention  time.Duration
 	AllowedOrigins   []string
 	DefaultImage     string
 	WebDir           string
@@ -95,6 +97,8 @@ func Load() (*Config, error) {
 		LogRetention:     duration("KERN_LOG_RETENTION", 30*24*time.Hour),
 		CacheMaxAge:      duration("KERN_CACHE_MAX_AGE", 7*24*time.Hour),
 		WebhookRetention: duration("KERN_WEBHOOK_RETENTION", 30*24*time.Hour),
+		AuditRetention:   duration("KERN_AUDIT_RETENTION", 365*24*time.Hour),
+		NotifyRetention:  duration("KERN_NOTIFY_RETENTION", 30*24*time.Hour),
 		AllowedOrigins:   splitList(env("KERN_ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:8081")),
 		DefaultImage:     env("KERN_DEFAULT_IMAGE", "ubuntu:24.04"),
 		WebDir:           env("KERN_WEB_DIR", ""),

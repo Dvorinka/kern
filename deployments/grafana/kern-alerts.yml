@@ -1,0 +1,74 @@
+# KERN alerting rules — Prometheus rule format, loadable by Prometheus
+# directly or imported into Grafana-managed alerts. Every expression reads a
+# series the api actually exports on /metrics (see internal/api/metrics*.go
+# and internal/telemetry/metrics.go).
+groups:
+  - name: kern.control-plane
+    rules:
+      - alert: KernNoSchedulerLeader
+        # Exactly one replica should report leader=1. Zero means ticks,
+        # sweeps and notify delivery have all stopped.
+        expr: sum(kern_scheduler_leader) < 1
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "No KERN api replica holds the scheduler lock"
+          description: "Scheduler ticks, retention sweeps and notification delivery are not running. Check api replicas and Postgres connectivity."
+
+      - alert: KernExcessSchedulerLeaders
+        expr: sum(kern_scheduler_leader) > 1
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Multiple KERN replicas report scheduler leadership"
+          description: "The advisory lock should serialize ticks to one leader; >1 suggests stale scrapes or a lock bug."
+
+      - alert: KernNotifyDeadLetters
+        expr: increase(kern_notify_deliveries_total{result="dead"}[15m]) > 0
+        for: 0m
+        labels: { severity: warning }
+        annotations:
+          summary: "KERN notification deliveries are dead-lettering"
+          description: "Outbound run notifications exhausted retries. Check notify_url reachability and org notify settings."
+
+      - alert: KernGitHubRateLimitLow
+        expr: kern_github_rate_limit_remaining < 500
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "GitHub API rate limit nearly exhausted"
+          description: "Remaining={{ $value }}. Webhook processing and status posting will start failing."
+
+      - alert: KernJobQueueBacklog
+        expr: kern_jobs_queued > 50
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "KERN job queue is backing up"
+          description: "{{ $value }} jobs queued for 15m+. Check runner count and labels."
+
+      - alert: KernNoRunnersOnline
+        expr: kern_runners_online < 1
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "No KERN runners online"
+          description: "Queued jobs cannot be claimed while every runner is offline or stale."
+
+      - alert: KernHTTPServerErrors
+        expr: |
+          sum(rate(kern_http_request_duration_seconds_count{status="5xx"}[5m]))
+            / sum(rate(kern_http_request_duration_seconds_count[5m])) > 0.05
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "KERN api 5xx ratio above 5%"
+          description: "Check api logs; the error ratio has been elevated for 10m."
+
+      - alert: KernTickSlow
+        expr: histogram_quantile(0.95, sum by (le) (rate(kern_scheduler_tick_duration_seconds_bucket[5m]))) > 5
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "KERN scheduler tick p95 above 5s"
+          description: "Tick p95={{ $value }}s. Active-run advancement may be falling behind; check store latency."

@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -31,12 +32,50 @@ func (s *Server) uploadArtifact(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
+	if msg := s.checkArtifactQuota(c, job.RunID, name, size); msg != "" {
+		_ = s.Blobs.Delete(key)
+		fail(c, http.StatusRequestEntityTooLarge, "quota_exceeded", msg)
+		return
+	}
 	a, err := s.Store.CreateArtifact(c.Request.Context(), job.RunID, job.ID, name, key, size, sha)
 	if err != nil {
 		s.internalError(c, err)
 		return
 	}
 	c.JSON(http.StatusCreated, gin.H{"artifact": gin.H{"id": a.ID, "name": a.Name, "size": a.SizeBytes}})
+}
+
+// checkArtifactQuota enforces the project's artifact_quota_mb setting. An
+// overwrite of an existing same-name artifact replaces its bytes rather than
+// adding to the total. Returns "" when the upload fits or no quota is set.
+func (s *Server) checkArtifactQuota(c *gin.Context, runID uuid.UUID, name string, size int64) string {
+	run, err := s.Store.Run(c.Request.Context(), runID)
+	if err != nil {
+		return ""
+	}
+	raw, err := s.Store.ProjectSettings(c.Request.Context(), run.ProjectID)
+	if err != nil {
+		return ""
+	}
+	mb, err := strconv.ParseInt(settingsValue(raw, "artifact_quota_mb", "0"), 10, 64)
+	if err != nil || mb <= 0 {
+		return ""
+	}
+	quota := mb << 20
+	existing := int64(0)
+	if prev, err := s.Store.ArtifactByName(c.Request.Context(), runID, name); err == nil {
+		existing = prev.SizeBytes
+	}
+	total, err := s.Store.ArtifactBytesForProject(c.Request.Context(), run.ProjectID)
+	if err != nil {
+		return ""
+	}
+	projected := total - existing + size
+	if projected <= quota {
+		return ""
+	}
+	return fmt.Sprintf("artifact quota exceeded: %d MB limit, upload would use %d MB",
+		mb, projected>>20)
 }
 
 // downloadArtifact streams an artifact back to a runner for actions/download-artifact.

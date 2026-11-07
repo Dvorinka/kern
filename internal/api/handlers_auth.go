@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -120,6 +121,66 @@ func (s *Server) me(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"user": user})
+}
+
+// currentSessionHash is the hash of the caller's session cookie, empty for
+// API-token auth. It identifies "this device" in session lists without ever
+// exposing the token.
+func (s *Server) currentSessionHash(c *gin.Context) string {
+	if cookie, err := c.Cookie(auth.SessionCookie); err == nil && cookie != "" {
+		return auth.HashToken(cookie)
+	}
+	return ""
+}
+
+// listSessions shows the caller's live login sessions; the current one is
+// flagged so the UI can label it.
+func (s *Server) listSessions(c *gin.Context) {
+	user, _ := currentUser(c)
+	sessions, err := s.Store.ListSessions(c.Request.Context(), user.ID)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	cur := s.currentSessionHash(c)
+	for i := range sessions {
+		sessions[i].Current = cur != "" && sessions[i].TokenHash == cur
+	}
+	c.JSON(http.StatusOK, gin.H{"sessions": sessions})
+}
+
+// revokeSession deletes one of the caller's own sessions by id.
+func (s *Server) revokeSession(c *gin.Context) {
+	user, _ := currentUser(c)
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		fail(c, http.StatusBadRequest, "invalid_id", "session id must be a uuid")
+		return
+	}
+	if err := s.Store.DeleteSessionByID(c.Request.Context(), user.ID, id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			fail(c, http.StatusNotFound, "not_found", "session not found")
+			return
+		}
+		s.internalError(c, err)
+		return
+	}
+	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "session.revoke", id.String())
+	c.Status(http.StatusNoContent)
+}
+
+// revokeOtherSessions signs the user out everywhere except the session making
+// the call. API-token callers have no session to keep, so every web session
+// is revoked — the token itself stays valid.
+func (s *Server) revokeOtherSessions(c *gin.Context) {
+	user, _ := currentUser(c)
+	n, err := s.Store.DeleteOtherSessions(c.Request.Context(), user.ID, s.currentSessionHash(c))
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "session.revoke_others", fmt.Sprintf("%d revoked", n))
+	c.JSON(http.StatusOK, gin.H{"revoked": n})
 }
 
 type createTokenRequest struct {

@@ -3,9 +3,9 @@ package api
 // In-process metrics for /metrics. The store-backed series (queue wait, step
 // duration, runner gauges) are computed at scrape time; these cover signals
 // that only exist inside the API process: claim query latency, webhook
-// processing, scheduler tick cost and cache lookup outcomes. Counters reset
-// on restart — Prometheus rate() handles that; histograms use fixed buckets
-// so exposition stays cheap.
+// processing and cache lookup outcomes. Scheduler tick cost lives in
+// internal/telemetry (leader-gated). Counters reset on restart — Prometheus
+// rate() handles that; histograms use fixed buckets so exposition stays cheap.
 
 import (
 	"fmt"
@@ -56,7 +56,6 @@ type kernMetrics struct {
 	cacheLookups   map[string]uint64
 	claimQuery     *histogram
 	webhookProcess *histogram
-	tick           *histogram
 }
 
 func newKernMetrics() *kernMetrics {
@@ -67,8 +66,6 @@ func newKernMetrics() *kernMetrics {
 		claimQuery: newHistogram([]float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5}),
 		// Webhook processing includes run creation and GitHub API calls.
 		webhookProcess: newHistogram([]float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30}),
-		// Tick fires every KERN_SCHEDULER_TICK (2s default).
-		tick: newHistogram([]float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5}),
 	}
 }
 
@@ -90,21 +87,15 @@ func (m *kernMetrics) observeWebhook(d time.Duration) {
 	m.mu.Unlock()
 }
 
-func (m *kernMetrics) observeTick(d time.Duration) {
-	m.mu.Lock()
-	m.tick.observe(d.Seconds())
-	m.mu.Unlock()
-}
-
 // snapshot returns a stable copy for rendering.
-func (m *kernMetrics) snapshot() (map[string]uint64, *histogram, *histogram, *histogram) {
+func (m *kernMetrics) snapshot() (map[string]uint64, *histogram, *histogram) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	lookups := make(map[string]uint64, len(m.cacheLookups))
 	for k, v := range m.cacheLookups {
 		lookups[k] = v
 	}
-	return lookups, m.claimQuery, m.webhookProcess, m.tick
+	return lookups, m.claimQuery, m.webhookProcess
 }
 
 // writeDurationHistogram emits a store.DurationHistogram (non-cumulative

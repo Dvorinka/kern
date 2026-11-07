@@ -1,11 +1,14 @@
 package api
 
 import (
+	"bufio"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	"github.com/dvorinka/kern/internal/store"
 )
@@ -84,4 +87,52 @@ func (s *Server) listAudit(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"events": events})
+}
+
+// auditTimeParam parses an optional RFC3339 or YYYY-MM-DD bound.
+func auditTimeParam(c *gin.Context, name string) (*time.Time, bool) {
+	raw := c.Query(name)
+	if raw == "" {
+		return nil, true
+	}
+	for _, layout := range []string{time.RFC3339, "2006-01-02"} {
+		if t, err := time.Parse(layout, raw); err == nil {
+			return &t, true
+		}
+	}
+	fail(c, http.StatusBadRequest, "invalid_time", name+" must be RFC3339 or YYYY-MM-DD")
+	return nil, false
+}
+
+// exportAudit streams the org audit trail as JSONL for compliance pulls.
+// ?from=&to= bound the range (open when absent); rows go oldest-first.
+func (s *Server) exportAudit(c *gin.Context) {
+	user, _ := currentUser(c)
+	from, ok := auditTimeParam(c, "from")
+	if !ok {
+		return
+	}
+	to, ok := auditTimeParam(c, "to")
+	if !ok {
+		return
+	}
+	if from != nil && to != nil && !from.Before(*to) {
+		fail(c, http.StatusBadRequest, "invalid_range", "from must be before to")
+		return
+	}
+	c.Header("Content-Type", "application/x-ndjson")
+	c.Header("Content-Disposition", `attachment; filename="kern-audit.jsonl"`)
+	w := bufio.NewWriter(c.Writer)
+	defer w.Flush()
+	err := s.Store.EachAuditEvent(c.Request.Context(), user.OrgID, from, to, func(e store.AuditEvent) error {
+		line, err := json.Marshal(e)
+		if err != nil {
+			return err
+		}
+		_, err = w.Write(append(line, '\n'))
+		return err
+	})
+	if err != nil {
+		s.Log.Error("audit export", zap.Error(err))
+	}
 }

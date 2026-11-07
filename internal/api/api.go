@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"path"
 	"path/filepath"
@@ -23,6 +24,7 @@ import (
 	"github.com/dvorinka/kern/internal/orchestrator"
 	"github.com/dvorinka/kern/internal/secrets"
 	"github.com/dvorinka/kern/internal/store"
+	"github.com/dvorinka/kern/internal/telemetry"
 	"github.com/dvorinka/kern/internal/version"
 )
 
@@ -67,7 +69,6 @@ func New(cfg *config.Config, st *store.Store, orch *orchestrator.Orchestrator, b
 		ghApps: make(map[uuid.UUID]*github.App), ghRepoApp: make(map[string]uuid.UUID),
 		metrics: newKernMetrics(),
 	}
-	orch.TickObserver = s.metrics.observeTick
 	s.wireCommitStatus()
 	s.Engine = s.buildRouter()
 	return s
@@ -115,12 +116,27 @@ func (s *Server) wireCommitStatus() {
 	}
 }
 
+// httpMetrics records per-route latency into the telemetry registry. Route
+// patterns (not raw paths) keep label cardinality bounded.
+func (s *Server) httpMetrics() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		start := time.Now()
+		c.Next()
+		route := c.FullPath()
+		if route == "" {
+			route = "unmatched"
+		}
+		status := fmt.Sprintf("%d", c.Writer.Status()/100)
+		telemetry.ObserveHTTPRequest(c.Request.Method, route, status+"xx", time.Since(start).Seconds())
+	}
+}
+
 func (s *Server) buildRouter() *gin.Engine {
 	if s.Cfg.Env == "production" {
 		gin.SetMode(gin.ReleaseMode)
 	}
 	r := gin.New()
-	r.Use(gin.Recovery(), s.requestLogger(), s.securityHeaders(), s.cors())
+	r.Use(gin.Recovery(), s.requestLogger(), s.securityHeaders(), s.cors(), s.httpMetrics())
 	r.MaxMultipartMemory = 8 << 20
 
 	r.GET("/healthz", s.health)
@@ -145,6 +161,9 @@ func (s *Server) buildRouter() *gin.Engine {
 		auth.GET("/auth/tokens", s.listTokens)
 		write.POST("/auth/tokens", s.createToken)
 		write.DELETE("/auth/tokens/:id", s.deleteToken)
+		auth.GET("/auth/sessions", s.listSessions)
+		auth.DELETE("/auth/sessions/:id", s.revokeSession)
+		write.POST("/auth/sessions/revoke-others", s.revokeOtherSessions)
 
 		auth.GET("/overview", s.overview)
 		auth.GET("/projects", s.listProjects)
@@ -202,6 +221,7 @@ func (s *Server) buildRouter() *gin.Engine {
 		auth.GET("/usage", s.usage)
 		auth.GET("/notifications", s.notifications)
 		admin.GET("/audit", s.listAudit)
+		admin.GET("/audit/export", s.exportAudit)
 		auth.GET("/instance/update", s.updateCheck)
 		auth.GET("/metrics", s.prometheus)
 		auth.POST("/mcp", s.mcp)
