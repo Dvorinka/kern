@@ -40,6 +40,7 @@ func (s *Store) PendingRemediations(ctx context.Context, orgID uuid.UUID, limit 
 		JOIN projects p ON p.id = r.project_id
 		WHERE p.org_id = $1
 		  AND j.conclusion = 'failure'
+		  AND r.status IN ('awaiting_approval', 'queued', 'in_progress')
 		  AND s.diagnosis->>'fixable' = 'true'
 		  AND s.diagnosis ? 'remediation'
 		  AND coalesce(s.diagnosis->'remediation'->>'approved', 'false') = 'false'

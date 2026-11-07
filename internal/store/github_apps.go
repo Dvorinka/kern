@@ -77,6 +77,13 @@ func (s *Store) GitHubApps(ctx context.Context, orgID uuid.UUID) ([]GitHubApp, e
 	return out, rows.Err()
 }
 
+// DeleteGitHubApp disconnects a registered app from an org.
+func (s *Store) DeleteGitHubApp(ctx context.Context, orgID, id uuid.UUID) error {
+	_, err := s.pool.Exec(ctx,
+		`DELETE FROM github_apps WHERE id = $1 AND org_id = $2`, id, orgID)
+	return err
+}
+
 // AllGitHubApps lists every registered app across orgs — used for webhook
 // signature verification and repo → installation resolution.
 func (s *Store) AllGitHubApps(ctx context.Context) ([]GitHubApp, error) {

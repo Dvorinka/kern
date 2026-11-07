@@ -484,6 +484,19 @@ func (s *Store) FinishRunIfDone(ctx context.Context, runID uuid.UUID) error {
 		WHERE id = $1 AND status = 'in_progress'`, runID); err != nil {
 		return err
 	}
+	// A completed run can never consume an approved remediation — withdraw
+	// outstanding proposals so they stop asking for a decision that cannot
+	// be acted on.
+	if _, err := tx.Exec(ctx, `
+		UPDATE steps s SET diagnosis = jsonb_set(s.diagnosis, '{remediation,dismissed}', 'true')
+		FROM jobs j
+		WHERE s.job_id = j.id AND j.run_id = $1
+		  AND s.diagnosis->'remediation' IS NOT NULL
+		  AND coalesce(s.diagnosis->'remediation'->>'approved', 'false') = 'false'
+		  AND coalesce(s.diagnosis->'remediation'->>'applied', 'false') = 'false'
+		  AND coalesce(s.diagnosis->'remediation'->>'dismissed', 'false') = 'false'`, runID); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
 

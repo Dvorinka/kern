@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useState, type FormEvent } from "react";
 import { Play, RefreshCw } from "lucide-react";
 import { api } from "../lib/api";
+import { connectGitHubApp } from "../lib/github";
 import type { Project, Workflow } from "../lib/types";
 import { Button, Card, EmptyState, Input, KV, PageHeader, Spinner } from "../components/ui";
 import { Row } from "../components/layout";
@@ -23,24 +24,7 @@ export function ProjectsPage() {
 			qc.invalidateQueries({ queryKey: ["projects"] });
 		},
 	});
-	// GitHub's app-manifest flow must leave the browser as a form POST — fetch
-	// the manifest, then submit it to github.com so the app is created under
-	// the user's own account.
-	const connect = useMutation({
-		mutationFn: () => api.get<{ url: string; manifest: Record<string, unknown> }>("/github-app/manifest"),
-		onSuccess: (data) => {
-			const form = document.createElement("form");
-			form.method = "post";
-			form.action = data.url;
-			const input = document.createElement("input");
-			input.type = "hidden";
-			input.name = "manifest";
-			input.value = JSON.stringify(data.manifest);
-			form.appendChild(input);
-			document.body.appendChild(form);
-			form.submit();
-		},
-	});
+	const connect = useMutation({ mutationFn: connectGitHubApp });
 
 	return (
 		<>

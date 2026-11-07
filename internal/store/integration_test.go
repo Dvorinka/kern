@@ -591,3 +591,57 @@ func TestRunApprovalHold(t *testing.T) {
 		t.Fatalf("active runs = %d, %v; want 1", n, err)
 	}
 }
+
+// RunnerActiveJobs scans the same column set as Job — a missing column once
+// made every runner silently report zero active jobs.
+func TestRunnerActiveJobs(t *testing.T) {
+	s, ctx := testStore(t)
+	pid, wid, vid := fixture(t, ctx, s)
+	_, jobs := seedRun(t, ctx, s, CreateRunParams{
+		ProjectID: pid, WorkflowID: wid, WorkflowVersionID: vid,
+		Event: "push", Ref: "refs/heads/main", TrustLevel: "trusted",
+	}, 1)
+	r := runner(t, ctx, s, "active")
+	if _, err := s.ClaimJob(ctx, r.ID, time.Hour); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	got, err := s.RunnerActiveJobs(ctx, r.ID)
+	if err != nil {
+		t.Fatalf("RunnerActiveJobs: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != jobs[0].ID {
+		t.Fatalf("active jobs = %d rows, want the claimed job", len(got))
+	}
+}
+
+// A job left queued under a finished run can never be claimed; the sweeper
+// must cancel it instead of letting it inflate the queue forever.
+func TestCancelOrphanedJobs(t *testing.T) {
+	s, ctx := testStore(t)
+	pid, wid, vid := fixture(t, ctx, s)
+	run, jobs := seedRun(t, ctx, s, CreateRunParams{
+		ProjectID: pid, WorkflowID: wid, WorkflowVersionID: vid,
+		Event: "push", Ref: "refs/heads/main", TrustLevel: "trusted",
+	}, 1)
+	// Force the run terminal while its job is still queued — the state a
+	// stale remediation approval used to produce.
+	if _, err := s.pool.Exec(ctx,
+		`UPDATE workflow_runs SET status = 'completed', completed_at = now() WHERE id = $1`,
+		run.ID); err != nil {
+		t.Fatalf("finish run: %v", err)
+	}
+	n, err := s.CancelOrphanedJobs(ctx)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("swept %d jobs, want 1", n)
+	}
+	j, err := s.Job(ctx, jobs[0].ID)
+	if err != nil {
+		t.Fatalf("job: %v", err)
+	}
+	if j.Status != "cancelled" || j.Conclusion != "cancelled" {
+		t.Fatalf("job = %s/%s, want cancelled/cancelled", j.Status, j.Conclusion)
+	}
+}

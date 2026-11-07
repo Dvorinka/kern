@@ -35,6 +35,15 @@ var (
 	pkgNameRe      = regexp.MustCompile(`^[a-zA-Z0-9._+-]{1,64}$`)
 )
 
+// unfixablePkg lists missing commands whose package install cannot fix the
+// failure: they need a daemon, socket, or privileged service the job container
+// does not have. Auto-remediation would burn a retry and fail identically.
+var unfixablePkg = map[string]bool{
+	"docker": true, "dockerd": true, "containerd": true, "buildkitd": true,
+	"podman": true, "buildah": true, "nerdctl": true, "sudo": true,
+	"systemctl": true, "service": true,
+}
+
 // libPackage maps the shared libraries job images most often lack onto their
 // Debian package. Not derivable in general — kept deliberately small.
 var libPackage = map[string]string{
@@ -98,6 +107,15 @@ func diagnose(step StepSpec, exitCode int, logTail, stepErr string) *diagnosis {
 		pkg := missingBinary(logTail)
 		d = fail("missing_binary", "A required command is missing in the job image",
 			"install it in a prior step or switch to an image that ships it")
+		if pkg != "" && unfixablePkg[pkg] {
+			// Daemon/socket tools: installing the CLI does not provide the
+			// service, so an auto-fix would just fail again on the next run.
+			d.Summary = "Command `" + pkg + "` needs a daemon or socket the job image does not have"
+			d.Suggestion = "install it in a prior step or use an image that ships it"
+			d.AgentPrompt = "CI step failed: `" + pkg + "` requires a daemon or socket unavailable in the job container. " +
+				"Suggested fix: " + d.Suggestion
+			return d
+		}
 		if pkg != "" {
 			d.Summary = "Command `" + pkg + "` is missing in the job image"
 			d.Suggestion = "install `" + pkg + "` in a prior step or use an image that ships it"

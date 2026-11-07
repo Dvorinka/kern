@@ -391,7 +391,7 @@ func (s *Server) approveRemediation(c *gin.Context) {
 			fail(c, http.StatusNotFound, "no_proposal", err.Error())
 			return
 		}
-		if strings.Contains(err.Error(), "in progress") {
+		if strings.Contains(err.Error(), "in progress") || strings.Contains(err.Error(), "already finished") {
 			fail(c, http.StatusConflict, "job_running", err.Error())
 			return
 		}

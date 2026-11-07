@@ -206,7 +206,7 @@ func (s *Store) InFlightJobs(ctx context.Context, orgID uuid.UUID) ([]LiveJob, e
 // RunnerActiveJobs lists jobs currently leased to a runner.
 func (s *Store) RunnerActiveJobs(ctx context.Context, runnerID uuid.UUID) ([]Job, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT j.id, j.run_id, j.job_key, j.name, j.status, j.conclusion, j.needs, j.runs_on,
+		SELECT j.id, j.run_id, j.job_key, j.key, j.name, j.status, j.conclusion, j.needs, j.runs_on,
 		       j.image, j.matrix, j.env, j.if_condition, j.timeout_seconds, j.continue_on_error,
 		       j.fail_fast, j.priority, j.attempt, j.runner_id, j.queued_at, j.started_at, j.completed_at,
 		       j.lease_expires_at, j.error, j.outputs, j.outputs_spec, j.environment, j.environment_url,

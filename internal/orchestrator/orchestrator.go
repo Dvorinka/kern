@@ -165,6 +165,13 @@ func (o *Orchestrator) Tick(ctx context.Context) {
 	} else if len(reaped) > 0 {
 		o.Log.Warn("reaped jobs", zap.Int("jobs", len(reaped)))
 	}
+	// Cancel queued jobs orphaned under finished runs — they can never be
+	// claimed and only inflate the queue count.
+	if n, err := o.Store.CancelOrphanedJobs(ctx); err != nil {
+		o.Log.Error("cancel orphaned jobs", zap.Error(err))
+	} else if n > 0 {
+		o.Log.Info("cancelled jobs orphaned by finished runs", zap.Int64("jobs", n))
+	}
 	// Belt-and-braces job timeout: the runner enforces the same ceiling, so a
 	// hit here means a runner renewed its lease without enforcing it.
 	if n, err := o.Store.TimeoutOverdueJobs(ctx); err != nil {

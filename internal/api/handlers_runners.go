@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 
 	"github.com/dvorinka/kern/internal/auth"
 	"github.com/dvorinka/kern/internal/store"
@@ -25,7 +26,10 @@ func (s *Server) listRunners(c *gin.Context) {
 	}
 	out := make([]runnerView, 0, len(runners))
 	for _, r := range runners {
-		jobs, _ := s.Store.RunnerActiveJobs(c.Request.Context(), r.ID)
+		jobs, err := s.Store.RunnerActiveJobs(c.Request.Context(), r.ID)
+		if err != nil {
+			s.Log.Warn("active jobs lookup failed", zap.String("runner", r.Name), zap.Error(err))
+		}
 		out = append(out, runnerView{Runner: r, ActiveJobs: len(jobs)})
 	}
 	c.JSON(http.StatusOK, gin.H{"runners": out})

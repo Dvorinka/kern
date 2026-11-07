@@ -88,6 +88,17 @@ func (s *Store) ApproveRemediation(ctx context.Context, jobID uuid.UUID, stepNum
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
+	// A finished run can never consume a requeued job — approving here would
+	// orphan the job in 'queued' forever. Refuse instead.
+	var runStatus string
+	if err := tx.QueryRow(ctx, `
+		SELECT r.status FROM jobs j JOIN workflow_runs r ON r.id = j.run_id
+		WHERE j.id = $1`, jobID).Scan(&runStatus); err != nil {
+		return nil, err
+	}
+	if runStatus == "completed" || runStatus == "cancelled" {
+		return nil, fmt.Errorf("run already finished; remediation no longer applicable")
+	}
 	var fixJSON []byte
 	err = tx.QueryRow(ctx, `
 		UPDATE steps SET diagnosis = jsonb_set(diagnosis, '{remediation,approved}', 'true')
