@@ -216,6 +216,10 @@ type JobPlan struct {
 	// Services are the job's service containers, started on a shared
 	// per-job network before the first step.
 	Services []ServicePlan `json:"services,omitempty"`
+	// Permissions is the effective GitHub Actions `permissions:` ceiling for
+	// this job — job-level when declared, else the workflow-level map. The
+	// control plane uses it to scope the per-run GITHUB_TOKEN.
+	Permissions map[string]string `json:"permissions,omitempty"`
 }
 
 // ServicePlan is one service container beside the job.

@@ -149,3 +149,22 @@ commit status on the pushed SHA.
   <pg> pg_dump -U kern kern`.
 - The runner-side persistent cache (mounted into jobs at `/kern/cache`)
   lives under `KERN_RUNNER_WORK/_cache`; delete it freely to force cold runs.
+- Fork-PR egress: `fork`-trust jobs run on a per-job `--internal` network
+  whose only way out is a sibling allowlist proxy the runner builds itself
+  (`kern-runner egress-proxy`, scratch image `kern-egress:local` under the
+  work root). Defaults cover GitHub + major registries; tune with
+  `KERN_EGRESS_ALLOWLIST` on the runner or disable with
+  `KERN_RUNNER_EGRESS=off`. If the built-in proxy proves too narrow for
+  your fleet, the operator alternative is an egress proxy of your choice:
+  run it on the docker host, point `KERN_EGRESS_ALLOWLIST` at nothing and
+  instead give fork jobs reachability by other means — today that means
+  `KERN_RUNNER_EGRESS=off` plus your own network-level controls (a
+  filtered egress gateway, host firewall, or a corporate proxy enforced
+  by `HTTP_PROXY` at the docker-daemon/network layer). KERN does not yet
+  support plugging an external proxy into the internal network; that is
+  the documented gap, not a hidden one. See `docs/security-isolation.md`.
+- JIT runners: `POST /api/v1/runners` (admin token) returns a ready
+  `kern-runner --token … --control …` credential flagged ephemeral; the
+  agent self-deregisters after `KERN_RUNNER_EPHEMERAL_IDLE` (default 2m)
+  with no active jobs. Set `KERN_RUNNER_EPHEMERAL=1` on the spawned
+  agent.

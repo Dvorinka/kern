@@ -3,6 +3,7 @@
 package github
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/rand"
@@ -27,9 +28,10 @@ type App struct {
 	base string
 	http *http.Client
 
-	mu   sync.Mutex
-	inst map[string]int64    // "owner/repo" -> installation id
-	toks map[int64]instToken // installation id -> cached token
+	mu       sync.Mutex
+	inst     map[string]int64             // "owner/repo" -> installation id
+	instPerm map[string]map[string]string // "owner/repo" -> granted permissions
+	toks     map[int64]instToken          // installation id -> cached token
 }
 
 type instToken struct {
@@ -50,7 +52,8 @@ func NewApp(id, privateKeyPEM, apiBase string) (*App, error) {
 	return &App{
 		id: id, key: key, base: strings.TrimRight(apiBase, "/"),
 		http: &http.Client{Timeout: 15 * time.Second},
-		inst: make(map[string]int64), toks: make(map[int64]instToken),
+		inst: make(map[string]int64), instPerm: make(map[string]map[string]string),
+		toks: make(map[int64]instToken),
 	}, nil
 }
 
@@ -97,17 +100,32 @@ func (a *App) jwt() (string, error) {
 }
 
 func (a *App) do(ctx context.Context, method, path string, out any) error {
+	return a.doBody(ctx, method, path, nil, out)
+}
+
+func (a *App) doBody(ctx context.Context, method, path string, body any, out any) error {
 	jwt, err := a.jwt()
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, method, a.base+path, nil)
+	var reader io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		reader = bytes.NewReader(data)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, a.base+path, reader)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("Authorization", "Bearer "+jwt)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	resp, err := a.http.Do(req)
 	if err != nil {
 		return err
@@ -123,25 +141,36 @@ func (a *App) do(ctx context.Context, method, path string, out any) error {
 	return nil
 }
 
-// InstallationID resolves a repo to its app installation, cached for the
-// process lifetime (installations rarely change).
-func (a *App) InstallationID(ctx context.Context, repo string) (int64, error) {
+// installation resolves a repo to its app installation id and the permission
+// set the installation grants, cached for the process lifetime (installations
+// rarely change).
+func (a *App) installation(ctx context.Context, repo string) (int64, map[string]string, error) {
 	a.mu.Lock()
 	if id, ok := a.inst[repo]; ok {
+		perms := a.instPerm[repo]
 		a.mu.Unlock()
-		return id, nil
+		return id, perms, nil
 	}
 	a.mu.Unlock()
 	var out struct {
-		ID int64 `json:"id"`
+		ID          int64             `json:"id"`
+		Permissions map[string]string `json:"permissions"`
 	}
 	if err := a.do(ctx, http.MethodGet, "/repos/"+repo+"/installation", &out); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	a.mu.Lock()
 	a.inst[repo] = out.ID
+	a.instPerm[repo] = out.Permissions
 	a.mu.Unlock()
-	return out.ID, nil
+	return out.ID, out.Permissions, nil
+}
+
+// InstallationID resolves a repo to its app installation, cached for the
+// process lifetime (installations rarely change).
+func (a *App) InstallationID(ctx context.Context, repo string) (int64, error) {
+	id, _, err := a.installation(ctx, repo)
+	return id, err
 }
 
 // token mints or reuses an installation access token until a minute before
@@ -188,6 +217,75 @@ func (a *App) CloneToken(ctx context.Context, repo string) (string, error) {
 		return "", err
 	}
 	return a.token(ctx, instID)
+}
+
+// RunToken mints a per-run installation token scoped to a single repository
+// with an explicit permission ceiling — KERN's GITHUB_TOKEN. requested uses
+// GitHub's permission vocabulary (read|write|admin|none); the minted set is
+// the intersection with what the installation actually grants, so a workflow
+// can only narrow, never widen. permScoped reports whether a permissions
+// object was sent at all; when requested is empty the token carries the
+// installation's default grants (GitHub's permissive-default parity).
+func (a *App) RunToken(ctx context.Context, repo string, requested map[string]string) (token string, permScoped bool, err error) {
+	instID, appPerms, err := a.installation(ctx, repo)
+	if err != nil {
+		return "", false, err
+	}
+	name := repo
+	if i := strings.LastIndex(repo, "/"); i >= 0 {
+		name = repo[i+1:]
+	}
+	body := map[string]any{"repositories": []string{name}}
+	if len(requested) > 0 {
+		effective := map[string]string{}
+		for k, v := range requested {
+			if v == "none" {
+				continue // omitted keys carry no access on this endpoint
+			}
+			if appPerms == nil {
+				effective[k] = v // grants unknown; let GitHub validate
+				continue
+			}
+			appLevel, ok := appPerms[k]
+			if !ok || appLevel == "none" {
+				continue // the installation does not grant this permission at all
+			}
+			// Clamp to the installation's level: a workflow may narrow the
+			// ceiling, never widen it past what the app holds.
+			if permRank(v) > permRank(appLevel) {
+				effective[k] = appLevel
+			} else {
+				effective[k] = v
+			}
+		}
+		if len(effective) == 0 {
+			return "", false, fmt.Errorf("permissions ceiling grants nothing the installation holds")
+		}
+		body["permissions"] = effective
+	}
+	var out struct {
+		Token     string    `json:"token"`
+		ExpiresAt time.Time `json:"expires_at"`
+	}
+	path := fmt.Sprintf("/app/installations/%d/access_tokens", instID)
+	if err := a.doBody(ctx, http.MethodPost, path, body, &out); err != nil {
+		return "", false, err
+	}
+	return out.Token, len(requested) > 0, nil
+}
+
+// permRank orders GitHub permission levels for ceiling clamping.
+func permRank(level string) int {
+	switch level {
+	case "admin":
+		return 3
+	case "write":
+		return 2
+	case "read":
+		return 1
+	default:
+		return 0
+	}
 }
 
 // Resolver holds the env-level credentials: the app when configured, else the

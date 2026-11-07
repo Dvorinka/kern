@@ -20,6 +20,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/dvorinka/kern/internal/expressions"
+	"github.com/dvorinka/kern/internal/secrets"
 )
 
 // runStep executes one step and returns its conclusion
@@ -183,7 +184,7 @@ func (e *executor) runStepBody(ctx context.Context, step StepSpec) (string, int,
 		return "failure", 1, fmt.Errorf("write step env file")
 	}
 
-	pump := newLogPump(e.c, e.jobID, step.Number)
+	pump := newLogPump(e.c, e.jobID, step.Number, e.logMask)
 	defer pump.close()
 	if hdr := runStepHeader(step); hdr != "" {
 		pump.write([]byte(hdr))
@@ -507,6 +508,9 @@ type logPump struct {
 	c     *client
 	jobID string
 	step  int
+	// mask covers credentials the server-side masker cannot know (the
+	// per-run clone and GITHUB_TOKENs). Nil means passthrough.
+	mask *secrets.Masker
 
 	mu     sync.Mutex
 	buf    []byte
@@ -520,8 +524,8 @@ const (
 	logFlushInterval = time.Second
 )
 
-func newLogPump(c *client, jobID string, step int) *logPump {
-	p := &logPump{c: c, jobID: jobID, step: step, stop: make(chan struct{})}
+func newLogPump(c *client, jobID string, step int, mask *secrets.Masker) *logPump {
+	p := &logPump{c: c, jobID: jobID, step: step, mask: mask, stop: make(chan struct{})}
 	p.closed.Add(1)
 	go func() {
 		defer p.closed.Done()
@@ -539,8 +543,12 @@ func newLogPump(c *client, jobID string, step int) *logPump {
 	return p
 }
 
-// write buffers a chunk (a full line); a masker would run before render on the server.
+// write buffers a chunk (a full line); stored secrets are masked server-side,
+// per-run tokens are masked here before they can reach the wire.
 func (p *logPump) write(line []byte) {
+	if p.mask != nil {
+		line = p.mask.MaskBytes(line)
+	}
 	p.mu.Lock()
 	p.buf = append(p.buf, line...)
 	p.tail = append(p.tail, line...)

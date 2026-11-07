@@ -129,6 +129,7 @@ func (o *Orchestrator) StartRun(ctx context.Context, p store.CreateRunParams) (s
 			SplitAuto:       jp.SplitAuto,
 			Inputs:          jp.Inputs,
 			Services:        serviceSeeds(jp.Services),
+			Permissions:     jp.Permissions,
 		}
 		for _, sp := range jp.Steps {
 			seed.Steps = append(seed.Steps, store.StepSeed{Key: sp.ID, Name: sp.Name, Spec: sp})

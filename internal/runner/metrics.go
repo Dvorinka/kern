@@ -16,6 +16,9 @@ type heartbeatMetrics struct {
 	DiskFreeBytes *int64   `json:"disk_free_bytes,omitempty"`
 	ActiveJobs    int      `json:"active_jobs"`
 	SelfUpdate    bool     `json:"self_update,omitempty"`
+	// Deregister asks the control plane to delete this runner's row — the
+	// ephemeral-runner exit path, refused server-side while jobs are in flight.
+	Deregister bool `json:"deregister,omitempty"`
 }
 
 // hostSampler derives utilization from /proc and statfs. CPU is a delta

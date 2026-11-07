@@ -31,6 +31,7 @@ type registerRequest struct {
 	DiskBytes   int64    `json:"disk_bytes"`
 	Labels      []string `json:"labels"`
 	Version     string   `json:"version"`
+	Ephemeral   bool     `json:"ephemeral"`
 }
 
 // registerRunner accepts either the shared static join token (dev escape
@@ -70,7 +71,7 @@ func (s *Server) registerRunner(c *gin.Context) {
 	runner, err := s.Store.RegisterRunner(c.Request.Context(), store.RegisterRunnerParams{
 		OrgID: orgID, Name: req.Name, Hostname: req.Hostname, OS: req.OS, Arch: req.Arch,
 		CPUs: req.CPUs, MemoryBytes: req.MemoryBytes, DiskBytes: req.DiskBytes,
-		Labels: req.Labels, Version: req.Version, TokenHash: hash,
+		Labels: req.Labels, Version: req.Version, TokenHash: hash, Ephemeral: req.Ephemeral,
 	})
 	if err != nil {
 		s.internalError(c, err)
@@ -89,6 +90,9 @@ func (s *Server) runnerHeartbeat(c *gin.Context) {
 		store.HostMetrics
 		ActiveJobs int  `json:"active_jobs"`
 		SelfUpdate bool `json:"self_update"`
+		// Deregister asks the control plane to delete this runner's row —
+		// the ephemeral-runner exit path. Refused while jobs are in flight.
+		Deregister bool `json:"deregister"`
 	}
 	// An empty body is legal (older runners); fields stay nil.
 	if err := c.ShouldBindJSON(&body); err != nil && err != io.EOF {
@@ -107,6 +111,17 @@ func (s *Server) runnerHeartbeat(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusOK, resp)
 		return
+	}
+	if body.Deregister {
+		if len(jobs) == 0 {
+			if err := s.Store.DeleteRunner(c.Request.Context(), runner.OrgID, runner.ID); err == nil {
+				s.Store.Audit(c.Request.Context(), runner.OrgID, nil, "runner.deregister", runner.Name)
+				s.Log.Info("ephemeral runner deregistered", zap.String("runner", runner.Name))
+				c.JSON(http.StatusOK, gin.H{"ok": true, "deregistered": true})
+				return
+			}
+		}
+		resp["deregistered"] = false
 	}
 	active := len(jobs)
 	if body.ActiveJobs > active {
@@ -214,6 +229,24 @@ func (s *Server) respondWithClaim(c *gin.Context, claimed *store.ClaimedJob) {
 			}
 		}
 	}
+	// GITHUB_TOKEN: a per-run installation token scoped to this repository and
+	// narrowed by the workflow's permissions: ceiling. Same trust gate as
+	// secrets — fork and pull_request runs never see either credential.
+	var githubToken string
+	if s.GH.App != nil && secretsEligibleTrust(claimed.Run.TrustLevel) {
+		if full, ok := claimed.Source["repo_full_name"].(string); ok && full != "" {
+			var perms map[string]string
+			if len(claimed.Job.Permissions) > 0 && string(claimed.Job.Permissions) != "null" {
+				_ = json.Unmarshal(claimed.Job.Permissions, &perms)
+			}
+			if tok, _, err := s.GH.App.RunToken(c.Request.Context(), full, perms); err == nil {
+				githubToken = tok
+			} else {
+				s.Log.Warn("github token mint failed; steps run without GITHUB_TOKEN",
+					zap.String("repo", full), zap.String("job", claimed.Job.Key), zap.Error(err))
+			}
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"job": gin.H{
 			"id": claimed.Job.ID, "run_id": claimed.Job.RunID, "key": claimed.Job.Key,
@@ -232,6 +265,7 @@ func (s *Server) respondWithClaim(c *gin.Context, claimed *store.ClaimedJob) {
 			"project_slug": claimed.Run.ProjectSlug, "trust_level": claimed.Run.TrustLevel,
 			"repo_url": claimed.Source["repo_url"], "repo_full_name": claimed.Source["repo_full_name"],
 			"clone_token":    cloneToken,
+			"github_token":   githubToken,
 			"default_branch": claimed.Source["default_branch"], "local_path": claimed.Source["local_path"],
 			"bundle_ref": claimed.Source["bundle_ref"], "head_ref": claimed.Source["head_ref"],
 			"head_sha": claimed.Source["head_sha"],
@@ -386,7 +420,10 @@ func (s *Server) finishStep(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_conclusion", "conclusion must be success, failure, skipped or cancelled")
 		return
 	}
-	if err := s.Store.FinishStep(c.Request.Context(), job.ID, n, req.Conclusion, req.ExitCode, req.Diagnosis); err != nil {
+	// The diagnosis carries raw log tails (detail, agent_prompt) that bypass
+	// the ingest-time masker — mask every string before it is persisted.
+	diag := maskDiagnosis(req.Diagnosis, s.maskerForJob(c, job))
+	if err := s.Store.FinishStep(c.Request.Context(), job.ID, n, req.Conclusion, req.ExitCode, diag); err != nil {
 		s.internalError(c, err)
 		return
 	}
@@ -396,7 +433,7 @@ func (s *Server) finishStep(c *gin.Context) {
 			Applied bool `json:"applied"`
 		} `json:"remediation"`
 	}
-	if json.Unmarshal(req.Diagnosis, &d) == nil && d.Remediation != nil && d.Remediation.Applied {
+	if json.Unmarshal(diag, &d) == nil && d.Remediation != nil && d.Remediation.Applied {
 		if run, err := s.Store.Run(c.Request.Context(), job.RunID); err == nil {
 			if p, err := s.Store.ProjectByID(c.Request.Context(), run.ProjectID); err == nil {
 				s.Store.Audit(c.Request.Context(), p.OrgID, nil, "remediation.apply",
@@ -429,6 +466,8 @@ func (s *Server) finishJob(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_conclusion", "invalid conclusion")
 		return
 	}
+	// Job errors surface in the dashboard and status payloads; mask like logs.
+	req.Error = s.maskerForJob(c, job).Mask(req.Error)
 	updated, err := s.Store.FinishJob(c.Request.Context(), runner.ID, job.ID, req.Conclusion, req.Error, req.Outputs)
 	if err != nil {
 		s.internalError(c, err)
@@ -464,6 +503,13 @@ func (s *Server) cancelCheck(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"cancelled": cancelled})
 }
 
+// secretsEligibleTrust reports whether a run trust level may receive
+// repository secrets and the per-run GITHUB_TOKEN. fork and pull_request runs
+// are untrusted code and get neither; every other tier does.
+func secretsEligibleTrust(level string) bool {
+	return level != "fork" && level != "pull_request"
+}
+
 // jobSecrets delivers decrypted secret values only to trusted runs.
 func (s *Server) jobSecrets(c *gin.Context) {
 	job, _, ok := s.runnerJob(c)
@@ -475,8 +521,7 @@ func (s *Server) jobSecrets(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
-	switch run.TrustLevel {
-	case "fork", "pull_request":
+	if !secretsEligibleTrust(run.TrustLevel) {
 		c.JSON(http.StatusOK, gin.H{"secrets": map[string]string{}, "blocked": true,
 			"reason": "untrusted pull request runs never receive repository secrets"})
 		return
@@ -512,6 +557,43 @@ func (s *Server) jobSecrets(c *gin.Context) {
 	}
 	c.Header("Cache-Control", "no-store")
 	c.JSON(http.StatusOK, gin.H{"secrets": out, "blocked": false})
+}
+
+// maskDiagnosis masks every string inside a step diagnosis JSON blob before
+// it is stored. Returns the input unchanged when it is not a JSON object.
+func maskDiagnosis(raw json.RawMessage, m *secrets.Masker) json.RawMessage {
+	if len(raw) == 0 || string(raw) == "null" {
+		return raw
+	}
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return raw
+	}
+	masked, err := json.Marshal(maskJSONStrings(v, m))
+	if err != nil {
+		return raw
+	}
+	return masked
+}
+
+// maskJSONStrings walks a decoded JSON value and masks each string it holds.
+func maskJSONStrings(v any, m *secrets.Masker) any {
+	switch t := v.(type) {
+	case string:
+		return m.Mask(t)
+	case []any:
+		for i, e := range t {
+			t[i] = maskJSONStrings(e, m)
+		}
+		return t
+	case map[string]any:
+		for k, e := range t {
+			t[k] = maskJSONStrings(e, m)
+		}
+		return t
+	default:
+		return v
+	}
 }
 
 // runnerJob loads the job and verifies it is leased to the authenticated runner.

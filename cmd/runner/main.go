@@ -55,6 +55,9 @@ Environment only:
                             offers a signed ghcr.io/dvorinka/kern-runner image.
                             Leave unset on the compose runner; the host updater
                             rebuilds that one.
+  KERN_RUNNER_EPHEMERAL=1   JIT mode: deregister and exit after this long with
+                            no active jobs (KERN_RUNNER_EPHEMERAL_IDLE,
+                            default 2m). Pair with POST /api/v1/runners.
 
 join flags:
   --env-file path       credential file destination (default ~/.config/kern-runner/env)
@@ -212,12 +215,42 @@ func main() {
 		}
 		os.Exit(runJoin(o))
 	}
+	if len(args) > 0 && args[0] == "egress-proxy" {
+		os.Exit(runEgressProxy(args[1:]))
+	}
 	loadConfigFile(args)
 	o, ok := parse(args)
 	if !ok {
 		return
 	}
 	os.Exit(run(o))
+}
+
+// runEgressProxy is the internal entrypoint the executor packages into the
+// scratch egress image. Not a user-facing mode — fork jobs reach it by
+// container alias on their isolated network.
+func runEgressProxy(args []string) int {
+	listen := ":3128"
+	var allow []string
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--listen" && i+1 < len(args):
+			i++
+			listen = args[i]
+		case strings.HasPrefix(args[i], "--listen="):
+			listen = strings.TrimPrefix(args[i], "--listen=")
+		case args[i] == "--allow" && i+1 < len(args):
+			i++
+			allow = append(allow, strings.Split(args[i], ",")...)
+		case strings.HasPrefix(args[i], "--allow="):
+			allow = append(allow, strings.Split(strings.TrimPrefix(args[i], "--allow="), ",")...)
+		}
+	}
+	if err := runner.RunEgressProxy(listen, allow); err != nil {
+		fmt.Fprintln(os.Stderr, "kern-runner egress-proxy:", err)
+		return 1
+	}
+	return 0
 }
 
 func agentConfig(o options) runner.Config {
@@ -233,7 +266,14 @@ func agentConfig(o options) runner.Config {
 		JobMemory:      os.Getenv("KERN_JOB_MEMORY"),
 		ActionsGitBase: os.Getenv("KERN_ACTIONS_GIT_BASE"),
 		SelfUpdate:     os.Getenv("KERN_RUNNER_UPDATE") == "1",
-		LeaseDuration:  90 * time.Second,
+		Ephemeral: os.Getenv("KERN_RUNNER_EPHEMERAL") == "1" ||
+			strings.EqualFold(os.Getenv("KERN_RUNNER_EPHEMERAL"), "true"),
+		LeaseDuration:   90 * time.Second,
+		EgressMode:      os.Getenv("KERN_RUNNER_EGRESS"),
+		EgressAllowlist: os.Getenv("KERN_EGRESS_ALLOWLIST"),
+	}
+	if v := os.Getenv("KERN_RUNNER_EPHEMERAL_IDLE"); v != "" {
+		cfg.EphemeralIdle, _ = time.ParseDuration(v)
 	}
 	if v := os.Getenv("KERN_RUNNER_LOAD_GATE"); v != "" {
 		cfg.MaxLoadPerCPU, _ = strconv.ParseFloat(v, 64)

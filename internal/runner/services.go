@@ -20,8 +20,13 @@ import (
 	"go.uber.org/zap"
 )
 
-// serviceNet names the per-job bridge network.
+// serviceNet names the per-job bridge network. Fork-trust jobs already sit
+// on the egress-restricted internal network, which doubles as their service
+// network so services inherit the same egress policy.
 func (e *executor) serviceNet() string {
+	if e.egressRestricted() {
+		return e.egressNet()
+	}
 	return "kern-svc-" + sanitizeID(e.claim.Job.ID)
 }
 
@@ -40,7 +45,9 @@ func (e *executor) networkedServices() []ClaimService {
 // ensureServiceNet creates the per-job bridge when any service needs it.
 // It runs before the job container so the container can join the net.
 func (e *executor) ensureServiceNet(ctx context.Context) error {
-	if len(e.networkedServices()) == 0 {
+	// The egress network is created --internal by ensureEgress; creating it
+	// here as a normal bridge would silently lift the egress restriction.
+	if e.egressRestricted() || len(e.networkedServices()) == 0 {
 		return nil
 	}
 	out, err := exec.CommandContext(ctx, "docker", "network", "create", e.serviceNet()).CombinedOutput()
@@ -110,7 +117,12 @@ func (e *executor) startService(ctx context.Context, net string, svc ClaimServic
 		args = append(args, "--network", net, "--network-alias", svc.Name)
 	}
 	args = append(args, svc.Options...) // compile keeps only --health-* flags
+	svcEnv := map[string]string{}
 	for k, v := range svc.Env {
+		svcEnv[k] = v
+	}
+	e.applyEgressEnv(svcEnv)
+	for k, v := range svcEnv {
 		args = append(args, "-e", k+"="+v)
 	}
 	args = append(args, svc.Image)
@@ -266,7 +278,8 @@ func (e *executor) stopServices(ctx context.Context) {
 	for _, svc := range e.claim.Job.Services {
 		_ = exec.CommandContext(ctx, "docker", "rm", "-f", e.serviceContainerName(svc)).Run()
 	}
-	if len(e.networkedServices()) > 0 && !e.privileged() {
+	e.stopEgress(ctx)
+	if (e.egressRestricted() || len(e.networkedServices()) > 0) && !e.privileged() {
 		_ = exec.CommandContext(ctx, "docker", "network", "rm", e.serviceNet()).Run()
 	}
 	e.releaseServicePorts()

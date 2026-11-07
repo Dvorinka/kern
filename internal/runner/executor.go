@@ -23,6 +23,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/dvorinka/kern/internal/secrets"
 )
 
 const (
@@ -84,6 +86,9 @@ type executor struct {
 	claim   *Claim
 	secrets map[string]string
 	log     *zap.Logger
+	// logMask masks the per-run credentials (clone + GITHUB_TOKEN) that the
+	// server-side secret masker cannot know about.
+	logMask *secrets.Masker
 
 	jobID     string
 	container string
@@ -135,7 +140,7 @@ type stepOutcome struct {
 	Outputs    map[string]string
 }
 
-func newJobExecutor(cfg Config, c *client, claim *Claim, secrets map[string]string, log *zap.Logger) (*executor, error) {
+func newJobExecutor(cfg Config, c *client, claim *Claim, secretMap map[string]string, log *zap.Logger) (*executor, error) {
 	if !imageRe.MatchString(claim.Job.Image) {
 		return nil, fmt.Errorf("invalid container image %q", claim.Job.Image)
 	}
@@ -178,11 +183,28 @@ func newJobExecutor(cfg Config, c *client, claim *Claim, secrets map[string]stri
 	if err := os.MkdirAll(filepath.Join(cfg.WorkRoot, "_node"), 0o755); err != nil {
 		return nil, fmt.Errorf("create node runtime dir: %w", err)
 	}
+	// The per-run GITHUB_TOKEN rides the claim payload; it joins the env-file
+	// secrets so every step (shell, JS and Docker actions alike) sees it, and
+	// both run tokens join the log masker — the server masker only knows
+	// stored secrets, so without this an echoed token would land in the log
+	// blob verbatim.
+	maskValues := []string{}
+	if claim.Run.CloneToken != "" {
+		maskValues = append(maskValues, claim.Run.CloneToken)
+	}
+	if claim.Run.GitHubToken != "" {
+		secretMap["GITHUB_TOKEN"] = claim.Run.GitHubToken
+		maskValues = append(maskValues, claim.Run.GitHubToken)
+	}
+	var logMask *secrets.Masker
+	if len(maskValues) > 0 {
+		logMask = secrets.NewMasker(maskValues)
+	}
 	return &executor{
-		cfg: cfg, c: c, claim: claim, secrets: secrets, log: log,
+		cfg: cfg, c: c, claim: claim, secrets: secretMap, log: log, logMask: logMask,
 		jobID:       claim.Job.ID,
 		container:   fmt.Sprintf("kern-job-%s-%d", id, claim.Job.Attempt),
-		enc:         newEnvBuilder(claim, secrets),
+		enc:         newEnvBuilder(claim, secretMap),
 		stepResults: map[string]*stepOutcome{},
 		stop:        make(chan struct{}),
 	}, nil
@@ -219,6 +241,10 @@ func (e *executor) prepare(ctx context.Context) error {
 		return fmt.Errorf("pull image: %w", err)
 	}
 	if !e.privileged() {
+		if err := e.ensureEgress(ctx); err != nil {
+			e.goStop()
+			return fmt.Errorf("egress policy: %w", err)
+		}
 		if err := e.ensureServiceNet(ctx); err != nil {
 			e.goStop()
 			return fmt.Errorf("service network: %w", err)
@@ -303,6 +329,8 @@ func (e *executor) startContainer(ctx context.Context) error {
 	hostNet := e.privileged()
 	if hostNet {
 		args = append(args, "--network", "host")
+	} else if e.egressRestricted() {
+		args = append(args, "--network", e.egressNet())
 	} else if len(e.networkedServices()) > 0 {
 		args = append(args, "--network", e.serviceNet())
 	}
@@ -411,6 +439,11 @@ func (e *executor) startContainer(ctx context.Context) error {
 		"-e", "GIT_CONFIG_KEY_0=safe.directory",
 		"-e", "GIT_CONFIG_VALUE_0=*",
 	)
+	if e.egressRestricted() {
+		for k, v := range e.egressEnv() {
+			args = append(args, "-e", k+"="+v)
+		}
+	}
 	if eventPath != "" {
 		args = append(args, "-e", "GITHUB_EVENT_PATH="+containerEventPath)
 	}
