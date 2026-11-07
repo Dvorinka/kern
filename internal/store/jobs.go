@@ -417,6 +417,57 @@ func (s *Store) MarkStaleRunnersOffline(ctx context.Context, timeout time.Durati
 	return tag.RowsAffected(), nil
 }
 
+// CancelOrphanedJobs cancels queued/waiting jobs whose run already reached a
+// terminal state. ClaimJob requires an in_progress run, so these rows can
+// never be claimed — left alone they inflate the queue count forever.
+func (s *Store) CancelOrphanedJobs(ctx context.Context) (int64, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `
+		UPDATE jobs j SET status = 'cancelled', conclusion = 'cancelled',
+			completed_at = now(), error = 'run already finished'
+		FROM workflow_runs r
+		WHERE j.run_id = r.id
+		  AND j.status IN ('queued', 'waiting', 'waiting_approval')
+		  AND r.status IN ('completed', 'cancelled')
+		RETURNING j.id`)
+	if err != nil {
+		return 0, err
+	}
+	var jobIDs []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		jobIDs = append(jobIDs, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	for _, id := range jobIDs {
+		if _, err := tx.Exec(ctx, `
+			UPDATE steps SET status = 'cancelled', conclusion = 'cancelled', completed_at = now()
+			WHERE job_id = $1 AND status <> 'completed'`, id); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE deployments SET status = 'failure', completed_at = now()
+			WHERE job_id = $1 AND status IN ('queued', 'in_progress')`, id); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return int64(len(jobIDs)), nil
+}
+
 func (s *Store) SetJobQueued(ctx context.Context, jobID uuid.UUID) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE jobs SET status = 'queued', queued_at = now() WHERE id = $1 AND status = 'waiting'`, jobID)

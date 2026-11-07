@@ -18,12 +18,14 @@ func (s *Store) Overview(ctx context.Context) (Overview, error) {
 			(SELECT count(*) FROM jobs WHERE status = 'in_progress'),
 			(SELECT count(*) FROM runners WHERE status = 'online'),
 			(SELECT count(*) FROM runners),
-			COALESCE((SELECT avg(extract(epoch FROM started_at - queued_at))
-				FROM jobs WHERE started_at IS NOT NULL AND queued_at > now() - interval '24 hours'), 0),
+			COALESCE((SELECT avg(GREATEST(0, extract(epoch FROM started_at - queued_at)))
+				FROM jobs WHERE status = 'completed' AND started_at IS NOT NULL
+				AND queued_at > now() - interval '24 hours'), 0),
 			COALESCE((SELECT avg(extract(epoch FROM completed_at - started_at))
 				FROM workflow_runs WHERE completed_at IS NOT NULL AND started_at IS NOT NULL), 0),
-			COALESCE((SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY extract(epoch FROM started_at - queued_at))
-				FROM jobs WHERE started_at IS NOT NULL AND queued_at > now() - interval '24 hours'), 0),
+			COALESCE((SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY GREATEST(0, extract(epoch FROM started_at - queued_at)))
+				FROM jobs WHERE status = 'completed' AND started_at IS NOT NULL
+				AND queued_at > now() - interval '24 hours'), 0),
 			(SELECT max(created_at) FROM workflow_runs)`).
 		Scan(&o.RunsTotal, &o.RunsSuccess, &o.RunsFailure, &o.RunsActive, &o.JobsQueued,
 			&o.JobsRunning, &o.RunnersOnline, &o.RunnersTotal, &o.AvgQueueSeconds,

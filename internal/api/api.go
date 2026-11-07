@@ -154,6 +154,8 @@ func (s *Server) buildRouter() *gin.Engine {
 		write.POST("/projects/:project/workflows/:workflowID/runs", s.triggerRun)
 		admin.GET("/github-app/manifest", s.githubAppManifest)
 		admin.GET("/github-app/callback", s.githubAppCallback)
+		auth.GET("/github-app/status", s.githubAppStatus)
+		admin.DELETE("/github-app/:id", s.deleteGitHubApp)
 
 		auth.GET("/runs", s.listRuns)
 		auth.GET("/runs/:id", s.getRun)

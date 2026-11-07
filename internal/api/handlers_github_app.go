@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/dvorinka/kern/internal/github"
@@ -17,11 +19,15 @@ import (
 // app-creation form. GitHub then redirects back to githubAppCallback with a
 // one-time conversion code.
 func (s *Server) githubAppManifest(c *gin.Context) {
+	user, _ := currentUser(c)
 	base := s.Cfg.PublicBaseURL
+	// GitHub app names are globally unique; a fixed name fails the manifest
+	// POST once an app with that name exists on the account.
+	name := fmt.Sprintf("kern-ci-%s", user.OrgID.String()[:8])
 	c.JSON(http.StatusOK, gin.H{
 		"url": "https://github.com/settings/apps/new",
 		"manifest": gin.H{
-			"name":         "kern-ci",
+			"name":         name,
 			"url":          base,
 			"public":       false,
 			"redirect_url": base + "/api/v1/github-app/callback",
@@ -41,6 +47,52 @@ func (s *Server) githubAppManifest(c *gin.Context) {
 			"default_events": []string{"push", "pull_request", "check_run", "check_suite"},
 		},
 	})
+}
+
+// githubAppStatus reports which GitHub credential sources are live: the
+// env-configured app (app id + key file) and the org's registered apps from
+// the manifest flow. Secrets never leave the server.
+func (s *Server) githubAppStatus(c *gin.Context) {
+	user, _ := currentUser(c)
+	apps, err := s.Store.GitHubApps(c.Request.Context(), user.OrgID)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	type appView struct {
+		ID        string    `json:"id"`
+		Slug      string    `json:"slug"`
+		Name      string    `json:"name"`
+		HTMLURL   string    `json:"html_url"`
+		CreatedAt time.Time `json:"created_at"`
+	}
+	views := make([]appView, 0, len(apps))
+	for _, a := range apps {
+		views = append(views, appView{ID: a.ID.String(), Slug: a.Slug, Name: a.Name,
+			HTMLURL: a.HTMLURL, CreatedAt: a.CreatedAt})
+	}
+	var envApp any
+	if s.GH.App != nil {
+		envApp = gin.H{"app_id": s.Cfg.GitHub.AppID}
+	}
+	c.JSON(http.StatusOK, gin.H{"env_app": envApp, "apps": views})
+}
+
+// deleteGitHubApp disconnects a manifest-created app from the org. The GitHub
+// side is untouched — the app keeps existing, KERN just stops using it.
+func (s *Server) deleteGitHubApp(c *gin.Context) {
+	user, _ := currentUser(c)
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		fail(c, http.StatusBadRequest, "invalid_id", "app id must be a uuid")
+		return
+	}
+	if err := s.Store.DeleteGitHubApp(c.Request.Context(), user.OrgID, id); err != nil {
+		s.internalError(c, err)
+		return
+	}
+	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "github_app.remove", id.String())
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 // githubAppCallback converts the manifest code into app credentials, stores

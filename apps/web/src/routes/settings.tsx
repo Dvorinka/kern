@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
-import { Check, Copy, RefreshCw, Trash2 } from "lucide-react";
+import { Check, Copy, PlugZap, RefreshCw, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
+import { connectGitHubApp } from "../lib/github";
 import type { APIToken, AuditEvent, Member, UpdateInfo } from "../lib/types";
 import { Button, Card, CardHeader, EmptyState, Input, KV, PageHeader, Spinner } from "../components/ui";
 import { Row } from "../components/layout";
@@ -11,6 +12,7 @@ export function SettingsPage() {
 	return (
 		<>
 			<PageHeader title="Settings" sub="Access tokens, automation policy, and instance information" />
+			<GitHubCard />
 			<PublicCICard />
 			<SelfHealCard />
 			<AutoUpdateCard />
@@ -21,6 +23,95 @@ export function SettingsPage() {
 			<InstanceCard />
 			<AuditCard />
 		</>
+	);
+}
+
+type GitHubAppRow = { id: string; slug: string; name: string; html_url: string; created_at: string };
+
+function GitHubCard() {
+	const qc = useQueryClient();
+	const { data, isLoading } = useQuery({
+		queryKey: ["github-app"],
+		queryFn: () =>
+			api.get<{ env_app: { app_id: string } | null; apps: GitHubAppRow[] }>(
+				"/github-app/status",
+			),
+	});
+	const connect = useMutation({ mutationFn: connectGitHubApp });
+	const disconnect = useMutation({
+		mutationFn: (id: string) => api.del(`/github-app/${id}`),
+		onSuccess: () => qc.invalidateQueries({ queryKey: ["github-app"] }),
+	});
+	const apps = data?.apps ?? [];
+	const connected = Boolean(data?.env_app) || apps.length > 0;
+	return (
+		<Card className="mb-4">
+			<CardHeader
+				title="GitHub"
+				sub="App credentials KERN uses to read repos, receive webhooks, and post check runs"
+				actions={
+					<Button
+						size="sm"
+						variant="primary"
+						disabled={connect.isPending}
+						onClick={() => connect.mutate()}
+					>
+						<PlugZap size={13} />
+						{connected ? "Connect another org" : "Connect GitHub"}
+					</Button>
+				}
+			/>
+			{isLoading ? (
+				<Spinner />
+			) : !connected ? (
+				<div className="px-4 py-3 text-xs text-[var(--dim)]">
+					No GitHub app connected. Connect one to link repositories — GitHub walks you through
+					app creation and installation.
+				</div>
+			) : (
+				<>
+					{data?.env_app && (
+						<Row>
+							<span className="sq ok" style={{ width: 7, height: 7 }} />
+							<span className="min-w-0 flex-1 text-xs text-[var(--dim)]">
+								Environment app <span className="font-mono">#{data.env_app.app_id}</span> —
+								configured on the host, takes precedence over org apps.
+							</span>
+						</Row>
+					)}
+					{apps.map((a) => (
+						<Row key={a.id}>
+							<span className="sq ok" style={{ width: 7, height: 7 }} />
+							<span className="min-w-0 flex-1 truncate text-xs text-[var(--dim)]">
+								<a className="lnk" href={a.html_url} target="_blank" rel="noreferrer">
+									{a.name}
+								</a>{" "}
+								<span className="font-mono text-[var(--faint)]">@{a.slug}</span> · added{" "}
+								{relTime(a.created_at)}
+							</span>
+							<Button
+								size="sm"
+								variant="ghost"
+								title="Stop using this app (the GitHub app itself is untouched)"
+								disabled={disconnect.isPending}
+								onClick={() => {
+									if (confirm(`Disconnect ${a.name}? KERN stops using its credentials.`))
+										disconnect.mutate(a.id);
+								}}
+							>
+								<Trash2 size={13} />
+							</Button>
+						</Row>
+					))}
+				</>
+			)}
+			{connect.error && (
+				<div className="px-4 py-2 text-xs text-[var(--err)]">{connect.error.message}</div>
+			)}
+			{disconnect.error && (
+				<div className="px-4 py-2 text-xs text-[var(--err)]">{disconnect.error.message}</div>
+			)}
+		</Card>
 	);
 }
 
