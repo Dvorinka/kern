@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -431,10 +432,56 @@ func (e *executor) runnerContext() map[string]any {
 	return map[string]any{
 		"github": github, "matrix": matrix, "env": env, "steps": steps, "needs": needs,
 		"inputs": inputs,
-		"runner": map[string]any{}, "job": map[string]any{},
+		"runner": runnerContext(e.cfg.Name), "job": map[string]any{},
 		"__job_status": e.jobStatusSoFar(),
 		"__workspace":  filepath.Join(e.workRoot(), "workspace"),
 	}
+}
+
+// runnerContext fills GitHub's `runner` context with the values job
+// containers actually see. Steps like dtolnay/rust-toolchain branch on
+// runner.os inside bash; an empty map interpolates to nothing and breaks
+// the script's syntax.
+func runnerContext(name string) map[string]any {
+	if name == "" {
+		name, _ = os.Hostname()
+	}
+	return map[string]any{
+		"os":          runnerGOOS(),
+		"arch":        runnerArch(),
+		"name":        name,
+		"environment": "self-hosted",
+		"tool_cache":  containerCacheDir + "/_toolcache",
+		"temp":        containerTmpDir,
+		"workspace":   containerWorkspace,
+		"debug":       "false",
+	}
+}
+
+func runnerGOOS() string {
+	switch runtime.GOOS {
+	case "linux":
+		return "Linux"
+	case "windows":
+		return "Windows"
+	case "darwin":
+		return "macOS"
+	}
+	return runtime.GOOS
+}
+
+func runnerArch() string {
+	switch runtime.GOARCH {
+	case "amd64":
+		return "X64"
+	case "arm64":
+		return "ARM64"
+	case "386":
+		return "X86"
+	case "arm":
+		return "ARM"
+	}
+	return runtime.GOARCH
 }
 
 // jobStatusSoFar reflects the first failure/cancel so failure() and cancelled()

@@ -79,8 +79,8 @@ func (e *executor) cacheSaveStep(step StepSpec) (string, int) {
 		return "failure", 1
 	}
 	if err := e.saveCacheArchive(key, paths); err != nil {
-		if errors.Is(err, errCacheExists) {
-			e.logStep(step, err.Error())
+		if errors.Is(err, errCacheExists) || errors.Is(err, errCacheEmpty) {
+			e.logStep(step, "KERN: "+err.Error())
 			return "success", 0
 		}
 		e.logStep(step, "KERN: "+err.Error())
@@ -102,7 +102,13 @@ func (e *executor) saveCaches() {
 	}
 }
 
-var errCacheExists = errors.New("cache key already taken")
+var (
+	errCacheExists = errors.New("cache key already taken")
+	// errCacheEmpty means no cache path resolved to files. GitHub treats this
+	// as a warning, not a failure — composite actions (trivy, setup-trivy)
+	// cache paths outside the workspace and must not fail the step for it.
+	errCacheEmpty = errors.New("no files found for cache path(s)")
+)
 
 func (e *executor) saveCacheArchive(key string, paths []string) error {
 	ws := filepath.Join(e.workRoot(), "workspace")
@@ -117,7 +123,7 @@ func (e *executor) saveCacheArchive(key string, paths []string) error {
 		return fmt.Errorf("pack cache: %w", err)
 	}
 	if n == 0 {
-		return fmt.Errorf("no files found for cache path(s): %s", strings.Join(paths, ", "))
+		return fmt.Errorf("%w: %s", errCacheEmpty, strings.Join(paths, ", "))
 	}
 	err = e.c.saveCache(context.Background(), e.jobID, key, tmp.Name())
 	if apiErr, ok := err.(*APIError); ok && apiErr.Status == 409 {
