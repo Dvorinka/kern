@@ -8,7 +8,7 @@ export default defineConfig({
 		port: 5173,
 		proxy: {
 			"/api": {
-				target: "http://localhost:8080",
+				target: process.env.KERN_API_ORIGIN ?? "http://localhost:8080",
 				changeOrigin: false,
 			},
 		},

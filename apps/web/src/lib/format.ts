@@ -55,3 +55,12 @@ export function refName(ref: string | null | undefined): string {
 	if (!ref) return "—";
 	return ref.replace(/^refs\/(heads|tags)\//, "");
 }
+
+// projectColor gives every project slug a stable, muted identity colour for
+// chips and chart breakdowns. Deterministic hash → HSL, kept desaturated so
+// it reads as data, not decoration.
+export function projectColor(slug: string): string {
+	let h = 0;
+	for (let i = 0; i < slug.length; i++) h = (h * 31 + slug.charCodeAt(i)) >>> 0;
+	return `hsl(${h % 360} 55% 62%)`;
+}
