@@ -364,6 +364,10 @@ func (e *executor) startContainer(ctx context.Context) error {
 		// setup-* actions resolve @actions/tool-cache via RUNNER_TOOL_CACHE;
 		// pointing it at the persistent runner cache makes installed SDKs warm.
 		"-e", "RUNNER_TOOL_CACHE="+containerCacheDir+"/_toolcache",
+		// Same trick for Playwright: `npx playwright install` lands browsers
+		// in the persistent cache so the next job skips a ~15min download.
+		// Step-level env still overrides this container default.
+		"-e", "PLAYWRIGHT_BROWSERS_PATH="+containerCacheDir+"/ms-playwright",
 		// RUNNER_TEMP must be exec-allowed: setup-* actions extract and run
 		// installers there, and the container's /tmp tmpfs is noexec.
 		"-e", "RUNNER_TEMP="+containerTmpDir,
