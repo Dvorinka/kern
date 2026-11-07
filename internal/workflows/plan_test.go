@@ -248,3 +248,37 @@ jobs:
 		t.Fatalf("want runs-on warning, got %+v", res.Diagnostics)
 	}
 }
+
+func TestCompileContainerEnv(t *testing.T) {
+	src := `on: push
+env: {WF: wf}
+jobs:
+  j:
+    runs-on: self-hosted
+    env: {JOB: job, SHARED: job-wins}
+    container:
+      image: alpine:3.20
+      env: {CENV: c, SHARED: container-loses}
+    steps:
+      - run: echo hi
+`
+	res, err := Compile(src, testCompiler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Valid {
+		t.Fatalf("diagnostics: %+v", res.Diagnostics)
+	}
+	j := findJob(t, res, "j")
+	if j.Env["CENV"] != "c" || j.Env["WF"] != "wf" || j.Env["JOB"] != "job" {
+		t.Fatalf("container.env not merged: %+v", j.Env)
+	}
+	if j.Env["SHARED"] != "job-wins" {
+		t.Fatalf("job env must win over container.env: %+v", j.Env)
+	}
+	for _, dg := range res.Diagnostics {
+		if dg.Code == "job-container" && strings.Contains(dg.Path, "env") {
+			t.Fatalf("container.env must not warn: %+v", dg)
+		}
+	}
+}

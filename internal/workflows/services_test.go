@@ -97,3 +97,53 @@ jobs:
 		t.Fatalf("want host-remap warning, got %+v", res.Diagnostics)
 	}
 }
+
+func TestCompileServiceCredentials(t *testing.T) {
+	src := `on: push
+jobs:
+  j:
+    runs-on: self-hosted
+    services:
+      reg:
+        image: registry.internal:5000/db:16
+        credentials: {username: bot, password: s3cret}
+      partial:
+        image: postgres:16
+        credentials: {username: only-user}
+    steps:
+      - run: echo hi
+`
+	res, err := Compile(src, testCompiler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Valid {
+		t.Fatalf("diagnostics: %+v", res.Diagnostics)
+	}
+	j := findJob(t, res, "j")
+	var reg, partial *ServicePlan
+	for i := range j.Services {
+		switch j.Services[i].Name {
+		case "reg":
+			reg = &j.Services[i]
+		case "partial":
+			partial = &j.Services[i]
+		}
+	}
+	if reg == nil || reg.Credentials == nil ||
+		reg.Credentials.Username != "bot" || reg.Credentials.Password != "s3cret" {
+		t.Fatalf("reg credentials: %+v", reg)
+	}
+	if partial == nil || partial.Credentials != nil {
+		t.Fatalf("partial credentials should be dropped: %+v", partial)
+	}
+	found := false
+	for _, dg := range res.Diagnostics {
+		if dg.Code == "services" && strings.Contains(dg.Message, "username and password") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("want partial-credentials warning, got %+v", res.Diagnostics)
+	}
+}

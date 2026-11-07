@@ -28,6 +28,12 @@ type ClaimService struct {
 	Image   string            `json:"image"`
 	Env     map[string]string `json:"env,omitempty"`
 	Options []string          `json:"options,omitempty"`
+	// Credentials authenticates a private-registry image pull; the runner
+	// uses a throwaway docker config dir and deletes it after the pull.
+	Credentials *struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	} `json:"credentials,omitempty"`
 	// Ports marks the service as localhost-mode: it shares the job
 	// container's network namespace so localhost:<port> resolves.
 	Ports []string `json:"ports,omitempty"`

@@ -1,15 +1,19 @@
 // Package expressions implements the GitHub Actions expression language.
 //
-// Supported: literals, context lookups (a.b, a['b'], a[0]), the operators !, ==, !=,
-// <, <=, >, >=, &&, ||, parentheses, and the core function set. Arithmetic and the
-// object filter syntax are intentionally out of scope and produce errors.
+// Supported: literals (including GitHub's signed, hex, octal, exponent and
+// Infinity/NaN number forms), context lookups (a.b, a['b'], a[0]), the object
+// filter syntax a.* (with chained-filter flattening), the operators !, ==, !=,
+// <, <=, >, >=, &&, ||, parentheses, and the documented function set. GitHub
+// has no arithmetic operators; + - * / outside number literals stay errors.
 package expressions
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -89,7 +93,11 @@ func Evaluate(body string, ctx map[string]any) (any, error) {
 	if p.err != nil {
 		return nil, p.err
 	}
-	return expr.eval(ctx)
+	v, err := expr.eval(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return unwrap(v), nil
 }
 
 // statusCheckRe detects an explicit status check function call. A preceding '.'
@@ -162,6 +170,8 @@ func Stringify(v any) string {
 		return "Array"
 	case map[string]any:
 		return "Object"
+	case filteredArray:
+		return "Array"
 	default:
 		b, err := json.Marshal(t)
 		if err != nil {
@@ -227,17 +237,9 @@ func (l *lexer) next() (token, error) {
 			l.pos++
 		}
 		return token{}, fmt.Errorf("unterminated string literal")
-	case c >= '0' && c <= '9':
+	case isNumberStart(l.s, l.pos):
 		start := l.pos
-		for l.pos < len(l.s) && (l.s[l.pos] >= '0' && l.s[l.pos] <= '9') {
-			l.pos++
-		}
-		if l.pos < len(l.s) && l.s[l.pos] == '.' {
-			l.pos++
-			for l.pos < len(l.s) && (l.s[l.pos] >= '0' && l.s[l.pos] <= '9') {
-				l.pos++
-			}
-		}
+		l.scanNumber()
 		return token{kind: tokNumber, text: l.s[start:l.pos]}, nil
 	case isIdentStart(c):
 		start := l.pos
@@ -263,6 +265,93 @@ func (l *lexer) next() (token, error) {
 
 func isIdentStart(c byte) bool {
 	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+func isDigit(c byte) bool { return c >= '0' && c <= '9' }
+
+func isHexDigit(c byte) bool {
+	return isDigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+}
+
+// isNumberStart reports whether s[pos] begins a GitHub number literal:
+// digits, .digits, or a sign followed by either. GitHub has no +/- operators,
+// so a sign directly before a digit is unambiguously part of the literal.
+func isNumberStart(s string, pos int) bool {
+	if pos >= len(s) {
+		return false
+	}
+	c := s[pos]
+	if isDigit(c) {
+		return true
+	}
+	if c == '.' && pos+1 < len(s) && isDigit(s[pos+1]) {
+		return true
+	}
+	if (c == '-' || c == '+') && pos+1 < len(s) {
+		n := s[pos+1]
+		return isDigit(n) || (n == '.' && pos+2 < len(s) && isDigit(s[pos+2])) ||
+			strings.HasPrefix(s[pos+1:], "Infinity")
+	}
+	return false
+}
+
+// scanNumber consumes one GitHub number literal: [+-]? (0x hex | 0o octal |
+// decimal with optional fraction and exponent). Decimal requires at least
+// one digit on some side of the point; a malformed exponent is left for the
+// next token so `1e` reads as `1` then an identifier, matching GitHub.
+func (l *lexer) scanNumber() {
+	if l.s[l.pos] == '-' || l.s[l.pos] == '+' {
+		l.pos++
+	}
+	rest := l.s[l.pos:]
+	// Signed Infinity is a literal; unsigned Infinity lexes as an identifier
+	// handled in parsePrimary.
+	if strings.HasPrefix(rest, "Infinity") {
+		l.pos += len("Infinity")
+		return
+	}
+	if strings.HasPrefix(rest, "0x") || strings.HasPrefix(rest, "0X") {
+		j := 2
+		for j < len(rest) && isHexDigit(rest[j]) {
+			j++
+		}
+		if j > 2 {
+			l.pos += j
+			return
+		}
+	}
+	if strings.HasPrefix(rest, "0o") || strings.HasPrefix(rest, "0O") {
+		j := 2
+		for j < len(rest) && rest[j] >= '0' && rest[j] <= '7' {
+			j++
+		}
+		if j > 2 {
+			l.pos += j
+			return
+		}
+	}
+	for l.pos < len(l.s) && isDigit(l.s[l.pos]) {
+		l.pos++
+	}
+	if l.pos < len(l.s) && l.s[l.pos] == '.' {
+		l.pos++
+		for l.pos < len(l.s) && isDigit(l.s[l.pos]) {
+			l.pos++
+		}
+	}
+	if l.pos < len(l.s) && (l.s[l.pos] == 'e' || l.s[l.pos] == 'E') {
+		j := l.pos + 1
+		if j < len(l.s) && (l.s[j] == '-' || l.s[j] == '+') {
+			j++
+		}
+		k := j
+		for k < len(l.s) && isDigit(l.s[k]) {
+			k++
+		}
+		if k > j {
+			l.pos = k
+		}
+	}
 }
 
 func isIdentPart(c byte) bool {
@@ -398,7 +487,7 @@ func (p *parser) parsePrimary() (node, error) {
 	case tokString:
 		return &literalNode{value: t.text}, nil
 	case tokNumber:
-		f, err := strconv.ParseFloat(t.text, 64)
+		f, err := parseNumberLiteral(t.text)
 		if err != nil {
 			return nil, fmt.Errorf("invalid number %q", t.text)
 		}
@@ -411,6 +500,10 @@ func (p *parser) parsePrimary() (node, error) {
 			return &literalNode{value: false}, nil
 		case "null":
 			return &literalNode{value: nil}, nil
+		case "NaN":
+			return &literalNode{value: math.NaN()}, nil
+		case "Infinity":
+			return &literalNode{value: math.Inf(1)}, nil
 		}
 		if p.peek().kind == tokPunct && p.peek().text == "(" {
 			p.take()
@@ -473,7 +566,7 @@ type accessNode struct {
 }
 
 func (n *accessNode) eval(ctx map[string]any) (any, error) {
-	base, err := n.base.eval(ctx)
+	raw, err := n.base.eval(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -481,24 +574,93 @@ func (n *accessNode) eval(ctx map[string]any) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	key := Stringify(keyVal)
+	key := Stringify(unwrap(keyVal))
+	// A filter result dereferences per item; items missing the key are
+	// skipped rather than null-filled, matching GitHub's FilteredArray.
+	// The marker must be checked before unwrap() erases it.
+	if fa, ok := raw.(filteredArray); ok {
+		out := filteredArray{}
+		for _, item := range fa.items {
+			if v, found := accessOne(item, key); found {
+				out.items = append(out.items, v)
+			}
+		}
+		return out, nil
+	}
+	base := unwrap(raw)
+	v, _ := accessOne(base, key)
+	return v, nil
+}
+
+// accessOne resolves key against a single value. found is false when the
+// value is not a collection or lacks the key — the filtered-chain skip rule.
+func accessOne(base any, key string) (any, bool) {
 	switch m := base.(type) {
 	case map[string]any:
-		return m[key], nil
+		v, ok := m[key]
+		return v, ok
 	case []any:
 		i, err := strconv.Atoi(key)
 		if err != nil || i < 0 || i >= len(m) {
-			return nil, nil
+			return nil, false
 		}
-		return m[i], nil
-	default:
-		return nil, nil
+		return m[i], true
 	}
+	return nil, false
+}
+
+// filteredArray is the result of an object filter (a.*). It stays wrapped
+// through chained dereferences so missing keys skip instead of null-fill,
+// and unwraps to a plain []any at expression boundaries.
+type filteredArray struct{ items []any }
+
+func unwrap(v any) any {
+	if f, ok := v.(filteredArray); ok {
+		return f.items
+	}
+	return v
+}
+
+// appendWildcard expands one value the way GitHub's `.*` dereference does:
+// object values (key-sorted for determinism — Go maps lose YAML order) or
+// array elements. Primitives contribute nothing.
+func appendWildcard(out []any, v any) []any {
+	switch t := v.(type) {
+	case map[string]any:
+		keys := make([]string, 0, len(t))
+		for k := range t {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			out = append(out, t[k])
+		}
+	case []any:
+		out = append(out, t...)
+	}
+	return out
 }
 
 type starNode struct{ base node }
 
-func (n *starNode) eval(ctx map[string]any) (any, error) { return nil, nil }
+func (n *starNode) eval(ctx map[string]any) (any, error) {
+	raw, err := n.base.eval(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Chained filters flatten one level: each prior item expands by `.*`.
+	// Check the marker before unwrap() erases it.
+	if fa, ok := raw.(filteredArray); ok {
+		var out []any
+		for _, item := range fa.items {
+			out = appendWildcard(out, unwrap(item))
+		}
+		return filteredArray{items: out}, nil
+	}
+	var out []any
+	out = appendWildcard(out, unwrap(raw))
+	return filteredArray{items: out}, nil
+}
 
 type notNode struct{ inner node }
 
@@ -507,7 +669,7 @@ func (n *notNode) eval(ctx map[string]any) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return !Truthy(v), nil
+	return !Truthy(unwrap(v)), nil
 }
 
 type binaryNode struct {
@@ -545,6 +707,7 @@ func (n *binaryNode) eval(ctx map[string]any) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	l, r = unwrap(l), unwrap(r)
 	switch n.op {
 	case "==":
 		return equalValues(l, r), nil
@@ -568,7 +731,7 @@ func (n *callNode) eval(ctx map[string]any) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		args = append(args, v)
+		args = append(args, unwrap(v))
 	}
 	return call(n.name, args, ctx)
 }
@@ -589,83 +752,236 @@ func lookup(ctx map[string]any, path string) (any, bool) {
 	return cur, true
 }
 
-func equalValues(a, b any) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
+// valueKind mirrors GitHub's ValueKind for AbstractEqual coercion.
+type valueKind int
+
+const (
+	kindNull valueKind = iota
+	kindBool
+	kindNumber
+	kindString
+	kindArray
+	kindObject
+)
+
+func kindOf(v any) valueKind {
+	switch v.(type) {
+	case nil:
+		return kindNull
+	case bool:
+		return kindBool
+	case float64, int, int64:
+		return kindNumber
+	case string:
+		return kindString
+	case []any:
+		return kindArray
+	case map[string]any:
+		return kindObject
 	}
-	af, aNum := toNumber(a)
-	bf, bNum := toNumber(b)
-	if aNum && bNum {
-		return af == bf
-	}
-	as, aStr := a.(string)
-	bs, bStr := b.(string)
-	if aStr && bStr {
-		if af, err := strconv.ParseFloat(as, 64); err == nil {
-			if bf, err := strconv.ParseFloat(bs, 64); err == nil {
-				return af == bf
-			}
-		}
-		return strings.EqualFold(as, bs)
-	}
-	if ab, ok := a.(bool); ok {
-		if bb, ok := b.(bool); ok {
-			return ab == bb
-		}
-	}
-	return Stringify(a) == Stringify(b)
+	return kindNull
 }
 
-func compareValues(op string, a, b any) bool {
-	af, aNum := toNumber(a)
-	bf, bNum := toNumber(b)
-	if aNum && bNum {
-		switch op {
-		case "<":
-			return af < bf
-		case "<=":
-			return af <= bf
-		case ">":
-			return af > bf
-		case ">=":
-			return af >= bf
-		}
+func numValue(v any) float64 {
+	switch t := v.(type) {
+	case float64:
+		return t
+	case int:
+		return float64(t)
+	case int64:
+		return float64(t)
 	}
-	as, bs := strings.ToLower(Stringify(a)), strings.ToLower(Stringify(b))
-	switch op {
-	case "<":
-		return as < bs
-	case "<=":
-		return as <= bs
-	case ">":
-		return as > bs
-	case ">=":
-		return as >= bs
+	return math.NaN()
+}
+
+// coerceForCompare ports GitHub's CoerceTypes: numbers and strings coerce
+// across, booleans and null coerce to numbers and recurse. Arrays and
+// objects never coerce — mismatched kinds simply never compare equal.
+func coerceForCompare(a, b any) (any, any) {
+	ka, kb := kindOf(a), kindOf(b)
+	if ka == kb {
+		return a, b
+	}
+	switch {
+	case ka == kindNumber && kb == kindString:
+		return a, parseNumberValue(Stringify(b))
+	case ka == kindString && kb == kindNumber:
+		return parseNumberValue(Stringify(a)), b
+	case ka == kindBool || ka == kindNull:
+		return coerceForCompare(boolNullToNumber(a), b)
+	case kb == kindBool || kb == kindNull:
+		return coerceForCompare(a, boolNullToNumber(b))
+	}
+	return a, b
+}
+
+func boolNullToNumber(v any) float64 {
+	if b, ok := v.(bool); ok && b {
+		return 1
+	}
+	return 0
+}
+
+// equalValues ports GitHub's AbstractEqual: same-kind comparisons only after
+// CoerceTypes. Strings compare OrdinalIgnoreCase; arrays and objects are
+// equal only by identity, so two distinct collections are never equal.
+func equalValues(a, b any) bool {
+	a, b = coerceForCompare(unwrap(a), unwrap(b))
+	ka, kb := kindOf(a), kindOf(b)
+	if ka != kb {
+		return false
+	}
+	switch ka {
+	case kindNull:
+		return true
+	case kindNumber:
+		af, bf := numValue(a), numValue(b)
+		if math.IsNaN(af) || math.IsNaN(bf) {
+			return false
+		}
+		return af == bf
+	case kindString:
+		return strings.EqualFold(a.(string), b.(string))
+	case kindBool:
+		return a.(bool) == b.(bool)
 	}
 	return false
 }
 
-func toNumber(v any) (float64, bool) {
-	switch t := v.(type) {
-	case float64:
-		return t, true
-	case int:
-		return float64(t), true
-	case int64:
-		return float64(t), true
-	case bool:
-		if t {
-			return 1, true
-		}
-		return 0, true
-	case string:
-		f, err := strconv.ParseFloat(strings.TrimSpace(t), 64)
-		if err != nil {
-			return 0, false
-		}
-		return f, true
+// compareValues ports GitHub's AbstractLessThan/GreaterThan family after the
+// same coercion: numbers compare numerically, strings OrdinalIgnoreCase
+// lexicographically, booleans order false < true. <=/>= are equal-or-ordered,
+// and NaN never satisfies any comparison.
+func compareValues(op string, a, b any) bool {
+	a, b = coerceForCompare(unwrap(a), unwrap(b))
+	ka, kb := kindOf(a), kindOf(b)
+	if ka != kb {
+		return false
 	}
-	return 0, false
+	var cmp int
+	switch ka {
+	case kindNumber:
+		af, bf := numValue(a), numValue(b)
+		if math.IsNaN(af) || math.IsNaN(bf) {
+			return false
+		}
+		switch {
+		case af < bf:
+			cmp = -1
+		case af > bf:
+			cmp = 1
+		}
+	case kindString:
+		cmp = strings.Compare(strings.ToLower(a.(string)), strings.ToLower(b.(string)))
+	case kindBool:
+		// GitHub orders booleans false < true.
+		ai, bi := 0, 0
+		if a.(bool) {
+			ai = 1
+		}
+		if b.(bool) {
+			bi = 1
+		}
+		switch {
+		case ai < bi:
+			cmp = -1
+		case ai > bi:
+			cmp = 1
+		}
+	default:
+		return false
+	}
+	switch op {
+	case "<":
+		return cmp < 0
+	case "<=":
+		return cmp <= 0
+	case ">":
+		return cmp > 0
+	case ">=":
+		return cmp >= 0
+	}
+	return false
+}
+
+// parseNumberValue ports GitHub's ExpressionUtility.ParseNumber: trim,
+// empty → 0, .NET-style decimal (sign, point, exponent), then lowercase
+// 0x hex and 0o octal bounded to Int32, then the exact strings "Infinity"
+// and "-Infinity". Everything else — including "nan"/"inf" spellings Go
+// would accept — is NaN.
+func parseNumberValue(s string) float64 {
+	t := strings.TrimSpace(s)
+	if t == "" {
+		return 0
+	}
+	if f, ok := parseDecimal(t); ok {
+		return f
+	}
+	if len(t) > 2 && (t[:2] == "0x" || t[:2] == "0X") {
+		if v, err := strconv.ParseUint(t[2:], 16, 32); err == nil {
+			return float64(v)
+		}
+		return math.NaN()
+	}
+	if len(t) > 2 && (t[:2] == "0o" || t[:2] == "0O") {
+		if v, err := strconv.ParseUint(t[2:], 8, 32); err == nil {
+			return float64(v)
+		}
+		return math.NaN()
+	}
+	switch t {
+	case "Infinity":
+		return math.Inf(1)
+	case "-Infinity":
+		return math.Inf(-1)
+	}
+	return math.NaN()
+}
+
+var decimalRe = regexp.MustCompile(`^[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?$`)
+
+func parseDecimal(s string) (float64, bool) {
+	if !decimalRe.MatchString(s) {
+		return 0, false
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0, false
+	}
+	return f, true
+}
+
+// parseNumberLiteral converts a lexer number token. The lexer guarantees the
+// shape; hex and octal literals are unsigned magnitudes with the sign applied
+// after, matching GitHub's double-valued results.
+func parseNumberLiteral(s string) (float64, error) {
+	neg := false
+	t := s
+	if strings.HasPrefix(t, "-") || strings.HasPrefix(t, "+") {
+		neg = t[0] == '-'
+		t = t[1:]
+	}
+	var f float64
+	var err error
+	switch {
+	case len(t) > 2 && (t[:2] == "0x" || t[:2] == "0X"):
+		var v uint64
+		v, err = strconv.ParseUint(t[2:], 16, 64)
+		f = float64(v)
+	case len(t) > 2 && (t[:2] == "0o" || t[:2] == "0O"):
+		var v uint64
+		v, err = strconv.ParseUint(t[2:], 8, 64)
+		f = float64(v)
+	default:
+		f, err = strconv.ParseFloat(t, 64)
+	}
+	if err != nil {
+		return 0, err
+	}
+	if neg {
+		f = -f
+	}
+	return f, nil
 }
 
 func call(name string, args []any, ctx map[string]any) (any, error) {
@@ -674,6 +990,9 @@ func call(name string, args []any, ctx map[string]any) (any, error) {
 		if len(args) != 2 {
 			return nil, fmt.Errorf("contains expects 2 arguments")
 		}
+		// GitHub: an array search uses AbstractEqual per item; a primitive
+		// search is a case-insensitive substring on the string form; objects
+		// never contain anything.
 		switch search := args[0].(type) {
 		case []any:
 			for _, item := range search {
@@ -682,8 +1001,12 @@ func call(name string, args []any, ctx map[string]any) (any, error) {
 				}
 			}
 			return false, nil
+		case map[string]any:
+			return false, nil
 		default:
-			return strings.Contains(strings.ToLower(Stringify(args[0])), strings.ToLower(Stringify(args[1]))), nil
+			return strings.Contains(
+				strings.ToLower(Stringify(search)),
+				strings.ToLower(Stringify(args[1]))), nil
 		}
 	case "startswith":
 		if len(args) != 2 {
@@ -708,24 +1031,50 @@ func call(name string, args []any, ctx map[string]any) (any, error) {
 		if len(args) > 1 {
 			sep = Stringify(args[1])
 		}
-		items, ok := args[0].([]any)
-		if !ok {
+		// GitHub join(): arrays stringify each primitive element; a primitive
+		// input returns its own string form; other collections give "".
+		switch items := args[0].(type) {
+		case []any:
+			parts := make([]string, len(items))
+			for i, item := range items {
+				parts[i] = Stringify(item)
+			}
+			return strings.Join(parts, sep), nil
+		case map[string]any:
+			return "", nil
+		default:
 			return Stringify(args[0]), nil
 		}
-		parts := make([]string, len(items))
-		for i, item := range items {
-			parts[i] = Stringify(item)
-		}
-		return strings.Join(parts, sep), nil
 	case "tojson":
 		if len(args) != 1 {
 			return nil, fmt.Errorf("toJSON expects 1 argument")
 		}
-		b, err := json.Marshal(args[0])
-		if err != nil {
+		// GitHub pretty-prints with indentation; keep HTML chars literal so
+		// URLs and comparisons survive the round trip.
+		var buf bytes.Buffer
+		enc := json.NewEncoder(&buf)
+		enc.SetEscapeHTML(false)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(args[0]); err != nil {
 			return nil, err
 		}
-		return string(b), nil
+		return strings.TrimRight(buf.String(), "\n"), nil
+	case "case":
+		// GitHub's undocumented case(): odd arg count, (predicate, result)
+		// pairs and a trailing default. Predicates must be real booleans.
+		if len(args)%2 == 0 {
+			return nil, fmt.Errorf("case expects an odd number of arguments")
+		}
+		for i := 0; i+1 < len(args); i += 2 {
+			pred, ok := args[i].(bool)
+			if !ok {
+				return nil, fmt.Errorf("case predicate %d must evaluate to a boolean", i+1)
+			}
+			if pred {
+				return args[i+1], nil
+			}
+		}
+		return args[len(args)-1], nil
 	case "fromjson":
 		if len(args) != 1 {
 			return nil, fmt.Errorf("fromJSON expects 1 argument")

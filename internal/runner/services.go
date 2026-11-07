@@ -9,8 +9,11 @@ package runner
 // The job container joins the same network in startContainer.
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"sort"
 	"strings"
@@ -68,14 +71,24 @@ func (e *executor) startServices(ctx context.Context) error {
 	if err := e.acquireServicePorts(ctx); err != nil {
 		return err
 	}
+	// streamCtx bounds the docker logs -f followers and the flush pump;
+	// stopServiceLogs cancels it once the containers are gone.
+	var streamCtx context.Context
+	streamCtx, e.svcLogCancel = context.WithCancel(ctx)
+	e.svcLogWG.Add(1)
+	go func() {
+		defer e.svcLogWG.Done()
+		e.serviceLogPump(streamCtx)
+	}()
 	net := e.serviceNet()
 	for _, svc := range e.claim.Job.Services {
-		if err := e.pullService(ctx, svc.Image); err != nil {
+		if err := e.pullService(ctx, svc); err != nil {
 			return fmt.Errorf("service %s: %w", svc.Name, err)
 		}
 		if err := e.startService(ctx, net, svc); err != nil {
 			return fmt.Errorf("service %s: %w", svc.Name, err)
 		}
+		e.streamServiceLogs(streamCtx, svc)
 	}
 	for _, svc := range e.claim.Job.Services {
 		if err := e.waitServiceHealthy(ctx, svc); err != nil {
@@ -85,12 +98,63 @@ func (e *executor) startServices(ctx context.Context) error {
 	return nil
 }
 
-func (e *executor) pullService(ctx context.Context, image string) error {
-	if err := e.docker(ctx, "pull", "-q", image); err != nil {
+func (e *executor) pullService(ctx context.Context, svc ClaimService) error {
+	if svc.Credentials != nil && svc.Credentials.Username != "" {
+		if err := e.registryLogin(ctx, svc.Image, svc.Credentials.Username, svc.Credentials.Password); err != nil {
+			return fmt.Errorf("registry login: %w", err)
+		}
+	}
+	if err := e.docker(ctx, "pull", "-q", svc.Image); err != nil {
 		return err
 	}
-	recordImageUse(e.cfg.WorkRoot, image)
+	recordImageUse(e.cfg.WorkRoot, svc.Image)
 	return nil
+}
+
+// registryLogin authenticates docker against the registry embedded in image
+// for one pull. The credential lives only in a throwaway --config dir that
+// is deleted on return — it never touches the runner user's docker config,
+// so a hostile workflow cannot exfiltrate it from a later job's image.
+func (e *executor) registryLogin(ctx context.Context, image, user, pass string) error {
+	dir, err := os.MkdirTemp("", "kern-regcred-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	args := []string{"--config", dir, "login"}
+	if reg := registryHost(image); reg != "" {
+		args = append(args, reg)
+	}
+	args = append(args, "-u", user, "--password-stdin")
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Stdin = strings.NewReader(pass)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("docker login: %s", tailStr(string(out), 200))
+	}
+	return nil
+}
+
+// registryHost extracts the registry authority from an image reference:
+// the first path component when it carries a '.' or ':' or is "localhost";
+// empty means Docker Hub, which docker login reaches with no argument.
+func registryHost(image string) string {
+	image = strings.TrimSpace(image)
+	if i := strings.Index(image, "@"); i >= 0 {
+		image = image[:i]
+	}
+	// Strip the tag: a ':' after the last '/', never the registry port.
+	if j := strings.LastIndex(image, "/"); j >= 0 {
+		if k := strings.Index(image[j:], ":"); k >= 0 {
+			image = image[:j+k]
+		}
+	} else if k := strings.Index(image, ":"); k >= 0 {
+		image = image[:k]
+	}
+	first, _, _ := strings.Cut(image, "/")
+	if first == "localhost" || strings.ContainsAny(first, ".:") {
+		return first
+	}
+	return ""
 }
 
 func (e *executor) serviceContainerName(svc ClaimService) string {
@@ -271,10 +335,113 @@ func (e *executor) waitServiceHealthy(ctx context.Context, svc ClaimService) err
 	}
 }
 
+// streamServiceLogs follows `docker logs -f` for a service and folds its
+// output into the job's step logs under a service:<name> marker. KERN has no
+// job-level log surface, so lines land in whichever step is active — the
+// same merged-timeline approximation GitHub's UI makes. Lines arriving
+// before the first step or between steps buffer and flush into the next
+// step's log; a chatty service is capped so a flood cannot grow memory.
+func (e *executor) streamServiceLogs(ctx context.Context, svc ClaimService) {
+	name := e.serviceContainerName(svc)
+	cmd := exec.CommandContext(ctx, "docker", "logs", "-f", "--tail", "0", name)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		e.log.Debug("service log stream unavailable", zap.String("service", svc.Name), zap.Error(err))
+		return
+	}
+	e.svcLogWG.Add(1)
+	go func() {
+		defer e.svcLogWG.Done()
+		var wg sync.WaitGroup
+		for _, r := range []io.Reader{stdout, stderr} {
+			wg.Add(1)
+			go func(r io.Reader) {
+				defer wg.Done()
+				sc := bufio.NewScanner(r)
+				sc.Buffer(make([]byte, 64*1024), 1024*1024)
+				for sc.Scan() {
+					e.svcLogLine(svc.Name, sc.Text())
+				}
+			}(r)
+		}
+		wg.Wait()
+		_ = cmd.Wait()
+	}()
+}
+
+// svcLogPendingCap bounds buffered service output between flushes; overflow
+// drops the oldest quarter and marks the gap so logs never look complete.
+const svcLogPendingCap = 256 << 10
+
+func (e *executor) svcLogLine(svc, line string) {
+	msg := []byte("service:" + svc + " | " + line + "\n")
+	e.svcLogMu.Lock()
+	if len(e.svcLogPending)+len(msg) > svcLogPendingCap {
+		cut := len(e.svcLogPending) - svcLogPendingCap/4
+		if cut < 0 {
+			cut = 0
+		}
+		e.svcLogPending = append([]byte("service:log | ... truncated ...\n"), e.svcLogPending[cut:]...)
+	}
+	e.svcLogPending = append(e.svcLogPending, msg...)
+	e.svcLogMu.Unlock()
+}
+
+// flushServiceLogs posts buffered service output to the most recently
+// started step. No-op before the first step or when nothing is pending.
+func (e *executor) flushServiceLogs() {
+	e.svcLogMu.Lock()
+	data := e.svcLogPending
+	e.svcLogPending = nil
+	e.svcLogMu.Unlock()
+	n := e.currentStep.Load()
+	if len(data) == 0 || n <= 0 {
+		if len(data) > 0 {
+			e.svcLogMu.Lock()
+			e.svcLogPending = append(data, e.svcLogPending...)
+			e.svcLogMu.Unlock()
+		}
+		return
+	}
+	_ = e.c.appendLog(context.Background(), e.jobID, int(n), data)
+}
+
+// serviceLogPump flushes pending service lines every 2s so output appears
+// during long quiet steps, not only at step boundaries. It also flushes on
+// shutdown via stopServiceLogs.
+func (e *executor) serviceLogPump(ctx context.Context) {
+	t := time.NewTicker(2 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			e.flushServiceLogs()
+		}
+	}
+}
+
+func (e *executor) stopServiceLogs(ctx context.Context) {
+	if e.svcLogCancel != nil {
+		e.svcLogCancel()
+	}
+	e.svcLogWG.Wait()
+	e.flushServiceLogs()
+}
+
 // stopServices removes the service containers and the job network; the job
 // container leaves the network when it is removed in cleanup. Services
 // sharing the job netns die with it — the rm calls below are belt and braces.
 func (e *executor) stopServices(ctx context.Context) {
+	e.stopServiceLogs(ctx)
 	for _, svc := range e.claim.Job.Services {
 		_ = exec.CommandContext(ctx, "docker", "rm", "-f", e.serviceContainerName(svc)).Run()
 	}

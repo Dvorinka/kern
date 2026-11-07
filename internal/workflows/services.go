@@ -3,8 +3,9 @@ package workflows
 // Service containers (jobs.<id>.services). KERN runs each service on a shared
 // per-job Docker network where its service name is the network alias — the
 // same access model GitHub gives container jobs (servicename:port).
-// credentials/ports/volumes are not honoured; `options` accepts only the
-// --health-* docker flags, everything else warns.
+// credentials and ports are honoured; volumes are not (host bind mounts from
+// workflow YAML would expose the runner filesystem to untrusted runs), and
+// `options` accepts only the --health-* docker flags, everything else warns.
 
 import (
 	"fmt"
@@ -35,9 +36,7 @@ func validateService(name string, raw any) error {
 func serviceWarnings(d *diagnostics, path string, m map[string]any) {
 	for k := range m {
 		switch k {
-		case "image", "env", "options", "ports":
-		case "credentials":
-			d.warnf("services", path+".credentials", "service registry credentials are not implemented and are ignored")
+		case "image", "env", "options", "ports", "credentials":
 		case "volumes":
 			d.warnf("services", path+".volumes", "service volumes are not implemented and are ignored")
 		default:
@@ -63,6 +62,7 @@ func compileService(d *diagnostics, path, name string, raw any) ServicePlan {
 		}
 	}
 	sp.Ports = compileServicePorts(d, path+".ports", m["ports"])
+	sp.Credentials = compileCredentials(d, path+".credentials", m["credentials"])
 	toks := shellWords(asString(m["options"]))
 	for i := 0; i < len(toks); i++ {
 		tok := toks[i]
@@ -122,6 +122,25 @@ func compileServicePorts(d *diagnostics, path string, raw any) []string {
 		ports = append(ports, container)
 	}
 	return ports
+}
+
+// compileCredentials reads a credentials: {username, password} mapping.
+// Both fields are required for a login; a partial map warns and is dropped
+// rather than silently pulling unauthenticated.
+func compileCredentials(d *diagnostics, path string, raw any) *RegistryCredentials {
+	m, ok := raw.(map[string]any)
+	if !ok {
+		if raw != nil {
+			d.warnf("services", path, "service credentials must be a mapping with username and password")
+		}
+		return nil
+	}
+	user, pass := asString(m["username"]), asString(m["password"])
+	if strings.TrimSpace(user) == "" || strings.TrimSpace(pass) == "" {
+		d.warnf("services", path, "service credentials require both username and password; ignored")
+		return nil
+	}
+	return &RegistryCredentials{Username: user, Password: pass}
 }
 
 // shellWords splits a docker --options string honouring quotes — enough for

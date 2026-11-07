@@ -105,11 +105,22 @@ func (s *Server) wireCommitStatus() {
 			s.Log.Warn("commit status failed", zap.String("repo", repo), zap.Error(err))
 		}
 		status, conclusion := githubCheck(state, run)
+		// Annotations append across check-run updates, so they post only on
+		// the terminal state — earlier posts would duplicate them.
+		var anns []github.CheckAnnotation
+		if status == "completed" {
+			var skipped int
+			anns, skipped = checkAnnotations(jobs)
+			if skipped > 0 {
+				s.Log.Info("step annotations not postable to github",
+					zap.String("run", run.ID.String()), zap.Int("skipped", skipped))
+			}
+		}
 		if err := cl.UpsertCheckRun(ctx, repo, github.CheckRun{
 			Name: "kern/" + run.WorkflowName, HeadSHA: run.SHA,
 			Status: status, Conclusion: conclusion, DetailsURL: target,
 			ExternalID: run.ID.String(), Title: checkTitle(run, state),
-			Summary: checkSummary(run, jobs),
+			Summary: checkSummary(run, jobs), Annotations: anns,
 		}); err != nil {
 			s.Log.Warn("check run failed", zap.String("repo", repo), zap.Error(err))
 		}
