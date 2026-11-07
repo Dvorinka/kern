@@ -108,10 +108,11 @@ type executor struct {
 	killFn   context.CancelFunc // kills the docker exec of the step in flight
 	lastTail string             // log tail of the most recent step, for diagnosis
 
-	scriptSeq  int               // unique script filenames across composite sub-steps
-	sumBuf     bytes.Buffer      // composite sub-step summaries, folded into the parent step
-	actionDirs map[string]string // remote actions fetched this job, keyed by owner__repo__ref
-	exprCtx    map[string]any    // composite sub-step interpolation context; nil = runnerContext()
+	scriptSeq         int               // unique script filenames across composite sub-steps
+	sumBuf            bytes.Buffer      // composite sub-step summaries, folded into the parent step
+	actionDirs        map[string]string // remote actions fetched this job, keyed by owner__repo__ref
+	actionCachePruned bool              // persistent action cache swept once per job
+	exprCtx           map[string]any    // composite sub-step interpolation context; nil = runnerContext()
 
 	postHooks []*actionHook          // post stack: armed lazily, popped LIFO
 	postByKey map[string]*actionHook // dedup between pre-time and main-time arms
