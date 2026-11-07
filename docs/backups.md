@@ -76,6 +76,50 @@ KERN_ENV=development ./kern-api
 Migrations run at api boot, so a dump from an older version restores
 cleanly and upgrades itself.
 
+## Drill record — 2026-11-08 (dev)
+
+Executed against the dev database (`kern`, 35 runs, 4 artifact rows,
+goose 16) while the dev api and runner were live — `pg_dump` stayed
+consistent under write load:
+
+```text
+docker exec kern-pg-dev pg_dump -U kern -Fc kern > kern-dev-restore.dump   # 275K
+docker run -d --name kern-restore-pg -p 55432:5432 \
+  -e POSTGRES_USER=kern -e POSTGRES_PASSWORD=kern -e POSTGRES_DB=kern_restore \
+  postgres:16-alpine
+docker exec -i kern-restore-pg pg_restore -U kern -d kern_restore \
+  --no-owner --exit-on-error < kern-dev-restore.dump                        # clean, rc=0
+cp -a .data/blobs .data/blobs-restore                                       # 288K+
+KERN_DATABASE_URL=postgres://…@localhost:55432/kern_restore \
+KERN_BLOB_DIR=.data/blobs-restore KERN_HTTP_ADDR=:8190 ./kern-api
+```
+
+Verified on the restored instance:
+
+- `GET /healthz` → `{"status":"ok"}`
+- `GET /api/v1/runs` → all 35 runs, newest first
+- `GET /api/v1/steps/:id/logs` → step output intact
+- `GET /api/v1/artifacts/:id/download` → 200, tar payload extracted and
+  content-checked (`drill-1794094217`)
+- Session cookie issued before the dump still authenticated after
+  restore — sessions are DB state, and `KERN_SESSION_SECRET`/`KERN_SECRET_KEY`
+  were identical (empty dev defaults). Encrypted `secrets` rows decrypt
+  only when the same `KERN_SECRET_KEY` is configured — as documented above.
+
+Gaps the drill surfaced:
+
+- **Artifact rows can outlive their blobs.** Three pre-existing dev
+  artifact rows referenced content absent from the blob dir; download
+  returned `{"code":"not_found","message":"artifact content missing"}`.
+  The restore reproduced source state faithfully — it cannot resurrect
+  blobs that were never (or no longer) backed up. Blob backup coverage
+  should be verified against `artifacts.blob_ref`, not assumed from row
+  counts.
+- The `--clean --if-exists` restore path in the snippet above was not
+  exercised; a fresh-database `pg_restore` was used instead. Both are
+  standard pg paths, but run the documented variant once before relying
+  on it for a same-name restore.
+
 ## Failure modes to know
 
 - **Dump exists but blobs are gone** — runs show but logs/artifacts 404.
