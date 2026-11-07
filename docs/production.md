@@ -47,18 +47,23 @@ diffs with a large security delta.
 Carried over from `docs/compatibility.md` — none of these block production,
 they bound which workflows run unmodified.
 
-- Reusable-workflow callers: `strategy`/`concurrency`/`secrets:` maps →
-  explicit diagnostics today.
-- Service containers: `credentials`/`ports`/`volumes` warn-and-ignore; no
-  service log streaming.
+- Reusable-workflow callers: `strategy`/`concurrency`/explicit `secrets:`
+  maps → explicit diagnostics today; `secrets: inherit` works (called jobs
+  share the caller project's secret delivery).
+- Service containers: `credentials` (throwaway docker login for the pull)
+  and `ports` honoured; `volumes` warn-and-ignore; service logs stream into
+  the active step's log under `service:<name>`.
 - `permissions:` enforced for `GITHUB_TOKEN` scope — the per-run token is
   minted clamped to workflow/job permissions ∩ installation grants.
-- `::error::`/`::warning::` annotations parsed, stored per step and shown in
-  run detail — not yet posted back to GitHub check runs.
-- Job `container:` options beyond `image` ignored.
-- OIDC `id-token`, expression arithmetic, object filters `a.*`, some
-  string functions — diagnostics, not silence.
-- `actions/cache`: workspace-relative paths only, no size quotas.
+- `::error::`/`::warning::`/`::notice::` annotations parsed, stored per
+  step, shown in run detail, and posted to GitHub check runs on completion
+  (`debug` and file-less annotations stay KERN-only).
+- Job `container:` honours `image` and `env`; `credentials`/`ports`/
+  `volumes`/`options` warn-and-ignore.
+- OIDC `id-token`, expression arithmetic (GitHub has none either), some
+  edge-case function semantics — diagnostics, not silence.
+- `actions/cache`: workspace-relative paths only; per-entry size cap via
+  `KERN_CACHE_MAX_BYTES` (default 1 GiB).
 
 ## Milestones not started
 

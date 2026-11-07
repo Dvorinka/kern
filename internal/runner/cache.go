@@ -108,6 +108,9 @@ var (
 	// as a warning, not a failure — composite actions (trivy, setup-trivy)
 	// cache paths outside the workspace and must not fail the step for it.
 	errCacheEmpty = errors.New("no files found for cache path(s)")
+	// errCacheTooLarge is the server's KERN_CACHE_MAX_BYTES refusal; the
+	// archive was not stored, so the step must say so rather than imply a save.
+	errCacheTooLarge = errors.New("cache archive exceeds the server size limit")
 )
 
 func (e *executor) saveCacheArchive(key string, paths []string) error {
@@ -126,9 +129,14 @@ func (e *executor) saveCacheArchive(key string, paths []string) error {
 		return fmt.Errorf("%w: %s", errCacheEmpty, strings.Join(paths, ", "))
 	}
 	err = e.c.saveCache(context.Background(), e.jobID, key, tmp.Name())
-	if apiErr, ok := err.(*APIError); ok && apiErr.Status == 409 {
-		return fmt.Errorf("%w: unable to reserve cache with key %q, another job may be creating this cache",
-			errCacheExists, key)
+	if apiErr, ok := err.(*APIError); ok {
+		switch apiErr.Status {
+		case 409:
+			return fmt.Errorf("%w: unable to reserve cache with key %q, another job may be creating this cache",
+				errCacheExists, key)
+		case 413:
+			return fmt.Errorf("%w: %s", errCacheTooLarge, apiErr.Body)
+		}
 	}
 	return err
 }

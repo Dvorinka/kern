@@ -228,11 +228,22 @@ type ServicePlan struct {
 	Image   string            `json:"image"`
 	Env     map[string]string `json:"env,omitempty"`
 	Options []string          `json:"options,omitempty"` // health-check docker flags only
+	// Credentials authenticates the service image pull against a private
+	// registry (services.<name>.credentials). The runner logs docker in with
+	// a throwaway config dir for the pull only — never persisted.
+	Credentials *RegistryCredentials `json:"credentials,omitempty"`
 	// Ports carries the service's container-side published ports. A service
 	// that declares ports shares the job container's network namespace, so
 	// localhost:<port> works exactly as it does on a GitHub VM runner; the
 	// service name also resolves to 127.0.0.1 inside the job.
 	Ports []string `json:"ports,omitempty"`
+}
+
+// RegistryCredentials is a services.<name>.credentials or
+// container.credentials mapping.
+type RegistryCredentials struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
 }
 
 // Edge is a dependency between plan jobs, kept for DAG rendering.

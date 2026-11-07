@@ -158,7 +158,7 @@ func compile(content string, c Compiler, depth int, calls *int, deps map[string]
 					d.errorf("job-container", "jobs."+id+".container", "container.image is required")
 				}
 				for k := range c {
-					if k != "image" {
+					if k != "image" && k != "env" {
 						d.warnf("job-container", "jobs."+id+".container."+k, fmt.Sprintf("container option %q is not implemented and is ignored", k))
 					}
 				}
@@ -336,6 +336,17 @@ func compileJob(wf Workflow, id string, job *Job, matrix map[string]any, c Compi
 	}
 
 	env := mergeEnv(wf.Env, job.Env)
+	// container.env applies inside the job container for every step; job env
+	// is more specific and wins on conflict, matching GitHub's layering.
+	if cm, ok := job.Container.(map[string]any); ok {
+		if cenv, ok := cm["env"].(map[string]any); ok && len(cenv) > 0 {
+			merged := stringMap(cenv)
+			for k, v := range env {
+				merged[k] = v
+			}
+			env = merged
+		}
+	}
 
 	// runs-on accepts expressions (GitHub evaluates them against matrix and
 	// other contexts). Only matrix is knowable at compile time; a label that

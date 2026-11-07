@@ -20,7 +20,29 @@ type CheckRun struct {
 	ExternalID string
 	Title      string
 	Summary    string
+	// Annotations are step annotations posted with the run's terminal update.
+	// GitHub accepts at most 50 per request and appends across updates; the
+	// first chunk rides the upsert body, the rest follow as PATCHes.
+	Annotations []CheckAnnotation
 }
+
+// CheckAnnotation is the Checks API annotation object. Path, StartLine,
+// EndLine, AnnotationLevel and Message are required by GitHub; columns are
+// only honoured when the span sits on one line.
+type CheckAnnotation struct {
+	Path            string `json:"path"`
+	StartLine       int    `json:"start_line"`
+	EndLine         int    `json:"end_line"`
+	StartColumn     int    `json:"start_column,omitempty"`
+	EndColumn       int    `json:"end_column,omitempty"`
+	AnnotationLevel string `json:"annotation_level"`
+	Message         string `json:"message"`
+	Title           string `json:"title,omitempty"`
+	RawDetails      string `json:"raw_details,omitempty"`
+}
+
+// maxCheckAnnotationsPerRequest is GitHub's per-request annotation cap.
+const maxCheckAnnotationsPerRequest = 50
 
 // UpsertCheckRun creates the check, or updates it when one already exists
 // for this ExternalID. Listing then writing can duplicate the check if two
@@ -37,9 +59,36 @@ func (c *Client) UpsertCheckRun(ctx context.Context, repo string, in CheckRun) e
 		return err
 	}
 	if id == 0 {
-		return c.do(ctx, http.MethodPost, "/repos/"+repo+"/check-runs", "", in.body(true), nil)
+		var created struct {
+			ID int64 `json:"id"`
+		}
+		if err := c.do(ctx, http.MethodPost, "/repos/"+repo+"/check-runs", "", in.body(true), &created); err != nil {
+			return err
+		}
+		id = created.ID
+	} else if err := c.do(ctx, http.MethodPatch,
+		fmt.Sprintf("/repos/%s/check-runs/%d", repo, id), "", in.body(false), nil); err != nil {
+		return err
 	}
-	return c.do(ctx, http.MethodPatch, fmt.Sprintf("/repos/%s/check-runs/%d", repo, id), "", in.body(false), nil)
+	// Remaining annotation chunks append via the update endpoint — the
+	// documented way to post more than 50 annotations to one check run.
+	for i := maxCheckAnnotationsPerRequest; i < len(in.Annotations); i += maxCheckAnnotationsPerRequest {
+		end := i + maxCheckAnnotationsPerRequest
+		if end > len(in.Annotations) {
+			end = len(in.Annotations)
+		}
+		out := map[string]any{
+			"title":       in.Title,
+			"summary":     in.Summary,
+			"annotations": in.Annotations[i:end],
+		}
+		if err := c.do(ctx, http.MethodPatch,
+			fmt.Sprintf("/repos/%s/check-runs/%d", repo, id), "",
+			map[string]any{"output": out}, nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *Client) findCheckRun(ctx context.Context, repo, sha, name, externalID string) (int64, error) {
@@ -65,10 +114,15 @@ func (c *Client) findCheckRun(ctx context.Context, repo, sha, name, externalID s
 }
 
 func (in CheckRun) body(create bool) map[string]any {
+	outMap := map[string]any{"title": in.Title, "summary": in.Summary}
+	if len(in.Annotations) > 0 {
+		end := min(len(in.Annotations), maxCheckAnnotationsPerRequest)
+		outMap["annotations"] = in.Annotations[:end]
+	}
 	out := map[string]any{
 		"status":      in.Status,
 		"details_url": in.DetailsURL,
-		"output":      map[string]string{"title": in.Title, "summary": in.Summary},
+		"output":      outMap,
 	}
 	if create {
 		out["name"] = in.Name

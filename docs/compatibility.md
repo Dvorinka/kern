@@ -18,7 +18,7 @@ never silently ignored.
 | Fork-PR approval gate | done | project setting `fork_gate` (`off` default, `all`, `first-time`): matching fork runs park in `awaiting_approval` until an operator approves (`POST /runs/:id/approve`, `kern runs approve`, or the run page) or cancels; audited as `run.approve` |
 | `on: release`, `repository_dispatch`, `workflow_run` | partial | parsed and modelled; no provider events yet |
 | `on: schedule` | done | 5-field cron in UTC; the scheduler mints a run per due instant, deduped; missed windows are not caught up (same as GitHub) |
-| `on: workflow_call` / reusable workflows | partial | `jobs.<id>.uses` expands at compile: `./.github/workflows/x.yml` (local checkout or contents API at the run SHA) and `owner/repo/...@ref`. Called jobs get prefixed ids (`caller_called`); a synthetic boundary job carries the caller's `needs`/`if`/outputs so `needs.<caller>` and `needs.<caller>.outputs` resolve. Declared `on.workflow_call` inputs/outputs honoured; resolved contents are pinned on the workflow version for deterministic recompile. Not implemented (explicit diagnostics): `strategy`/`concurrency` on callers, explicit `secrets:` maps (use `inherit`); a failed called job shows the caller as `skipped`, not `failed` |
+| `on: workflow_call` / reusable workflows | partial | `jobs.<id>.uses` expands at compile: `./.github/workflows/x.yml` (local checkout or contents API at the run SHA) and `owner/repo/...@ref`. Called jobs get prefixed ids (`caller_called`); a synthetic boundary job carries the caller's `needs`/`if`/outputs so `needs.<caller>` and `needs.<caller>.outputs` resolve. Declared `on.workflow_call` inputs/outputs honoured; resolved contents are pinned on the workflow version for deterministic recompile. `secrets: inherit` honoured — called jobs run in the caller's project so the per-job secrets endpoint already delivers the inherited set; explicit `secrets:` maps stay diagnostic. Not implemented (explicit diagnostics): `strategy`/`concurrency` on callers; a failed called job shows the caller as `skipped`, not `failed` |
 | Trigger filters (`branches`, `paths`, `tags`, `types`…) | partial | parsed; unknown filters emit a warning and are ignored |
 
 ## Jobs
@@ -38,8 +38,8 @@ never silently ignored.
 | `continue-on-error` | done | conclusion vs outcome preserved; a failed continue-on-error job does not fail the run and reports `needs.<id>.result = success` |
 | `concurrency.group` | done | serialises runs per project+group |
 | `concurrency.cancel-in-progress` | done | newer queued run cancels the older in-group run |
-| `container` (job image) | partial | `image` only, string or `container.image`; other options warn and are ignored |
-| `services` | partial | two access models matching GitHub's: a service without `ports` runs on a per-job docker network where its name resolves as a DNS alias (`pg:5432`, the container-job model); a service declaring `ports` shares the job container's network namespace so `localhost:<port>` works and the name maps to `127.0.0.1` (the VM-runner model — host-side remaps like `5433:5432` cannot be expressed and warn); `image`/`env` honoured, `--health-*` `options` passed to docker with a 2-minute healthy wait; `credentials`/`volumes` and non-health options warn and are ignored; service logs are not streamed into the job |
+| `container` (job image) | partial | `image` (string or `container.image`) and `env` (merged under job env, job wins) honoured; `credentials`/`ports`/`volumes`/`options` warn and are ignored — raw docker `options:` never crosses the trust boundary |
+| `services` | partial | two access models matching GitHub's: a service without `ports` runs on a per-job docker network where its name resolves as a DNS alias (`pg:5432`, the container-job model); a service declaring `ports` shares the job container's network namespace so `localhost:<port>` works and the name maps to `127.0.0.1` (the VM-runner model — host-side remaps like `5433:5432` cannot be expressed and warn); `image`/`env` honoured, `--health-*` `options` passed to docker with a 2-minute healthy wait; `credentials` honoured via a throwaway docker login for the image pull only; `volumes` warn and are ignored (host bind mounts would expose the runner filesystem to untrusted runs); non-health options warn; service stdout/stderr stream into the active step's log under a `service:<name>` marker (lines between steps land in the next step's log) |
 | `environment` / approvals | partial | `environment: name` or `{name, url}` compiles and is created on first use. A protected environment can require N distinct approvals, a named reviewer list (empty = any org member; owners and admins bypass the list), a wait of up to 43200 minutes, and a branch policy of `all` or selected name patterns (`*` does not match `/`). The job parks in `waiting_approval` until the approvals are in and the wait has elapsed. A ref outside the pattern fails the job. No GitHub-style "protected branches only" mode, because KERN has no branch-protection source |
 | `permissions` | done | enforced as the ceiling on the per-run `GITHUB_TOKEN` (trusted-tier runs only): job-level map replaces workflow-level; the minted token is intersected with the GitHub App installation's grants and clamped downward — workflows can narrow, never widen. No `permissions:` block → installation defaults for the repo. `fork`/`pull_request` runs get no token regardless |
 
@@ -59,17 +59,17 @@ never silently ignored.
 | `shell:` | partial | `bash` honoured; `sh` honoured; bash-less images fall back to `sh` |
 | `working-directory:` | done | |
 | File commands `GITHUB_ENV`, `GITHUB_PATH`, `GITHUB_OUTPUT`, `GITHUB_STEP_SUMMARY` | done | summaries stored per step, rendered as sanitized markdown in run detail |
-| `::error::`/`::warning::`/`::notice::`/`::debug::` annotations | partial | parsed per step (props `file`/`line`/`col`/`endLine`/`endColumn`/`title`, % escapes), stored on the step, surfaced in run detail; not yet posted to GitHub check runs. `set-env`/`add-path`/`stop-commands`/`echo` remain unimplemented |
+| `::error::`/`::warning::`/`::notice::`/`::debug::` annotations | partial | parsed per step (props `file`/`line`/`col`/`endLine`/`endColumn`/`title`, % escapes), stored on the step, surfaced in run detail, and posted to the GitHub check run on completion (`error`→`failure`, batched 50/request up to 1000; `debug` and file-less annotations have no Checks API form and stay KERN-only). `set-env`/`add-path`/`stop-commands`/`echo` remain unimplemented |
 
 ## Expressions
 
 | Feature | Status | Notes |
 | --- | --- | --- |
-| Literals, `&&`, `||`, `!`, comparisons, parentheses | done | |
+| Literals (signed, `.5`, `1.`, exponent, `0x`, `0o`, `NaN`, `±Infinity`), `&&`, `||`, `!`, comparisons, parentheses | done | GitHub's `AbstractEqual` coercion ported: `'01'=='1'` is false, `'10'<'9'` is true (string-kind compare), collections compare by identity |
 | Context access `a.b`, `a['b']`, `a[0]` | done | `github`, `env`, `vars`, `matrix`, `needs`, `steps`, `job`, `runner`, `secrets` |
 | Status functions `success()`, `failure()`, `cancelled()`, `always()` | done | |
-| String/object functions (`contains`, `startsWith`, `format`, `toJSON`, `hashFiles`…) | partial | core set implemented; `hashFiles` works in step-level expressions on the runner and errors with a diagnostic at job level |
-| Arithmetic, object filters `a.*` | no | parse error at compile time |
+| String/object functions (`contains`, `startsWith`, `endsWith`, `format`, `join`, `toJSON`, `fromJSON`, `case`, `hashFiles`…) | done | `hashFiles` works in step-level expressions on the runner and errors with a diagnostic at job level; `toJSON` pretty-prints like GitHub |
+| Object filters `a.*` | done | filtered arrays skip missing keys on chained derefs and flatten one level on `a.*.*`; arithmetic stays `no` — GitHub Actions has no arithmetic operators either, so `1 + 2` errors there too |
 
 ## Provider integration (M4-lite)
 
@@ -112,6 +112,6 @@ never silently ignored.
 
 ## Not implemented (tracked)
 
-- Cache paths outside the workspace; cache size quotas; `upload-chunk-size` and other action tuning inputs
+- Cache paths outside the workspace; `upload-chunk-size` and other action tuning inputs (per-entry size cap exists: `KERN_CACHE_MAX_BYTES`, default 1 GiB, over-cap saves fail with a step diagnostic)
 - OIDC; deployment branch policy "protected branches only" (no branch-protection source)
-- Some string functions, arithmetic operators, object filters `a.*`
+- Arithmetic operators (GitHub has none — parity, not a gap); job `container:` `credentials`/`ports`/`volumes`/`options`; service `volumes`

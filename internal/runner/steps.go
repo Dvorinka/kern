@@ -27,6 +27,8 @@ import (
 // (success | failure | skipped | cancelled).
 func (e *executor) runStep(ctx context.Context, step StepSpec) (string, error) {
 	e.ann.reset()
+	e.currentStep.Store(int32(step.Number))
+	e.flushServiceLogs()
 	if ok, err := e.stepCondition(step); err != nil {
 		e.recordStep(step, "skipped", "skipped", nil)
 		e.log.Warn("step condition error", zap.Int("step", step.Number), zap.Error(err))

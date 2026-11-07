@@ -232,3 +232,26 @@ jobs:
 		t.Fatalf("boundary jobs missing: %v", jobIDsOf(res.Plan))
 	}
 }
+
+func TestReusableWorkflowSecretsInherit(t *testing.T) {
+	src := strings.Replace(callerWorkflowYAML, "    uses:", "    secrets: inherit\n    uses:", 1)
+	res := compileWith(t, src, map[string]string{
+		"./.github/worktrees/called.yml": calledWorkflowYAML,
+		"./.github/workflows/called.yml": calledWorkflowYAML,
+	})
+	if !res.Valid {
+		t.Fatalf("secrets: inherit must compile: %+v", res.Diagnostics)
+	}
+	for _, d := range res.Diagnostics {
+		if d.Code == "reusable-caller" && strings.Contains(d.Path, "secrets") {
+			t.Fatalf("inherit must not diagnose: %+v", d)
+		}
+	}
+	// Called jobs run in the caller's project, so the per-job secrets
+	// endpoint already delivers the inherited set — nothing to thread.
+	for _, j := range res.Plan.Jobs {
+		if j.JobID == "call_say" && len(j.Steps) == 0 {
+			t.Fatal("expanded job lost its steps")
+		}
+	}
+}

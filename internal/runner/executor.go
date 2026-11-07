@@ -134,6 +134,15 @@ type executor struct {
 	// portReleases frees host-port holds taken by acquireServicePorts;
 	// stopServices runs them once the service containers are gone.
 	portReleases []func()
+
+	// Service log streaming: docker logs -f per service folds into the
+	// active step's log under a service:<name> marker. currentStep is the
+	// last started step number; pending batches until a step exists.
+	svcLogMu      sync.Mutex
+	svcLogPending []byte
+	svcLogWG      sync.WaitGroup
+	svcLogCancel  context.CancelFunc
+	currentStep   atomic.Int32
 }
 
 type stepOutcome struct {

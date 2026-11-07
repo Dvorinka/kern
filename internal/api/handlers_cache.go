@@ -148,10 +148,26 @@ func (s *Server) cacheSave(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
+	max := s.Cfg.CacheMaxBytes
+	// Content-Length short-circuits obviously oversized uploads; the size
+	// check after Put covers chunked bodies that declare no length.
+	if max > 0 && c.Request.ContentLength > max {
+		fail(c, http.StatusRequestEntityTooLarge, "cache_too_large",
+			"cache archive exceeds KERN_CACHE_MAX_BYTES")
+		return
+	}
 	blobRef := "cache/" + run.ProjectID.String() + "/" + url.PathEscape(key) + ".tar.gz"
 	size, _, err := s.Blobs.Put(blobRef, io.LimitReader(c.Request.Body, 4<<30))
 	if err != nil {
 		s.internalError(c, err)
+		return
+	}
+	if max > 0 && size > max {
+		if derr := s.Blobs.Delete(blobRef); derr != nil {
+			s.Log.Error("delete oversized cache blob", zap.String("ref", blobRef), zap.Error(derr))
+		}
+		fail(c, http.StatusRequestEntityTooLarge, "cache_too_large",
+			"cache archive exceeds KERN_CACHE_MAX_BYTES")
 		return
 	}
 	_, err = s.Store.SaveCacheEntry(c.Request.Context(), run.ProjectID, key, "", cacheScope(run.TrustLevel), blobRef, size)

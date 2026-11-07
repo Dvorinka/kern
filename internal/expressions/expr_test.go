@@ -203,3 +203,163 @@ func TestHyphenatedIdentifiers(t *testing.T) {
 		t.Errorf("hyphenated step output: ok=%v err=%v", ok, err)
 	}
 }
+
+func TestNumberLiterals(t *testing.T) {
+	cases := []struct {
+		expr string
+		want any
+	}{
+		{"-9.2", -9.2},
+		{"+3", 3.0},
+		{".5", 0.5},
+		{"1.", 1.0},
+		{"-2.99e-2", -0.0299},
+		{"1e3", 1000.0},
+		{"0xff", 255.0},
+		{"-0x10", -16.0},
+		{"0o777", 511.0},
+		{"01", 1.0},
+		{"NaN == NaN", false},
+		{"Infinity > 1e10", true},
+		{"-Infinity < 0", true},
+	}
+	for _, tc := range cases {
+		got, err := Evaluate(tc.expr, ctx())
+		if err != nil {
+			t.Fatalf("%q: %v", tc.expr, err)
+		}
+		if got != tc.want {
+			t.Errorf("%q = %#v, want %#v", tc.expr, got, tc.want)
+		}
+	}
+	// Signs outside literals are still errors — GitHub has no arithmetic.
+	for _, bad := range []string{"1 + 2", "1 - 2", "2 * 3", "4 / 2"} {
+		if _, err := Evaluate(bad, ctx()); err == nil {
+			t.Errorf("%q should be a syntax error", bad)
+		}
+	}
+}
+
+func TestObjectFilters(t *testing.T) {
+	c := ctx()
+	c["needs"] = map[string]any{
+		"build": map[string]any{"result": "success"},
+		"test":  map[string]any{"result": "failure"},
+		"lint":  map[string]any{"outputs": map[string]any{"x": "1"}}, // no result key
+	}
+	c["github"] = map[string]any{
+		"event": map[string]any{
+			"issue": map[string]any{
+				"labels": []any{
+					map[string]any{"name": "bug"},
+					map[string]any{"name": "ui"},
+				},
+			},
+		},
+	}
+	cases := []struct {
+		expr string
+		want any
+	}{
+		// needs.*.result skips the lint job (missing key), keeps order.
+		{"join(needs.*.result, ',')", "success,failure"},
+		{"contains(needs.*.result, 'failure')", true},
+		{"contains(needs.*.result, 'skipped')", false},
+		// Array-of-objects filter then deref.
+		{"join(github.event.issue.labels.*.name, ',')", "bug,ui"},
+		// Chained wildcard flattens one level.
+		{"join(matrix.*.* , '-')", ""}, // matrix values are scalars → empty
+		// Object filter over a plain object yields sorted values.
+		{"join(github.event.issue.labels.*, '-')", "Object-Object"},
+	}
+	for _, tc := range cases {
+		got, err := Evaluate(tc.expr, c)
+		if err != nil {
+			t.Fatalf("%q: %v", tc.expr, err)
+		}
+		if got != tc.want {
+			t.Errorf("%q = %#v, want %#v", tc.expr, got, tc.want)
+		}
+	}
+	// needs.* itself is an array of the job objects.
+	got, err := Evaluate("needs.*", c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	arr, ok := got.([]any)
+	if !ok || len(arr) != 3 {
+		t.Fatalf("needs.* = %#v, want 3-item array", got)
+	}
+	// Flattening: a.*.* over nested arrays.
+	c["nested"] = map[string]any{"a": []any{1.0, 2.0}, "b": []any{3.0}}
+	got, err = Evaluate("join(nested.*.*, '+')", c)
+	if err != nil || got != "1+2+3" {
+		t.Fatalf("nested.*.* = %#v err=%v, want \"1+2+3\"", got, err)
+	}
+}
+
+func TestGitHubEqualitySemantics(t *testing.T) {
+	cases := []struct {
+		expr string
+		want bool
+	}{
+		{"'01' == '1'", false}, // string-kind compare, no numeric coercion
+		{"'01' == 1", true},    // string→number coercion across kinds
+		{"1 == '1.0'", true},
+		{"'true' == true", false}, // 'true' parses to NaN, true → 1
+		{"'1' == true", true},     // coerces: '1'→1, true→1
+		{"'' == false", true},     // '' → 0, false → 0
+		{"null == false", true},   // null → 0
+		{"null == 0", true},
+		{"null == null", true},
+		{"'10' < '9'", true},                              // both strings → lexicographic, NOT numeric
+		{"10 < '9'", false},                               // number vs string → numeric: 10 < 9 false
+		{"'2' > '10'", true},                              // string compare '2' > '1'
+		{"true > false", true},                            // false < true ordering
+		{"fromJSON('[1,2]') == fromJSON('[1,2]')", false}, // collections: identity
+		{"fromJSON('[1,2]') != fromJSON('[1,2]')", true},
+		{"contains(fromJSON('[1,2]'), 2)", true},
+		{"contains(fromJSON('[1,2]'), '2')", true}, // AbstractEqual coerces
+		{"contains(fromJSON('{\"a\":1}'), 'a')", false},
+	}
+	for _, tc := range cases {
+		got, err := Evaluate(tc.expr, ctx())
+		if err != nil {
+			t.Fatalf("%q: %v", tc.expr, err)
+		}
+		if got != tc.want {
+			t.Errorf("%q = %#v, want %#v", tc.expr, got, tc.want)
+		}
+	}
+}
+
+func TestFunctionSemantics(t *testing.T) {
+	cases := []struct {
+		expr string
+		want any
+	}{
+		{"join(matrix)", ""},   // object → empty string
+		{"join('abc')", "abc"}, // primitive passthrough
+		{"join(fromJSON('[1,true,null]'))", "1,true,"},
+		{"join(fromJSON('[\"a\",\"b\"]'), ' / ')", "a / b"},
+		{"case(false, 'x', true, 'y', 'd')", "y"},
+		{"case(false, 'x', false, 'y', 'd')", "d"},
+		{"case(true, 1, 2)", 1.0},
+		{"toJSON(fromJSON('{\"a\":1}'))", "{\n  \"a\": 1\n}"},
+	}
+	for _, tc := range cases {
+		got, err := Evaluate(tc.expr, ctx())
+		if err != nil {
+			t.Fatalf("%q: %v", tc.expr, err)
+		}
+		if got != tc.want {
+			t.Errorf("%q = %#v, want %#v", tc.expr, got, tc.want)
+		}
+	}
+	// case() rejects even arg counts and non-boolean predicates.
+	for _, bad := range []string{"case(true, 'x')", "case('yes', 'x', 'd')"} {
+		if _, err := Evaluate(bad, ctx()); err == nil {
+			t.Errorf("%q should error", bad)
+		}
+	}
+}
