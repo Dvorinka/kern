@@ -51,9 +51,10 @@ they bound which workflows run unmodified.
   explicit diagnostics today.
 - Service containers: `credentials`/`ports`/`volumes` warn-and-ignore; no
   service log streaming.
-- `permissions:` recorded, not enforced.
-- `::error::`/`::warning::` annotations pass through logs only — not
-  surfaced in the UI or check runs.
+- `permissions:` enforced for `GITHUB_TOKEN` scope — the per-run token is
+  minted clamped to workflow/job permissions ∩ installation grants.
+- `::error::`/`::warning::` annotations parsed, stored per step and shown in
+  run detail — not yet posted back to GitHub check runs.
 - Job `container:` options beyond `image` ignored.
 - OIDC `id-token`, expression arithmetic, object filters `a.*`, some
   string functions — diagnostics, not silence.

@@ -59,7 +59,7 @@ never silently ignored.
 | `shell:` | partial | `bash` honoured; `sh` honoured; bash-less images fall back to `sh` |
 | `working-directory:` | done | |
 | File commands `GITHUB_ENV`, `GITHUB_PATH`, `GITHUB_OUTPUT`, `GITHUB_STEP_SUMMARY` | done | summaries stored per step, rendered as sanitized markdown in run detail |
-| `::error::`/`::warning::` annotations | no | passthrough in logs only |
+| `::error::`/`::warning::`/`::notice::`/`::debug::` annotations | partial | parsed per step (props `file`/`line`/`col`/`endLine`/`endColumn`/`title`, % escapes), stored on the step, surfaced in run detail; not yet posted to GitHub check runs. `set-env`/`add-path`/`stop-commands`/`echo` remain unimplemented |
 
 ## Expressions
 

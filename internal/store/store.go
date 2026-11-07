@@ -214,6 +214,7 @@ type Step struct {
 	LogRef      string          `json:"-"`
 	LogBytes    int64           `json:"log_bytes"`
 	Diagnosis   json.RawMessage `json:"diagnosis,omitempty"`
+	Annotations json.RawMessage `json:"annotations,omitempty"`
 	SummaryRef  string          `json:"-"`
 	HasSummary  bool            `json:"has_summary"`
 }

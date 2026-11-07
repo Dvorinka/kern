@@ -5,7 +5,7 @@ import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { Download, Wrench } from "lucide-react";
 import { api } from "../lib/api";
-import type { Artifact, Deployment, Job, RunDetail, Runner, Step } from "../lib/types";
+import type { Annotation, Artifact, Deployment, Job, RunDetail, Runner, Step } from "../lib/types";
 import { Button, Spinner, cn } from "../components/ui";
 
 import { useAuth } from "../lib/auth";
@@ -287,6 +287,19 @@ function StepButton({ step, sel, onClick }: { step: Step; sel: boolean; onClick:
 				)}
 			</span>
 			<span className="min-w-0 flex-1 truncate">{step.name}</span>
+			{(() => {
+				const anns = step.annotations ?? [];
+				const bad = anns.filter((a) => a.level === "error" || a.level === "warning").length;
+				return bad > 0 ? (
+					<span
+						className="shrink-0 font-mono text-[10px]"
+						style={{ color: anns.some((a) => a.level === "error") ? "var(--err)" : "var(--warn)" }}
+						title={`${bad} annotation${bad === 1 ? "" : "s"}`}
+					>
+						{bad}
+					</span>
+				) : null;
+			})()}
 			<span className="tm">{duration(step.started_at, step.completed_at)}</span>
 		</button>
 	);
@@ -329,7 +342,41 @@ function StepLog({ job, step, live }: { job: Job; step: Step; live: boolean }) {
 				</div>
 			)}
 			{step.has_summary && <StepSummary stepId={step.id} />}
+			{step.annotations && step.annotations.length > 0 && <AnnotationList annotations={step.annotations} />}
 			<LogView stepId={step.id} active={live} header={step.name} />
+		</div>
+	);
+}
+
+// AnnotationList renders the ::error::/::warning::/::notice:: workflow
+// commands a step emitted, above its log. Color carries level only.
+function AnnotationList({ annotations }: { annotations: Annotation[] }) {
+	const color = (l: string) =>
+		l === "error" ? "var(--err)" : l === "warning" ? "var(--warn)" : "var(--faint)";
+	return (
+		<div className="max-h-48 overflow-y-auto border-b border-[var(--line)]">
+			{annotations.map((a, i) => (
+				<div key={i} className="flex items-baseline gap-2 px-3.5 py-1.5 text-[11px]">
+					<span
+						className="w-14 shrink-0 font-mono text-[10px] uppercase"
+						style={{ color: color(a.level) }}
+					>
+						{a.level}
+					</span>
+					<span className="min-w-0 flex-1 whitespace-pre-wrap">
+						{a.title && <span className="font-medium">{a.title}: </span>}
+						{a.file && (
+							<span className="font-mono text-[10px] text-[var(--faint)]">
+								{a.file}
+								{a.line ? `:${a.line}` : ""}
+								{a.col ? `:${a.col}` : ""}
+								{" — "}
+							</span>
+						)}
+						{a.message}
+					</span>
+				</div>
+			))}
 		</div>
 	);
 }

@@ -74,6 +74,7 @@ export interface Step {
 	spec?: StepSpec;
 	log_bytes: number;
 	has_summary?: boolean;
+	annotations?: Annotation[];
 	diagnosis?: {
 		kind: string;
 		summary: string;
@@ -82,6 +83,17 @@ export interface Step {
 		fixable: boolean;
 		remediation?: { fix: string[]; applied?: boolean; approved?: boolean; dismissed?: boolean; result?: string };
 	} | null;
+}
+
+export interface Annotation {
+	level: "error" | "warning" | "notice" | "debug" | string;
+	message: string;
+	title?: string;
+	file?: string;
+	line?: number;
+	col?: number;
+	end_line?: number;
+	end_col?: number;
 }
 
 export interface StepSpec {

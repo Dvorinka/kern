@@ -211,7 +211,7 @@ func (e *executor) dockerActionRun(ctx context.Context, step StepSpec, image, en
 	dargs = append(dargs, image)
 	dargs = append(dargs, args...)
 
-	pump := newLogPump(e.c, e.jobID, step.Number, e.logMask)
+	pump := newLogPump(e.c, e.jobID, step.Number, e.logMask, &e.ann)
 	defer pump.close()
 	stepCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
