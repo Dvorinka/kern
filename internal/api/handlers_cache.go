@@ -60,6 +60,9 @@ func (s *Server) cacheRestore(c *gin.Context) {
 	}
 	entry, err := s.Store.CacheLookup(c.Request.Context(), run.ProjectID, key, prefixes, cacheReadScopes(run.TrustLevel))
 	if errors.Is(err, store.ErrNotFound) {
+		if s.metrics != nil {
+			s.metrics.observeCache("miss")
+		}
 		fail(c, http.StatusNotFound, "cache_miss", "no cache entry matched")
 		return
 	}
@@ -67,14 +70,25 @@ func (s *Server) cacheRestore(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
+	result := "prefix"
+	if entry.Key == key {
+		result = "exact"
+	}
 	rc, size, err := s.Blobs.Open(entry.BlobRef)
 	if err != nil {
 		s.internalError(c, err)
 		return
 	}
 	if rc == nil {
+		// Row exists but the archive is gone — the runner sees a miss either way.
+		if s.metrics != nil {
+			s.metrics.observeCache("miss")
+		}
 		fail(c, http.StatusNotFound, "not_found", "cache content missing")
 		return
+	}
+	if s.metrics != nil {
+		s.metrics.observeCache(result)
 	}
 	defer rc.Close()
 	s.Store.TouchCache(c.Request.Context(), entry.ID)
