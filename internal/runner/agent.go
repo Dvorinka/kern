@@ -69,12 +69,12 @@ type Agent struct {
 	nextUpdate atomic.Int64
 	// retire latches once the ephemeral idle timeout fires; heartbeats carry
 	// it until the control plane confirms the row is gone. lastActivity is
-	// the unixnano of the last job completion (boot time until then) and
-	// claiming covers the claim long-poll so a runner never deregisters
-	// mid-claim.
+	// the unixnano of the last job completion (boot time until then). A
+	// parked claim long-poll counts as idle — the control plane refuses
+	// deregistration while jobs are active and the lease requeues anything
+	// claimed in the residual race.
 	retire       atomic.Bool
 	lastActivity atomic.Int64
-	claiming     atomic.Bool
 	cancel       context.CancelFunc
 }
 
@@ -277,9 +277,7 @@ func (a *Agent) workerLoop(ctx context.Context, n int) {
 			sleepCtx(ctx, 5*time.Second)
 			continue
 		}
-		a.claiming.Store(true)
 		claim, err := a.c.claim(ctx, 25)
-		a.claiming.Store(false)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -318,7 +316,7 @@ func (a *Agent) ephemeralLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 		}
-		if a.active.Load() != 0 || a.claiming.Load() || a.retire.Load() {
+		if a.active.Load() != 0 || a.retire.Load() {
 			continue
 		}
 		if time.Since(time.Unix(0, a.lastActivity.Load())) < idle {
