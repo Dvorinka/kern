@@ -63,19 +63,23 @@ type Claim struct {
 // ClaimRun carries run identity and checkout source. CloneToken is minted by
 // the control plane per claim and never persisted.
 type ClaimRun struct {
-	ID            string `json:"id"`
-	Number        int    `json:"number"`
-	Event         string `json:"event"`
-	Ref           string `json:"ref"`
-	SHA           string `json:"sha"`
-	Actor         string `json:"actor"`
-	Workflow      string `json:"workflow"`
-	Project       string `json:"project"`
-	ProjectSlug   string `json:"project_slug"`
-	TrustLevel    string `json:"trust_level"`
-	RepoURL       string `json:"repo_url"`
-	RepoFullName  string `json:"repo_full_name"`
-	CloneToken    string `json:"clone_token,omitempty"`
+	ID           string `json:"id"`
+	Number       int    `json:"number"`
+	Event        string `json:"event"`
+	Ref          string `json:"ref"`
+	SHA          string `json:"sha"`
+	Actor        string `json:"actor"`
+	Workflow     string `json:"workflow"`
+	Project      string `json:"project"`
+	ProjectSlug  string `json:"project_slug"`
+	TrustLevel   string `json:"trust_level"`
+	RepoURL      string `json:"repo_url"`
+	RepoFullName string `json:"repo_full_name"`
+	CloneToken   string `json:"clone_token,omitempty"`
+	// GitHubToken is the per-run GITHUB_TOKEN: a short-lived installation
+	// token scoped to the repo and narrowed by the workflow's permissions:
+	// ceiling. Empty for fork and pull_request trust.
+	GitHubToken   string `json:"github_token,omitempty"`
 	DefaultBranch string `json:"default_branch"`
 	LocalPath     string `json:"local_path"`
 	BundleRef     string `json:"bundle_ref"`
@@ -193,6 +197,9 @@ type heartbeatResponse struct {
 		Version string `json:"version"`
 		Image   string `json:"image"`
 	} `json:"update"`
+	// Deregistered confirms the control plane deleted this runner's row; the
+	// agent exits once it sees this.
+	Deregistered bool `json:"deregistered"`
 }
 
 func (c *client) heartbeat(ctx context.Context, m heartbeatMetrics) (heartbeatResponse, error) {

@@ -97,7 +97,7 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 		       j.image, j.matrix, j.env, j.if_condition, j.timeout_seconds, j.continue_on_error,
 		       j.fail_fast, j.priority, j.attempt, j.runner_id, j.queued_at, j.started_at, j.completed_at,
 		       j.lease_expires_at, j.error, j.outputs, j.outputs_spec, j.environment, j.environment_url,
-		       j.inputs, j.services,
+		       j.inputs, j.services, j.permissions,
 		       r.id, r.project_id, r.workflow_id, r.workflow_version_id, r.run_number, r.event,
 		       r.ref, r.sha, r.commit_message, r.actor, r.status, r.conclusion, r.trust_level,
 		       r.source, r.concurrency_group, r.started_at, r.completed_at, r.created_at,
@@ -115,7 +115,7 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 			&out.Job.FailFast, &out.Job.Priority, &out.Job.Attempt, &out.Job.RunnerID, &out.Job.QueuedAt,
 			&out.Job.StartedAt, &out.Job.CompletedAt, &out.Job.LeaseExpiresAt, &out.Job.Error,
 			&out.Job.Outputs, &out.Job.OutputsSpec, &out.Job.Environment, &out.Job.EnvironmentURL,
-			&out.Job.Inputs, &out.Job.Services,
+			&out.Job.Inputs, &out.Job.Services, &out.Job.Permissions,
 			&out.Run.ID, &out.Run.ProjectID, &runID, &versionID, &out.Run.RunNumber, &out.Run.Event,
 			&out.Run.Ref, &out.Run.SHA, &out.Run.CommitMessage, &out.Run.Actor, &out.Run.Status,
 			&out.Run.Conclusion, &out.Run.TrustLevel, &out.Run.Source, &out.Run.ConcurrencyGroup,
@@ -409,7 +409,9 @@ func (s *Store) PruneStepBlobs(ctx context.Context, olderThan time.Duration) ([]
 	return refs, nil
 }
 
-// MarkStaleRunnersOffline flips runners that missed heartbeats.
+// MarkStaleRunnersOffline flips runners that missed heartbeats. Ephemeral
+// runners that stay offline past the grace window are deleted outright —
+// their credentials are already dead and the row is only fleet clutter.
 func (s *Store) MarkStaleRunnersOffline(ctx context.Context, timeout time.Duration) (int64, error) {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE runners SET status = 'offline'
@@ -419,6 +421,10 @@ func (s *Store) MarkStaleRunnersOffline(ctx context.Context, timeout time.Durati
 	if err != nil {
 		return 0, err
 	}
+	_, _ = s.pool.Exec(ctx, `
+		DELETE FROM runners
+		WHERE ephemeral AND status = 'offline'
+		  AND (last_heartbeat_at IS NULL OR last_heartbeat_at < now() - interval '24 hours')`)
 	return tag.RowsAffected(), nil
 }
 

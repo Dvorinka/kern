@@ -30,6 +30,9 @@ type JobSeed struct {
 	Services        []ServiceSeed
 	Environment     string
 	EnvironmentURL  string
+	// Permissions is the job's GitHub Actions permissions ceiling (jsonb on
+	// the jobs row); the claim path uses it to scope GITHUB_TOKEN.
+	Permissions map[string]string
 	// SplitN and SplitAuto are consumed before insert. They are not columns.
 	SplitN    int
 	SplitAuto bool
@@ -139,6 +142,10 @@ func (s *Store) createRunOnce(ctx context.Context, p CreateRunParams, jobs []Job
 		if err != nil {
 			return Run{}, err
 		}
+		permissions, err := json.Marshal(j.Permissions)
+		if err != nil {
+			return Run{}, err
+		}
 		if j.TimeoutSeconds <= 0 {
 			j.TimeoutSeconds = 3600
 		}
@@ -147,12 +154,12 @@ func (s *Store) createRunOnce(ctx context.Context, p CreateRunParams, jobs []Job
 			INSERT INTO jobs
 				(run_id, job_key, key, name, status, needs, runs_on, image, matrix, env,
 				 if_condition, timeout_seconds, continue_on_error, fail_fast, priority, outputs_spec,
-				 environment, environment_url, inputs, services)
-			VALUES ($1, $2, $3, $4, 'waiting', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+				 environment, environment_url, inputs, services, permissions)
+			VALUES ($1, $2, $3, $4, 'waiting', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
 			RETURNING id`,
 			id, j.JobKey, j.Key, j.Name, j.Needs, j.RunsOn, j.Image, matrix, env,
 			j.IfCondition, j.TimeoutSeconds, j.ContinueOnError, j.FailFast, j.Priority, outputsSpec,
-			j.Environment, j.EnvironmentURL, inputs, services).Scan(&jobID)
+			j.Environment, j.EnvironmentURL, inputs, services, permissions).Scan(&jobID)
 		if err != nil {
 			return Run{}, fmt.Errorf("insert job %s: %w", j.Key, err)
 		}
@@ -252,7 +259,7 @@ func (s *Store) jobsForRun(ctx context.Context, runID uuid.UUID, withSteps bool)
 		SELECT id, run_id, job_key, key, name, status, conclusion, needs, runs_on, image, matrix, env,
 		       if_condition, timeout_seconds, continue_on_error, fail_fast, priority, attempt, runner_id,
 		       queued_at, started_at, completed_at, lease_expires_at, error, outputs, outputs_spec,
-		       environment, environment_url, inputs, services
+		       environment, environment_url, inputs, services, permissions
 		FROM jobs WHERE run_id = $1 ORDER BY queued_at, key`, runID)
 	if err != nil {
 		return nil, err
@@ -311,7 +318,7 @@ func scanJob(row pgx.Row) (Job, error) {
 		&j.RunsOn, &j.Image, &j.Matrix, &j.Env, &j.IfCondition, &j.TimeoutSeconds,
 		&j.ContinueOnError, &j.FailFast, &j.Priority, &j.Attempt, &j.RunnerID, &j.QueuedAt,
 		&j.StartedAt, &j.CompletedAt, &j.LeaseExpiresAt, &j.Error, &j.Outputs, &j.OutputsSpec,
-		&j.Environment, &j.EnvironmentURL, &j.Inputs, &j.Services)
+		&j.Environment, &j.EnvironmentURL, &j.Inputs, &j.Services, &j.Permissions)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Job{}, ErrNotFound
 	}
@@ -324,7 +331,7 @@ func (s *Store) Job(ctx context.Context, id uuid.UUID) (Job, error) {
 		       j.image, j.matrix, j.env, j.if_condition, j.timeout_seconds, j.continue_on_error,
 		       j.fail_fast, j.priority, j.attempt, j.runner_id, j.queued_at, j.started_at, j.completed_at,
 		       j.lease_expires_at, j.error, j.outputs, j.outputs_spec, j.environment, j.environment_url,
-		       j.inputs, j.services
+		       j.inputs, j.services, j.permissions
 		FROM jobs j WHERE j.id = $1`, id))
 	if err != nil {
 		return Job{}, err

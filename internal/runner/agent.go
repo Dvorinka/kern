@@ -43,6 +43,18 @@ type Config struct {
 	// signed runner image (KERN_RUNNER_UPDATE=1). The compose runner on the
 	// control-plane host leaves it unset; the host updater rebuilds that one.
 	SelfUpdate bool
+	// Ephemeral marks a JIT/scale-from-zero runner: after EphemeralIdle with
+	// no active jobs it asks the control plane to delete its row and exits.
+	// The runner token dies with the row, so it cannot rejoin.
+	Ephemeral     bool
+	EphemeralIdle time.Duration
+	// EgressMode controls fork-tier egress: "" or "allowlist" confines fork
+	// jobs to a per-job internal network plus a domain-allowlist proxy;
+	// "off" disables the restriction (documented operator escape hatch).
+	EgressMode string
+	// EgressAllowlist replaces the default domain allowlist when set
+	// (KERN_EGRESS_ALLOWLIST, comma-separated suffixes).
+	EgressAllowlist string
 	// Prepull lists images pulled at startup and hourly
 	// (KERN_RUNNER_PREPULL, comma-separated) so job pulls hit the local
 	// daemon instead of the registry.
@@ -64,6 +76,15 @@ type Agent struct {
 	active     atomic.Int32
 	updating   atomic.Bool
 	nextUpdate atomic.Int64
+	// retire latches once the ephemeral idle timeout fires; heartbeats carry
+	// it until the control plane confirms the row is gone. lastActivity is
+	// the unixnano of the last job completion (boot time until then). A
+	// parked claim long-poll counts as idle — the control plane refuses
+	// deregistration while jobs are active and the lease requeues anything
+	// claimed in the residual race.
+	retire       atomic.Bool
+	lastActivity atomic.Int64
+	cancel       context.CancelFunc
 }
 
 func New(cfg Config, log *zap.Logger) *Agent {
@@ -73,7 +94,9 @@ func New(cfg Config, log *zap.Logger) *Agent {
 	if cfg.Concurrency <= 0 {
 		cfg.Concurrency = 1
 	}
-	return &Agent{cfg: cfg, log: log}
+	a := &Agent{cfg: cfg, log: log}
+	a.lastActivity.Store(time.Now().UnixNano())
+	return a
 }
 
 // Register authenticates with the join token and receives a per-runner credential.
@@ -95,6 +118,7 @@ func (a *Agent) Register(ctx context.Context) error {
 		"disk_bytes":   totalDisk(a.cfg.WorkRoot),
 		"labels":       a.labels(),
 		"version":      version.Version,
+		"ephemeral":    a.cfg.Ephemeral,
 	}
 	runnerID, token, err := a.c.register(ctx, req)
 	if err != nil {
@@ -150,12 +174,20 @@ func (a *Agent) Run(ctx context.Context) error {
 			return err
 		}
 	}
+	ctx, a.cancel = context.WithCancel(ctx)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		a.heartbeatLoop(ctx)
 	}()
+	if a.cfg.Ephemeral {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			a.ephemeralLoop(ctx)
+		}()
+	}
 	if a.cfg.ImageMaxAge > 0 {
 		wg.Add(1)
 		go func() {
@@ -201,6 +233,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 			hctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			sample := a.sampler.sample(a.cfg.WorkRoot, int(a.active.Load()))
 			sample.SelfUpdate = a.cfg.SelfUpdate
+			sample.Deregister = a.retire.Load()
 			resp, err := a.c.heartbeat(hctx, sample)
 			cancel()
 			if err != nil {
@@ -211,6 +244,13 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 				continue
 			}
 			failures = 0
+			if resp.Deregistered {
+				a.log.Info("runner deregistered; exiting")
+				if a.cancel != nil {
+					a.cancel()
+				}
+				return
+			}
 			if resp.Update != nil && a.cfg.SelfUpdate && !a.updating.Load() {
 				go a.maybeSelfUpdate(ctx, resp.Update.Image, resp.Update.Version)
 			}
@@ -252,6 +292,12 @@ func (a *Agent) workerLoop(ctx context.Context, n int) {
 			sleepCtx(ctx, 5*time.Second)
 			continue
 		}
+		if a.retire.Load() {
+			// Ephemeral runner is draining: stop claiming so the
+			// deregistration heartbeat is not racing fresh leases.
+			sleepCtx(ctx, 5*time.Second)
+			continue
+		}
 		claim, err := a.c.claim(ctx, 25)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -271,6 +317,34 @@ func (a *Agent) workerLoop(ctx context.Context, n int) {
 		a.active.Add(1)
 		a.executeJob(ctx, claim)
 		a.active.Add(-1)
+		a.lastActivity.Store(time.Now().UnixNano())
+	}
+}
+
+// ephemeralLoop latches the retire flag once the runner has been continuously
+// idle (no active jobs, no claim in flight) for EphemeralIdle. Heartbeats then
+// carry the deregister request until the control plane confirms deletion.
+func (a *Agent) ephemeralLoop(ctx context.Context) {
+	idle := a.cfg.EphemeralIdle
+	if idle <= 0 {
+		idle = 2 * time.Minute
+	}
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		if a.active.Load() != 0 || a.retire.Load() {
+			continue
+		}
+		if time.Since(time.Unix(0, a.lastActivity.Load())) < idle {
+			continue
+		}
+		a.retire.Store(true)
+		a.log.Info("ephemeral idle timeout; requesting deregistration", zap.Duration("idle", idle))
 	}
 }
 

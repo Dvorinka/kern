@@ -30,22 +30,37 @@ type RegisterRunnerParams struct {
 	Labels      []string
 	Version     string
 	TokenHash   string
+	Ephemeral   bool
 }
 
 func (s *Store) RegisterRunner(ctx context.Context, p RegisterRunnerParams) (Runner, error) {
 	return scanRunner(s.pool.QueryRow(ctx, `
 		INSERT INTO runners (org_id, name, hostname, os, arch, cpus, memory_bytes, disk_bytes,
-		                     labels, version, status, token_hash, last_heartbeat_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'online', $11, now())
+		                     labels, version, status, ephemeral, token_hash, last_heartbeat_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'online', $11, $12, now())
 		ON CONFLICT (org_id, name) DO UPDATE SET
 			hostname = EXCLUDED.hostname, os = EXCLUDED.os, arch = EXCLUDED.arch,
 			cpus = EXCLUDED.cpus, memory_bytes = EXCLUDED.memory_bytes,
 			disk_bytes = EXCLUDED.disk_bytes, labels = EXCLUDED.labels,
 			version = EXCLUDED.version, status = 'online',
+			ephemeral = EXCLUDED.ephemeral,
 			token_hash = EXCLUDED.token_hash, last_heartbeat_at = now()
 		RETURNING `+runnerCols,
 		p.OrgID, p.Name, p.Hostname, p.OS, p.Arch, p.CPUs, p.MemoryBytes, p.DiskBytes,
-		p.Labels, p.Version, p.TokenHash))
+		p.Labels, p.Version, p.Ephemeral, p.TokenHash))
+}
+
+// InsertRunner creates a runner row without the (org, name) upsert used by
+// registration. The JIT endpoint uses it so a name collision fails instead of
+// silently rotating an existing runner's credential.
+func (s *Store) InsertRunner(ctx context.Context, p RegisterRunnerParams) (Runner, error) {
+	return scanRunner(s.pool.QueryRow(ctx, `
+		INSERT INTO runners (org_id, name, hostname, os, arch, cpus, memory_bytes, disk_bytes,
+		                     labels, version, status, ephemeral, token_hash, last_heartbeat_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'online', $11, $12, now())
+		RETURNING `+runnerCols,
+		p.OrgID, p.Name, p.Hostname, p.OS, p.Arch, p.CPUs, p.MemoryBytes, p.DiskBytes,
+		p.Labels, p.Version, p.Ephemeral, p.TokenHash))
 }
 
 // runnerCols is the full runners column list; keep scan order in lockstep.
@@ -210,7 +225,7 @@ func (s *Store) RunnerActiveJobs(ctx context.Context, runnerID uuid.UUID) ([]Job
 		       j.image, j.matrix, j.env, j.if_condition, j.timeout_seconds, j.continue_on_error,
 		       j.fail_fast, j.priority, j.attempt, j.runner_id, j.queued_at, j.started_at, j.completed_at,
 		       j.lease_expires_at, j.error, j.outputs, j.outputs_spec, j.environment, j.environment_url,
-		       j.inputs, j.services
+		       j.inputs, j.services, j.permissions
 		FROM jobs j WHERE j.runner_id = $1 AND j.status = 'in_progress'`, runnerID)
 	if err != nil {
 		return nil, err

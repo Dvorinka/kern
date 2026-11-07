@@ -169,9 +169,12 @@ type Job struct {
 	OutputsSpec     json.RawMessage `json:"outputs_spec"`
 	Inputs          json.RawMessage `json:"inputs"`
 	Services        json.RawMessage `json:"services"`
-	Environment     string          `json:"environment"`
-	EnvironmentURL  string          `json:"environment_url"`
-	Steps           []Step          `json:"steps,omitempty"`
+	// Permissions is the job's GitHub Actions permissions ceiling, used to
+	// scope the per-run GITHUB_TOKEN at claim time.
+	Permissions    json.RawMessage `json:"permissions"`
+	Environment    string          `json:"environment"`
+	EnvironmentURL string          `json:"environment_url"`
+	Steps          []Step          `json:"steps,omitempty"`
 }
 
 // InputsMap decodes the job's workflow_call inputs.

@@ -230,7 +230,7 @@ func compile(content string, c Compiler, depth int, calls *int, deps map[string]
 		d.errorf("cycle", "jobs.needs", "dependency cycle detected: "+strings.Join(cyc, " -> "))
 	}
 	if len(wf.Permissions) > 0 || hasJobPermissions(wf) {
-		d.info("permissions", "permissions", "permissions are recorded but not enforced by KERN; GitHub App scoping still applies")
+		d.info("permissions", "permissions", "permissions scope the per-run GITHUB_TOKEN on trusted runs; fork and pull_request runs receive no token")
 	}
 	if wf.Concurrency.Group == "" && wf.Concurrency.CancelInProgress {
 		d.warnf("concurrency", "concurrency.cancel-in-progress", "cancel-in-progress without a group has no effect")
@@ -428,7 +428,21 @@ func compileJob(wf Workflow, id string, job *Job, matrix map[string]any, c Compi
 		SplitN:          splitN,
 		SplitAuto:       splitAuto,
 		Steps:           steps,
+		Permissions:     effectivePermissions(wf, job),
 	}, nil
+}
+
+// effectivePermissions resolves the job's `permissions:` ceiling: a
+// job-level map wins outright (GitHub semantics — it may only narrow),
+// otherwise the workflow-level map applies.
+func effectivePermissions(wf Workflow, job *Job) map[string]string {
+	if len(job.Permissions) > 0 {
+		return job.Permissions
+	}
+	if len(wf.Permissions) > 0 {
+		return wf.Permissions
+	}
+	return nil
 }
 
 // jobEnvironment resolves jobs.<id>.environment into a name and optional URL.

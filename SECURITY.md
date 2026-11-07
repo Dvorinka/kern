@@ -16,3 +16,9 @@ artifact/blob path traversal.
 
 By design (not bugs): jobs run untrusted code in containers — that is the
 product; a compromised job container is expected, a compromised host is not.
+
+The authoritative isolation model — trust tiers, executor controls, egress
+policy, credential issuance and the secret-masking audit — lives in
+`docs/security-isolation.md`. Claims there are verified against code; if
+you find a gap between that document and reality, that is a reportable
+bug.

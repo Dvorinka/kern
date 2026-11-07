@@ -61,6 +61,14 @@ func (e *executor) resolveDockerImage(ctx context.Context, step StepSpec, meta *
 	case image == "":
 		return "", fmt.Errorf("%s declares runs.using: docker without runs.image", step.Uses)
 	case strings.EqualFold(image, "Dockerfile"):
+		// `docker build` runs the Dockerfile's RUN steps through the host
+		// daemon — attacker-controlled build graphs are a host-root surface
+		// (buildkit escape history, privileged build containers, unlimited
+		// egress). Sandboxed tiers cannot use it; named images and docker://
+		// refs still run as hardened sibling containers.
+		if !e.privileged() {
+			return "", fmt.Errorf("runs.image: Dockerfile builds require trusted or protected trust; %s runs cannot build images on the host daemon", e.claim.Run.TrustLevel)
+		}
 		tag := fmt.Sprintf("kern-action-%s-%d", sanitizeID(e.claim.Job.ID), step.Number)
 		if err := e.docker(ctx, "build", "-q", "-t", tag, hostDir); err != nil {
 			return "", fmt.Errorf("docker build %s: %s", hostDir, err)
@@ -185,7 +193,16 @@ func (e *executor) dockerActionRun(ctx context.Context, step StepSpec, image, en
 		"-e", "GIT_CONFIG_KEY_0=safe.directory",
 		"-e", "GIT_CONFIG_VALUE_0=*",
 	}
+	// Fork-trust jobs confine sibling action containers to the job's
+	// internal network and force the proxy env — otherwise they would sit
+	// on the default bridge with unrestricted egress.
+	dargs = append(dargs, e.egressNetArgs()...)
+	applyEgress := map[string]string{}
 	for k, v := range env {
+		applyEgress[k] = v
+	}
+	e.applyEgressEnv(applyEgress)
+	for k, v := range applyEgress {
 		dargs = append(dargs, "-e", k+"="+v)
 	}
 	if entrypoint != "" {
@@ -194,7 +211,7 @@ func (e *executor) dockerActionRun(ctx context.Context, step StepSpec, image, en
 	dargs = append(dargs, image)
 	dargs = append(dargs, args...)
 
-	pump := newLogPump(e.c, e.jobID, step.Number)
+	pump := newLogPump(e.c, e.jobID, step.Number, e.logMask)
 	defer pump.close()
 	stepCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
