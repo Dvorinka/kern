@@ -63,7 +63,13 @@ while true; do
 		sleep 30
 		continue
 	fi
-	if [ "$(git -C "$SRC" rev-parse HEAD)" = "$sha" ]; then
+	# HEAD matching the manifest sha is not proof the running binary is at
+	# that sha — a manual `git pull` or an interrupted deploy leaves the
+	# checkout ahead of the image. Compare the API's own version report
+	# before idling, or the host stays stale forever.
+	running=$(printf '%s' "$(jq -r '.current // empty' /tmp/kern-plan.json)" | sed 's/^v//')
+	target=$(printf '%s' "$ver" | sed 's/^v//')
+	if [ "$(git -C "$SRC" rev-parse HEAD)" = "$sha" ] && [ "$running" = "$target" ]; then
 		post idle "" "$ver"
 		sleep 30
 		continue
