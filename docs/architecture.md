@@ -8,7 +8,7 @@ specification see `project.md`; for milestone status see `plan.md`.
 | Process | Binary | Role |
 | --- | --- | --- |
 | Control plane | `cmd/api` | HTTP API, auth, workflow compile, scheduler loop, orchestrator, log ingestion |
-| Runner agent | `cmd/runner` | Registers, long-polls for jobs, executes them in ephemeral containers |
+| Runner agent | `cmd/runner` | Registers, long-polls for jobs, executes them in ephemeral containers (`KERN_RUNNER_EXECUTOR=host` runs them as local processes instead — trusted tiers only) |
 | CLI | `cmd/kern` | Operator client (`kern`): auth, projects, runs, runners, artifacts, cache, `exec`, `split` |
 | Migrator | `cmd/migrate` | Applies goose migrations and exits (also runs inside `cmd/api` at boot) |
 | Updater | `deployments/kern-updater.sh` | Compose-profile sidecar that polls `GET /update/plan` and applies signed releases (git fast-forward + rebuild). External runners self-update via `KERN_RUNNER_UPDATE=1` |
@@ -57,6 +57,15 @@ Steps run via `docker exec` so each step reports its own exit code. File
 commands (`GITHUB_ENV`, `GITHUB_PATH`, `GITHUB_OUTPUT`, `GITHUB_STEP_SUMMARY`)
 are files under `/github/cmd`; the runner merges them into the env builder
 between steps, matching GitHub's toolkit semantics.
+
+Host executor (`executor.host`): the same step pipeline runs the rendered
+wrapper as a local process with `cmd.Dir` = the job workspace. `jobEnv()`
+supplies the `GITHUB_*`/`RUNNER_*` contract mode-aware (container paths vs
+host paths); the env file, file commands, log pump, masking and lifecycle
+hooks are shared unchanged. Docker-only surfaces — image pull, services,
+container/job-network wiring, docker actions, orphan reaping — are skipped
+or diagnosed. The claim query refuses `fork`/`pull_request` runs for host
+runners, so host execution only ever sees trusted work.
 
 Sibling containers share the job boundary but not its privileges:
 

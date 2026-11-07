@@ -58,6 +58,26 @@ That is root-equivalent on the runner host — it is the documented price of
 `docker`/`compose` step parity and is why `fork`/`pull_request`/`deployment`
 can never reach it. Do not add trust tiers casually.
 
+## Host executor (bare metal / macOS)
+
+Runners carry an `executor` column (`docker` default, `host` opt-in via
+`KERN_RUNNER_EXECUTOR`; darwin defaults to `host`). Host mode runs steps as
+local processes in `<work-root>/<job>` — no container, no namespaces, no
+seccomp. It exists for platforms where containers are not the substrate
+(macOS runners for Xcode/iOS work).
+
+The trust boundary is enforced at **claim time**, not at execution time:
+`ClaimJob` excludes `fork` and `pull_request` trust tiers for
+`executor = 'host'` runners (`internal/store/jobs.go`), the same boundary
+that gates secrets eligibility. A host runner therefore only ever sees
+`trusted`/`protected`/`deployment` work — code the org already controls.
+
+Unsupported substrate features fail loudly, never silently: `container:`,
+`services:`, `runs.image:` Docker actions and `uses: docker://` emit KERN
+diagnostics (job image/services are warned as ignored at prepare; docker
+actions fail the step). Composite and JavaScript actions work — Node is
+provisioned per-platform (`linux`/`darwin` tarballs).
+
 ## Network egress policy
 
 Default (non-privileged, non-fork): the job container sits on the default

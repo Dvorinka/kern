@@ -41,6 +41,17 @@ and (a) is unavailable (bare-metal Proxmox shop, no Kubernetes).
   without fleet changes; least-loaded placement spreads work automatically.
 - Scale-up stays a human or script decision; scale-down is `drain` + stop.
 
+## macOS VM on-demand power
+
+The macOS runner (VM 904 on the Proxmox host) is powered by a host-side
+scaler, `deployments/macos-vm-scaler.sh`, installed as a systemd timer on
+the Proxmox host. It starts the VM when queued jobs need the `macos` label
+(`KERN_MAC_TRIGGER_LABEL`, default `macos`) and shuts it down after the
+runner is offline/idle past `KERN_MAC_IDLE_MINUTES` (default 15). Boot
+latency is roughly two minutes — queue wait on a cold VM is expected.
+`KERN_MAC_WARM_CRON` can pre-warm the VM on a schedule. See
+`docs/production.md` for the launchd runner layout on the guest.
+
 ## Decision
 
 (c) — status quo plus the enroll-token runbook — for now. Rationale: the
