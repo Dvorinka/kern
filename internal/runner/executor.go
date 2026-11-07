@@ -112,6 +112,7 @@ type executor struct {
 	stopped  sync.WaitGroup
 	killFn   context.CancelFunc // kills the docker exec of the step in flight
 	lastTail string             // log tail of the most recent step, for diagnosis
+	ann      annotationSink     // ::error::/::warning:: commands seen by the step's log pumps
 
 	scriptSeq         int               // unique script filenames across composite sub-steps
 	sumBuf            bytes.Buffer      // composite sub-step summaries, folded into the parent step

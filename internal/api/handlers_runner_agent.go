@@ -402,9 +402,10 @@ func (s *Server) maskerForJob(c *gin.Context, job store.Job) *secrets.Masker {
 }
 
 type finishStepRequest struct {
-	Conclusion string          `json:"conclusion"`
-	ExitCode   *int            `json:"exit_code"`
-	Diagnosis  json.RawMessage `json:"diagnosis"`
+	Conclusion  string          `json:"conclusion"`
+	ExitCode    *int            `json:"exit_code"`
+	Diagnosis   json.RawMessage `json:"diagnosis"`
+	Annotations json.RawMessage `json:"annotations"`
 }
 
 func (s *Server) finishStep(c *gin.Context) {
@@ -427,7 +428,18 @@ func (s *Server) finishStep(c *gin.Context) {
 	// The diagnosis carries raw log tails (detail, agent_prompt) that bypass
 	// the ingest-time masker — mask every string before it is persisted.
 	diag := maskDiagnosis(req.Diagnosis, s.maskerForJob(c, job))
-	if err := s.Store.FinishStep(c.Request.Context(), job.ID, n, req.Conclusion, req.ExitCode, diag); err != nil {
+	// Annotations are job-authored text too — same masking pass as diagnosis.
+	// Anything that is not a JSON array is dropped rather than poisoning the
+	// jsonb column.
+	anns := maskDiagnosis(req.Annotations, s.maskerForJob(c, job))
+	var annList []any
+	if json.Unmarshal(anns, &annList) != nil {
+		annList = nil
+	}
+	if annList == nil {
+		anns = json.RawMessage("[]")
+	}
+	if err := s.Store.FinishStep(c.Request.Context(), job.ID, n, req.Conclusion, req.ExitCode, diag, anns); err != nil {
 		s.internalError(c, err)
 		return
 	}

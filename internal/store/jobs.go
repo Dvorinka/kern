@@ -195,11 +195,11 @@ func (s *Store) StartStep(ctx context.Context, jobID uuid.UUID, number int) (Ste
 	return st, err
 }
 
-func (s *Store) FinishStep(ctx context.Context, jobID uuid.UUID, number int, conclusion string, exitCode *int, diagnosis json.RawMessage) error {
+func (s *Store) FinishStep(ctx context.Context, jobID uuid.UUID, number int, conclusion string, exitCode *int, diagnosis, annotations json.RawMessage) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE steps SET status = CASE WHEN $3 = 'skipped' THEN 'skipped' ELSE 'completed' END,
-			conclusion = $3, exit_code = $4, completed_at = now(), diagnosis = $5
-		WHERE job_id = $1 AND number = $2`, jobID, number, conclusion, exitCode, diagnosis)
+			conclusion = $3, exit_code = $4, completed_at = now(), diagnosis = $5, annotations = $6
+		WHERE job_id = $1 AND number = $2`, jobID, number, conclusion, exitCode, diagnosis, annotations)
 	return err
 }
 

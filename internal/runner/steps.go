@@ -26,16 +26,17 @@ import (
 // runStep executes one step and returns its conclusion
 // (success | failure | skipped | cancelled).
 func (e *executor) runStep(ctx context.Context, step StepSpec) (string, error) {
+	e.ann.reset()
 	if ok, err := e.stepCondition(step); err != nil {
 		e.recordStep(step, "skipped", "skipped", nil)
 		e.log.Warn("step condition error", zap.Int("step", step.Number), zap.Error(err))
 		e.logStep(step, "KERN: step skipped — if: "+step.If+" — "+err.Error())
-		_ = e.c.finishStep(context.Background(), e.jobID, step.Number, "skipped", 0, nil)
+		_ = e.c.finishStep(context.Background(), e.jobID, step.Number, "skipped", 0, nil, nil)
 		return "skipped", nil
 	} else if !ok {
 		e.recordStep(step, "skipped", "skipped", nil)
 		e.logStep(step, "KERN: step skipped — if: "+step.If+" evaluated to false")
-		_ = e.c.finishStep(context.Background(), e.jobID, step.Number, "skipped", 0, nil)
+		_ = e.c.finishStep(context.Background(), e.jobID, step.Number, "skipped", 0, nil, nil)
 		return "skipped", nil
 	}
 
@@ -44,7 +45,7 @@ func (e *executor) runStep(ctx context.Context, step StepSpec) (string, error) {
 		// step fails without running main, like a failed GitHub prepare.
 		e.logStep(step, "KERN: "+msg)
 		e.recordStep(step, "failure", "failure", nil)
-		_ = e.c.finishStep(context.Background(), e.jobID, step.Number, "failure", 1, nil)
+		_ = e.c.finishStep(context.Background(), e.jobID, step.Number, "failure", 1, nil, nil)
 		return "failure", nil
 	}
 
@@ -102,7 +103,7 @@ func (e *executor) runStep(ctx context.Context, step StepSpec) (string, error) {
 		}
 	}
 	e.recordStep(step, conclusion, outcome, outputs)
-	_ = e.c.finishStep(context.Background(), e.jobID, step.Number, conclusion, code, diag)
+	_ = e.c.finishStep(context.Background(), e.jobID, step.Number, conclusion, code, diag, e.ann.list())
 	return conclusion, nil
 }
 
@@ -184,7 +185,7 @@ func (e *executor) runStepBody(ctx context.Context, step StepSpec) (string, int,
 		return "failure", 1, fmt.Errorf("write step env file")
 	}
 
-	pump := newLogPump(e.c, e.jobID, step.Number, e.logMask)
+	pump := newLogPump(e.c, e.jobID, step.Number, e.logMask, &e.ann)
 	defer pump.close()
 	if hdr := runStepHeader(step); hdr != "" {
 		pump.write([]byte(hdr))
@@ -511,6 +512,9 @@ type logPump struct {
 	// mask covers credentials the server-side masker cannot know (the
 	// per-run clone and GITHUB_TOKENs). Nil means passthrough.
 	mask *secrets.Masker
+	// anns collects ::error::/::warning:: workflow commands seen on this
+	// step's streams; nil disables parsing.
+	anns *annotationSink
 
 	mu     sync.Mutex
 	buf    []byte
@@ -524,8 +528,8 @@ const (
 	logFlushInterval = time.Second
 )
 
-func newLogPump(c *client, jobID string, step int, mask *secrets.Masker) *logPump {
-	p := &logPump{c: c, jobID: jobID, step: step, mask: mask, stop: make(chan struct{})}
+func newLogPump(c *client, jobID string, step int, mask *secrets.Masker, anns *annotationSink) *logPump {
+	p := &logPump{c: c, jobID: jobID, step: step, mask: mask, anns: anns, stop: make(chan struct{})}
 	p.closed.Add(1)
 	go func() {
 		defer p.closed.Done()
@@ -548,6 +552,11 @@ func newLogPump(c *client, jobID string, step int, mask *secrets.Masker) *logPum
 func (p *logPump) write(line []byte) {
 	if p.mask != nil {
 		line = p.mask.MaskBytes(line)
+	}
+	if p.anns != nil {
+		if a := parseAnnotation(line); a != nil {
+			p.anns.add(*a)
+		}
 	}
 	p.mu.Lock()
 	p.buf = append(p.buf, line...)

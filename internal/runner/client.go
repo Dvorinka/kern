@@ -255,10 +255,13 @@ func (c *client) appendLog(ctx context.Context, jobID string, n int, data []byte
 	return c.do(ctx, http.MethodPost, path, data, nil)
 }
 
-func (c *client) finishStep(ctx context.Context, jobID string, n int, conclusion string, exitCode int, d *diagnosis) error {
+func (c *client) finishStep(ctx context.Context, jobID string, n int, conclusion string, exitCode int, d *diagnosis, anns []annotation) error {
 	body := map[string]any{"conclusion": conclusion, "exit_code": exitCode}
 	if d != nil {
 		body["diagnosis"] = d
+	}
+	if len(anns) > 0 {
+		body["annotations"] = anns
 	}
 	path := fmt.Sprintf("/api/v1/runners/jobs/%s/steps/%d/finish", url.PathEscape(jobID), n)
 	return c.do(ctx, http.MethodPost, path, body, nil)

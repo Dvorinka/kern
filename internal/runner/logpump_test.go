@@ -34,7 +34,7 @@ func TestLogPumpBatches(t *testing.T) {
 	defer srv.Close()
 
 	c := newClient(srv.URL, "")
-	p := newLogPump(c, "job-1", 1, nil)
+	p := newLogPump(c, "job-1", 1, nil, nil)
 
 	p.write([]byte("line one\n"))
 	p.write([]byte("line two\n"))
@@ -66,7 +66,7 @@ func TestLogPumpSizeFlush(t *testing.T) {
 	defer srv.Close()
 
 	c := newClient(srv.URL, "")
-	p := newLogPump(c, "job-1", 1, nil)
+	p := newLogPump(c, "job-1", 1, nil, nil)
 	defer p.close()
 
 	big := make([]byte, logFlushBytes+1)

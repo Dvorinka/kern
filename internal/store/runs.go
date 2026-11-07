@@ -292,7 +292,7 @@ func (s *Store) jobsForRun(ctx context.Context, runID uuid.UUID, withSteps bool)
 func (s *Store) StepsForJob(ctx context.Context, jobID uuid.UUID) ([]Step, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, job_id, number, key, name, status, conclusion, exit_code, started_at,
-		       completed_at, spec, log_ref, log_bytes, diagnosis, summary_ref
+		       completed_at, spec, log_ref, log_bytes, diagnosis, annotations, summary_ref
 		FROM steps WHERE job_id = $1 ORDER BY number`, jobID)
 	if err != nil {
 		return nil, err
@@ -303,7 +303,7 @@ func (s *Store) StepsForJob(ctx context.Context, jobID uuid.UUID) ([]Step, error
 		var st Step
 		if err := rows.Scan(&st.ID, &st.JobID, &st.Number, &st.Key, &st.Name, &st.Status,
 			&st.Conclusion, &st.ExitCode, &st.StartedAt, &st.CompletedAt, &st.Spec, &st.LogRef,
-			&st.LogBytes, &st.Diagnosis, &st.SummaryRef); err != nil {
+			&st.LogBytes, &st.Diagnosis, &st.Annotations, &st.SummaryRef); err != nil {
 			return nil, err
 		}
 		st.HasSummary = st.SummaryRef != ""
