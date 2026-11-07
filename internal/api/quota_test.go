@@ -46,10 +46,10 @@ func lockTestDB(t *testing.T, ctx context.Context, dsn string) {
 	})
 }
 
-// TestArtifactQuotaEnforced exercises the upload-path quota check against a
-// real database: over-quota rejects with a message, under-quota passes, and
-// clearing the setting disables enforcement.
-func TestArtifactQuotaEnforced(t *testing.T) {
+// TestArtifactQuotaBytes exercises the settings→bytes resolution the upload
+// path feeds into CreateArtifactIfQuota: MB setting converts, absent/zero
+// disables, and a cleared setting returns unlimited.
+func TestArtifactQuotaBytes(t *testing.T) {
 	dsn := os.Getenv("KERN_TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("KERN_TEST_DATABASE_URL not set")
@@ -92,27 +92,24 @@ func TestArtifactQuotaEnforced(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if err := st.PutProjectSetting(ctx, p.ID, "artifact_quota_mb", "1"); err != nil {
-		t.Fatalf("setting: %v", err)
-	}
 
 	s := &Server{Store: st}
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest("POST", "/", nil)
 
-	// 2 MiB upload against a 1 MiB cap must reject.
-	if msg := s.checkArtifactQuota(c, run.ID, "big", 2<<20); msg == "" {
-		t.Fatal("expected quota rejection for 2MiB upload under 1MiB cap")
+	if got := s.artifactQuotaBytes(c, run.ID); got != 0 {
+		t.Fatalf("unset quota should be unlimited, got %d", got)
 	}
-	// 512 KiB fits.
-	if msg := s.checkArtifactQuota(c, run.ID, "small", 512<<10); msg != "" {
-		t.Fatalf("unexpected rejection: %s", msg)
+	if err := st.PutProjectSetting(ctx, p.ID, "artifact_quota_mb", "2"); err != nil {
+		t.Fatalf("setting: %v", err)
 	}
-	// Clearing the quota disables enforcement.
-	if err := st.PutProjectSetting(ctx, p.ID, "artifact_quota_mb", "0"); err != nil {
-		t.Fatalf("clear setting: %v", err)
+	if got := s.artifactQuotaBytes(c, run.ID); got != 2<<20 {
+		t.Fatalf("2MiB setting should yield %d, got %d", int64(2<<20), got)
 	}
-	if msg := s.checkArtifactQuota(c, run.ID, "big", 2<<20); msg != "" {
-		t.Fatalf("quota still enforced after clear: %s", msg)
+	if err := st.PutProjectSetting(ctx, p.ID, "artifact_quota_mb", "bogus"); err != nil {
+		t.Fatalf("bogus setting: %v", err)
+	}
+	if got := s.artifactQuotaBytes(c, run.ID); got != 0 {
+		t.Fatalf("unparseable quota should be unlimited, got %d", got)
 	}
 }

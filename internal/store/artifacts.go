@@ -38,6 +38,54 @@ func (s *Store) CreateArtifact(ctx context.Context, runID, jobID uuid.UUID, name
 	return a, err
 }
 
+// CreateArtifactIfQuota inserts an artifact only when the project's live
+// artifact bytes stay within quotaBytes (<= 0 = unlimited), replacing any
+// same-name artifact's bytes in the total. The project row is locked FOR
+// UPDATE for the transaction so concurrent uploads serialize: a second
+// uploader blocks until the first commits, then reads totals that already
+// include it — closing the check-then-insert race a plain read could not.
+func (s *Store) CreateArtifactIfQuota(ctx context.Context, runID, jobID uuid.UUID, name, blobRef string, size int64, sha256 string, quotaBytes int64) (Artifact, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Artifact{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var projectID uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT project_id FROM workflow_runs WHERE id = $1`, runID).Scan(&projectID); err != nil {
+		return Artifact{}, err
+	}
+	if _, err := tx.Exec(ctx, `SELECT id FROM projects WHERE id = $1 FOR UPDATE`, projectID); err != nil {
+		return Artifact{}, err
+	}
+	var prev int64
+	_ = tx.QueryRow(ctx, `SELECT size_bytes FROM artifacts WHERE run_id = $1 AND name = $2`, runID, name).Scan(&prev)
+	var total int64
+	if err := tx.QueryRow(ctx, `
+		SELECT coalesce(sum(a.size_bytes), 0)
+		FROM artifacts a JOIN workflow_runs r ON r.id = a.run_id
+		WHERE r.project_id = $1`, projectID).Scan(&total); err != nil {
+		return Artifact{}, err
+	}
+	if quotaBytes > 0 && total-prev+size > quotaBytes {
+		return Artifact{}, ErrArtifactQuota
+	}
+	var a Artifact
+	err = tx.QueryRow(ctx, `
+		INSERT INTO artifacts (run_id, job_id, name, blob_ref, size_bytes, sha256, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, now() + interval '90 days')
+		ON CONFLICT (run_id, name) DO UPDATE SET
+			job_id = EXCLUDED.job_id, blob_ref = EXCLUDED.blob_ref,
+			size_bytes = EXCLUDED.size_bytes, sha256 = EXCLUDED.sha256
+		RETURNING id, run_id, job_id, name, size_bytes, sha256, blob_ref, created_at, expires_at`,
+		runID, jobID, name, blobRef, size, sha256).
+		Scan(&a.ID, &a.RunID, &a.JobID, &a.Name, &a.SizeBytes, &a.SHA256, &a.BlobRef, &a.CreatedAt, &a.ExpiresAt)
+	if err != nil {
+		return Artifact{}, err
+	}
+	return a, tx.Commit(ctx)
+}
+
 func (s *Store) ArtifactByName(ctx context.Context, runID uuid.UUID, name string) (Artifact, error) {
 	var a Artifact
 	err := s.pool.QueryRow(ctx, `
