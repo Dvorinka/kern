@@ -204,9 +204,9 @@ func (s *Server) getOrgSettings(c *gin.Context) {
 }
 
 type settingsRequest struct {
-	SelfHeal string `json:"self_heal"`
-	ForkGate string `json:"fork_gate"`
-	PrTrust  string `json:"pr_trust"`
+	SelfHeal string  `json:"self_heal"`
+	ForkGate string  `json:"fork_gate"`
+	PrTrust  string  `json:"pr_trust"`
 	IconPath *string `json:"icon_path"`
 }
 
