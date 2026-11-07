@@ -1,12 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useMemo, useState, type ReactNode } from "react";
 import { api } from "../lib/api";
 import type { OverviewResponse, Run, Runner } from "../lib/types";
 import { PageHeader, Spinner, cn } from "../components/ui";
 import { StatusSq } from "../components/status";
 import { Fingerprint, useRunDetails } from "../components/fingerprint";
-import { bytes, duration, relTime, refName, shortSha } from "../lib/format";
+import { bytes, duration, projectColor, refName, relTime, shortSha } from "../lib/format";
 
 type Tab = "" | "running" | "failed" | "cancelled";
 
@@ -26,8 +26,11 @@ const TABS: { key: Tab; label: string; match: (r: Run) => boolean }[] = [
 ];
 
 export function RunsPage() {
+	const nav = useNavigate();
 	const [params, setParams] = useSearchParams();
 	const tab = (params.get("tab") ?? "") as Tab;
+	const project = params.get("project") ?? "";
+	const day = params.get("day") ?? "";
 	const [branch, setBranch] = useState("");
 	const [older, setOlder] = useState(0);
 	const { data, isLoading } = useQuery({
@@ -48,9 +51,22 @@ export function RunsPage() {
 
 	const runs = useMemo(() => data?.runs ?? [], [data]);
 	const branches = useMemo(() => [...new Set(runs.map((r) => refName(r.ref)))].sort(), [runs]);
+	const projects = useMemo(
+		() => [...new Set(runs.map((r) => r.project_slug))].sort(),
+		[runs],
+	);
 	const counts = useMemo(() => TABS.map((t) => runs.filter(t.match).length), [runs]);
 	const match = TABS.find((t) => t.key === tab)?.match ?? TABS[0]!.match;
-	const visible = runs.filter((r) => match(r) && (!branch || refName(r.ref) === branch));
+	const dayStart = day ? new Date(day).getTime() : null;
+	const dayEnd = dayStart != null ? dayStart + 86_400_000 : null;
+	const visible = runs.filter(
+		(r) =>
+			match(r) &&
+			(!branch || refName(r.ref) === branch) &&
+			(!project || r.project_slug === project) &&
+			(dayStart == null ||
+				(Date.parse(r.created_at) >= dayStart && Date.parse(r.created_at) < dayEnd!)),
+	);
 	const details = useRunDetails(visible);
 
 	return (
@@ -70,7 +86,7 @@ export function RunsPage() {
 							</button>
 						))}
 					</div>
-					<div className="mb-0.5 mt-3.5 flex items-center text-[11px] text-[var(--faint)]">
+					<div className="mb-0.5 mt-3.5 flex flex-wrap items-center gap-2 text-[11px] text-[var(--faint)]">
 						<select className="fsel" value={branch} onChange={(e) => setBranch(e.target.value)}>
 							<option value="">All branches</option>
 							{branches.map((b) => (
@@ -79,6 +95,44 @@ export function RunsPage() {
 								</option>
 							))}
 						</select>
+						<select
+							className="fsel"
+							value={project}
+							onChange={(e) =>
+								setParams((p) => {
+									const n = new URLSearchParams(p);
+									if (e.target.value) n.set("project", e.target.value);
+									else n.delete("project");
+									return n;
+								})
+							}
+						>
+							<option value="">All projects</option>
+							{projects.map((p) => (
+								<option key={p} value={p}>
+									{p}
+								</option>
+							))}
+						</select>
+						{day && (
+							<button
+								className="fsel"
+								onClick={() =>
+									setParams((p) => {
+										const n = new URLSearchParams(p);
+										n.delete("day");
+										return n;
+									})
+								}
+								title="Clear day filter"
+							>
+								{new Date(day).toLocaleDateString(undefined, {
+									month: "short",
+									day: "numeric",
+								})}{" "}
+								×
+							</button>
+						)}
 						<span className="ml-auto">
 							{visible.length} run{visible.length === 1 ? "" : "s"} · newest first
 						</span>
@@ -105,6 +159,10 @@ export function RunsPage() {
 												{r.commit_message?.split("\n")[0] || r.workflow_name}
 											</div>
 											<div className="mt-[3px] truncate font-mono text-[11px] text-[var(--faint)]">
+												<span style={{ color: projectColor(r.project_slug) }}>
+													{r.project_slug}
+												</span>
+												<i className="mx-1.5 not-italic text-[#3d3d3d]">·</i>
 												{refName(r.ref)}
 												<i className="mx-1.5 not-italic text-[#3d3d3d]">·</i>
 												{shortSha(r.sha)}
@@ -173,7 +231,12 @@ export function RunsPage() {
 					</SideBlock>
 					<SideBlock title="Fleet" right={`${runners?.runners.length ?? 0} runners`}>
 						{(runners?.runners ?? []).map((r) => (
-							<div key={r.id} className="fr" style={{ padding: "9px 0" }}>
+							<div
+								key={r.id}
+								className="fr rowlink cursor-pointer"
+								style={{ padding: "9px 0" }}
+								onClick={() => nav("/runners")}
+							>
 								<StatusSq status={r.active_jobs ? "in_progress" : r.status} />
 								<span className="rn" style={{ width: "auto" }}>
 									{r.name}

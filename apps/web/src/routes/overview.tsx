@@ -7,7 +7,8 @@ import { PageHeader, Spinner } from "../components/ui";
 import { StatusSq } from "../components/status";
 import { Fingerprint, jobHue, useRunDetails } from "../components/fingerprint";
 import { FleetMap } from "../components/fleetmap";
-import { bytes, duration, relTime, seconds } from "../lib/format";
+import { RunsChart, runsPerDay } from "../components/runschart";
+import { bytes, duration, projectColor, relTime, seconds } from "../lib/format";
 
 export function OverviewPage() {
 	const nav = useNavigate();
@@ -78,19 +79,21 @@ export function OverviewPage() {
 	).length;
 	const successRate = o.runs_total ? Math.round((o.runs_success / o.runs_total) * 100) : null;
 
-	const kpis = [
-		{ k: "Runs today", v: String(runsToday), c: `${o.runs_total} total`, cls: "fl" },
+	const kpis: { k: string; v: string; vs?: string; c: string; cls: string; to: string }[] = [
+		{ k: "Runs today", v: String(runsToday), c: `${o.runs_total} total`, cls: "fl", to: "/runs" },
 		{
 			k: "Success",
 			v: successRate != null ? `${successRate}%` : "—",
 			c: `${o.runs_failure} failed of ${o.runs_total}`,
 			cls: "fl",
+			to: "/usage",
 		},
 		{
 			k: "Queue p95",
 			v: o.p95_queue_seconds ? seconds(o.p95_queue_seconds) : "—",
 			c: o.jobs_queued ? `${o.jobs_queued} waiting` : "no queue waiting",
 			cls: "fl",
+			to: "/runs?tab=running",
 		},
 		{
 			k: "Runners",
@@ -98,8 +101,9 @@ export function OverviewPage() {
 			vs: `/${o.runners_total}`,
 			c: o.jobs_running ? `${o.jobs_running} jobs running` : "fleet idle",
 			cls: "fl",
+			to: "/runners",
 		},
-		{ k: "Cache", v: String(data.cache.entries), c: bytes(data.cache.bytes), cls: "fl" },
+		{ k: "Cache", v: String(data.cache.entries), c: bytes(data.cache.bytes), cls: "fl", to: "/cache" },
 	];
 
 	return (
@@ -124,7 +128,10 @@ export function OverviewPage() {
 			/>
 
 			{liveRun && (
-				<div className="panel mt-4 flex items-center gap-3.5 px-4 py-3">
+				<div
+					className="panel rowlink mt-4 flex cursor-pointer items-center gap-3.5 px-4 py-3"
+					onClick={() => nav(`/runs/${liveRun.id}`)}
+				>
 					<span className="sq live" />
 					<span className="max-w-[46%] flex-none truncate text-[13px] font-medium">
 						{liveRun.workflow_name} #{liveRun.run_number}
@@ -148,7 +155,10 @@ export function OverviewPage() {
 			)}
 
 			{(data.webhooks?.failed_24h ?? 0) > 0 && (
-				<div className="panel mt-4 flex items-center gap-3.5 border-[var(--err)]/40 px-4 py-3">
+				<div
+					className="panel rowlink mt-4 flex cursor-pointer items-center gap-3.5 border-[var(--err)]/40 px-4 py-3"
+					onClick={() => nav("/deliveries")}
+				>
 					<span className="sq bad" />
 					<span className="text-[13px] text-[var(--dim)]">
 						<span className="font-medium text-[var(--err)]">
@@ -169,14 +179,14 @@ export function OverviewPage() {
 
 			<div className="panel kpis mt-4">
 				{kpis.map((k) => (
-					<div className="kpi" key={k.k}>
+					<Link className="kpi rowlink" key={k.k} to={k.to}>
 						<div className="k">{k.k}</div>
 						<div className="v">
 							{k.v}
 							{"vs" in k && k.vs ? <small>{k.vs}</small> : null}
 						</div>
 						<div className={`c ${k.cls}`}>{k.c}</div>
-					</div>
+					</Link>
 				))}
 			</div>
 
@@ -186,8 +196,8 @@ export function OverviewPage() {
 						<span className="pt">Runs per day</span>
 						<span className="r">
 							<span className="jc">
-								<i style={{ background: "#3a3a3a" }} />
-								passed
+								<i style={{ background: "var(--ink)" }} />
+								runs
 							</span>
 							<span className="jc">
 								<i style={{ background: "var(--err)" }} />
@@ -226,11 +236,16 @@ export function OverviewPage() {
 							No runners registered — a push waits in queue until one joins.
 						</div>
 					)}
-					<div className="emptynote">
-						{o.jobs_queued
-							? `${o.jobs_queued} job${o.jobs_queued === 1 ? "" : "s"} queued for a runner.`
-							: "Queue is clear. A push picks a runner on contact."}
-					</div>
+					{o.jobs_queued ? (
+						<Link className="emptynote rowlink block" to="/runs?tab=running">
+							{o.jobs_queued} job{o.jobs_queued === 1 ? "" : "s"} queued for a runner —
+							click to watch.
+						</Link>
+					) : (
+						<div className="emptynote">
+							Queue is clear. A push picks a runner on contact.
+						</div>
+					)}
 				</div>
 				{fleetMap && (
 					<div className="panel col-span-full">
@@ -281,11 +296,18 @@ export function OverviewPage() {
 							<Link
 								key={r.id}
 								to={`/runs/${r.id}`}
-								className="rowlink grid grid-cols-[14px_44px_minmax(0,1fr)_76px_52px] items-center gap-3 border-b border-[var(--line)] px-4 py-[9px] last:border-0"
+								className="rowlink grid grid-cols-[14px_44px_minmax(0,1fr)_84px_76px_52px] items-center gap-3 border-b border-[var(--line)] px-4 py-[9px] last:border-0"
 							>
 								<StatusSq status={r.status} conclusion={r.conclusion} />
 								<span className="font-mono text-xs text-[var(--faint)]">#{r.run_number}</span>
 								<Fingerprint run={r} jobs={details[i]?.data?.jobs} small />
+								<span
+									className="truncate text-right font-mono text-[10px]"
+									style={{ color: projectColor(r.project_slug) }}
+									title={r.project_name}
+								>
+									{r.project_slug}
+								</span>
 								<span className="text-right font-mono text-xs text-[var(--dim)]">
 									{duration(r.started_at, r.completed_at)}
 								</span>
@@ -296,10 +318,10 @@ export function OverviewPage() {
 						);
 					})}
 				</div>
-				<div className="panel">
+				<div className="panel rowlink cursor-pointer" onClick={() => nav("/cache")}>
 					<div className="phead">
 						<span className="pt">Cache</span>
-						<span className="r">7d eviction</span>
+						<span className="r">7d eviction · click to manage</span>
 					</div>
 					<div className="bwrap">
 						<div className="flex justify-between text-xs">
@@ -325,64 +347,4 @@ export function OverviewPage() {
 	);
 }
 
-interface DayBucket {
-	label: string;
-	total: number;
-	failed: number;
-	today: boolean;
-}
 
-// 14-day window of runs/day, oldest first.
-function runsPerDay(runs: Run[]): DayBucket[] {
-	const days: DayBucket[] = [];
-	const now = new Date();
-	for (let i = 13; i >= 0; i--) {
-		const d = new Date(now);
-		d.setDate(now.getDate() - i);
-		d.setHours(0, 0, 0, 0);
-		days.push({
-			label: d.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
-			total: 0,
-			failed: 0,
-			today: i === 0,
-		});
-	}
-	for (const r of runs) {
-		const t = new Date(r.created_at);
-		t.setHours(0, 0, 0, 0);
-		const idx = 13 - Math.round((Date.now() - t.getTime()) / 86_400_000);
-		if (idx < 0 || idx > 13) continue;
-		days[idx]!.total++;
-		if (r.conclusion === "failure") days[idx]!.failed++;
-	}
-	return days;
-}
-
-function RunsChart({ days, version }: { days: DayBucket[]; version?: string }) {
-	const max = Math.max(...days.map((d) => d.total), 1);
-	const yMax = Math.max(Math.ceil(max / 5) * 5, 5);
-	const anyRuns = days.some((d) => d.total > 0);
-	return (
-		<div className="chart">
-			<div className="ct">
-				<span>{yMax}</span>
-				<span>{Math.round((yMax * 2) / 3)}</span>
-				<span>{Math.round(yMax / 3)}</span>
-				<span>0</span>
-			</div>
-			{!anyRuns && <div className="empty-lbl">No runs in the last 14 days.</div>}
-			{days.map((d, i) => (
-				<div className={`col${d.today ? " today" : ""}`} key={i}>
-					{d.failed > 0 && <div className="f" style={{ height: `${(d.failed / yMax) * 100}%` }} />}
-					<div
-						className="b"
-						style={{ height: `${(d.total / yMax) * 100}%` }}
-						title={`${d.label} · ${d.total} run${d.total === 1 ? "" : "s"}${d.failed ? `, ${d.failed} failed` : ""}`}
-					/>
-					{d.today && version && <span className="ann">v{version.replace(/^v/, "")}</span>}
-					{(d.today || i % 6 === 1) && <span className="lbl">{d.today ? "today" : d.label}</span>}
-				</div>
-			))}
-		</div>
-	);
-}
