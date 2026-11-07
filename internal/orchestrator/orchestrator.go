@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,6 +16,7 @@ import (
 	"github.com/dvorinka/kern/internal/blobs"
 	"github.com/dvorinka/kern/internal/expressions"
 	"github.com/dvorinka/kern/internal/store"
+	"github.com/dvorinka/kern/internal/telemetry"
 	"github.com/dvorinka/kern/internal/workflows"
 )
 
@@ -35,16 +37,29 @@ type Orchestrator struct {
 	LogRetention time.Duration
 	// WebhookRetention drops webhook_deliveries rows older than this
 	// (KERN_WEBHOOK_RETENTION). Zero disables pruning.
-	WebhookRetention   time.Duration
+	WebhookRetention time.Duration
+	// AuditRetention drops audit_events rows older than this
+	// (KERN_AUDIT_RETENTION). Zero disables pruning.
+	AuditRetention time.Duration
+	// NotifyRetention drops notify_deliveries rows (sent or dead) older than
+	// this (KERN_NOTIFY_RETENTION). Zero disables pruning.
+	NotifyRetention    time.Duration
 	lastRetentionSweep time.Time
 	// PostStatus, when set, reports a run's GitHub commit status. It is called
 	// with "pending" at run creation and a terminal state on completion.
-	PostStatus        func(ctx context.Context, run store.Run, state string)
+	PostStatus func(ctx context.Context, run store.Run, state string)
+	// NotifySweep, when set, delivers due outbound notifications. It runs
+	// inside the leader-gated tick so exactly one replica sends at a time.
+	NotifySweep       func(ctx context.Context)
 	lastScheduleCheck time.Time
-	// TickObserver, when set, receives each Tick's wall-clock duration for
-	// the scheduler-cost metric.
-	TickObserver func(time.Duration)
+
+	leaderMu sync.Mutex
+	leader   *store.LeaderSession // held while this replica leads ticks
 }
+
+// LeaderLockKey is the Postgres advisory-lock key serializing scheduler
+// ticks across api replicas. Distinct from the store test-suite key 8424242.
+const LeaderLockKey int64 = 0x4B45524E01 // "KERN" + version byte
 
 // reportStatus invokes PostStatus when configured; reporting failures are
 // logged by the callback's owner, not retried here.
@@ -151,15 +166,19 @@ func (o *Orchestrator) StartRun(ctx context.Context, p store.CreateRunParams) (s
 	return run, nil
 }
 
-// Tick advances every active run. Safe to call concurrently from one process; the
-// store operations it uses are idempotent per state transition.
+// Tick advances every active run on the replica holding scheduler leadership.
+// With several api replicas running, a Postgres advisory lock elects exactly
+// one leader: the lock is a session-level hold on a dedicated connection, so
+// a dead leader's lock dies with its connection and the next contender takes
+// over on its next tick. Each tick pings the lock connection — a silently
+// dead connection would otherwise let two replicas tick at once.
 func (o *Orchestrator) Tick(ctx context.Context) {
+	if o.currentLeader(ctx) == nil {
+		return
+	}
 	tickStart := time.Now()
-	defer func() {
-		if o.TickObserver != nil {
-			o.TickObserver(time.Since(tickStart))
-		}
-	}()
+	defer func() { telemetry.ObserveSchedulerTick(time.Since(tickStart).Seconds()) }()
+
 	if _, err := o.Store.PromoteQueuedRuns(ctx); err != nil {
 		o.Log.Error("promote queued runs", zap.Error(err))
 	}
@@ -215,7 +234,8 @@ func (o *Orchestrator) Tick(ctx context.Context) {
 	// One clock for every hourly prune. Log pruning used to stamp the clock
 	// and the webhook prune, checked second, never ran while log retention
 	// was enabled (the default).
-	if time.Since(o.lastRetentionSweep) > time.Hour && (o.LogRetention > 0 || o.WebhookRetention > 0) {
+	if time.Since(o.lastRetentionSweep) > time.Hour &&
+		(o.LogRetention > 0 || o.WebhookRetention > 0 || o.AuditRetention > 0 || o.NotifyRetention > 0) {
 		o.lastRetentionSweep = time.Now()
 		if o.Blobs != nil && o.LogRetention > 0 {
 			if refs, err := o.Store.PruneStepBlobs(ctx, o.LogRetention); err != nil {
@@ -236,6 +256,20 @@ func (o *Orchestrator) Tick(ctx context.Context) {
 				o.Log.Info("webhook retention pruned deliveries", zap.Int64("rows", n))
 			}
 		}
+		if o.AuditRetention > 0 {
+			if n, err := o.Store.PruneAuditEvents(ctx, o.AuditRetention); err != nil {
+				o.Log.Error("prune audit events", zap.Error(err))
+			} else if n > 0 {
+				o.Log.Info("audit retention pruned events", zap.Int64("rows", n))
+			}
+		}
+		if o.NotifyRetention > 0 {
+			if n, err := o.Store.PruneNotifyDeliveries(ctx, o.NotifyRetention); err != nil {
+				o.Log.Error("prune notify deliveries", zap.Error(err))
+			} else if n > 0 {
+				o.Log.Info("notify retention pruned deliveries", zap.Int64("rows", n))
+			}
+		}
 	}
 	ids, err := o.Store.ActiveRunIDs(ctx, 200)
 	if err != nil {
@@ -248,6 +282,38 @@ func (o *Orchestrator) Tick(ctx context.Context) {
 		}
 	}
 	o.MintScheduledRuns(ctx, time.Now())
+	if o.NotifySweep != nil {
+		o.NotifySweep(ctx)
+	}
+}
+
+// currentLeader returns the held leader session, contending for the lock on
+// first use and re-verifying the lock connection's liveness every tick.
+func (o *Orchestrator) currentLeader(ctx context.Context) *store.LeaderSession {
+	o.leaderMu.Lock()
+	defer o.leaderMu.Unlock()
+	if o.leader != nil {
+		if o.leader.Alive(ctx) {
+			return o.leader
+		}
+		o.leader.Release()
+		o.leader = nil
+		telemetry.SetSchedulerLeader(false)
+		o.Log.Warn("scheduler leadership lost: lock connection died")
+	}
+	ls, ok, err := o.Store.TryLeader(ctx, LeaderLockKey)
+	if err != nil {
+		o.Log.Error("leader lock", zap.Error(err))
+		return nil
+	}
+	if !ok {
+		telemetry.SetSchedulerLeader(false)
+		return nil
+	}
+	o.leader = ls
+	telemetry.SetSchedulerLeader(true)
+	o.Log.Info("scheduler leadership acquired")
+	return ls
 }
 
 // AdvanceRun gates queued jobs on their dependencies and evaluates conditions.

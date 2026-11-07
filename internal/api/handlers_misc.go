@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/dvorinka/kern/internal/store"
+	"github.com/dvorinka/kern/internal/telemetry"
 )
 
 func (s *Server) overview(c *gin.Context) {
@@ -108,7 +110,7 @@ func (s *Server) prometheus(c *gin.Context) {
 
 	// Process-local series.
 	if s.metrics != nil {
-		lookups, claim, webhook, tick := s.metrics.snapshot()
+		lookups, claim, webhook := s.metrics.snapshot()
 		b.WriteString("# HELP kern_cache_lookups_total Cache restore lookups by result\n" +
 			"# TYPE kern_cache_lookups_total counter\n")
 		for _, result := range []string{"exact", "prefix", "miss"} {
@@ -116,8 +118,8 @@ func (s *Server) prometheus(c *gin.Context) {
 		}
 		claim.write(&b, "kern_claim_query_seconds", "Job claim query duration")
 		webhook.write(&b, "kern_webhook_process_seconds", "Webhook delivery processing time")
-		tick.write(&b, "kern_scheduler_tick_seconds", "Scheduler tick duration")
 	}
+	b.WriteString(telemetry.Default.Exposition())
 	c.Header("Content-Type", "text/plain; version=0.0.4")
 	c.String(http.StatusOK, b.String())
 }
@@ -258,14 +260,18 @@ func (s *Server) getOrgSettings(c *gin.Context) {
 		"auto_update":       settingsValue(raw, "auto_update", "off"),
 		"notify_url":        settingsValue(raw, "notify_url", ""),
 		"notify_secret_set": settingsValue(raw, "notify_secret", "") != "",
+		"notify_events":     settingsValue(raw, "notify_events", ""),
+		"notify_format":     settingsValue(raw, "notify_format", "kern"),
 	})
 }
 
 type settingsRequest struct {
-	SelfHeal string  `json:"self_heal"`
-	ForkGate string  `json:"fork_gate"`
-	PrTrust  string  `json:"pr_trust"`
-	IconPath *string `json:"icon_path"`
+	SelfHeal        string  `json:"self_heal"`
+	ForkGate        string  `json:"fork_gate"`
+	PrTrust         string  `json:"pr_trust"`
+	IconPath        *string `json:"icon_path"`
+	NotifyURL       *string `json:"notify_url"`
+	ArtifactQuotaMB *int64  `json:"artifact_quota_mb"`
 }
 
 // orgSettingsRequest accepts either key. A self_heal-only body, which the
@@ -276,11 +282,28 @@ type orgSettingsRequest struct {
 	AutoUpdate   *string `json:"auto_update"`
 	NotifyURL    *string `json:"notify_url"`
 	NotifySecret *string `json:"notify_secret"`
+	NotifyEvents *string `json:"notify_events"`
+	NotifyFormat *string `json:"notify_format"`
 }
 
-func orgSettingWrites(selfHeal, publicCI, autoUpdate, notifyURL, notifySecret *string) (map[string]string, string) {
-	if selfHeal == nil && publicCI == nil && autoUpdate == nil && notifyURL == nil && notifySecret == nil {
-		return nil, "self_heal, public_ci, auto_update, notify_url or notify_secret is required"
+var notifyConclusions = map[string]bool{
+	"success": true, "failure": true, "cancelled": true, "skipped": true,
+}
+
+// validNotifyEvents accepts a CSV of run conclusions, empty meaning all.
+func validNotifyEvents(v string) bool {
+	for _, tok := range strings.Split(v, ",") {
+		tok = strings.TrimSpace(tok)
+		if tok != "" && !notifyConclusions[tok] {
+			return false
+		}
+	}
+	return true
+}
+
+func orgSettingWrites(selfHeal, publicCI, autoUpdate, notifyURL, notifySecret, notifyEvents, notifyFormat *string) (map[string]string, string) {
+	if selfHeal == nil && publicCI == nil && autoUpdate == nil && notifyURL == nil && notifySecret == nil && notifyEvents == nil && notifyFormat == nil {
+		return nil, "self_heal, public_ci, auto_update, notify_url, notify_secret, notify_events or notify_format is required"
 	}
 	out := map[string]string{}
 	if selfHeal != nil {
@@ -311,6 +334,19 @@ func orgSettingWrites(selfHeal, publicCI, autoUpdate, notifyURL, notifySecret *s
 	if notifySecret != nil {
 		out["notify_secret"] = *notifySecret
 	}
+	if notifyEvents != nil {
+		v := strings.TrimSpace(*notifyEvents)
+		if !validNotifyEvents(v) {
+			return nil, "notify_events must be a comma list of success, failure, cancelled, skipped"
+		}
+		out["notify_events"] = v
+	}
+	if notifyFormat != nil {
+		if *notifyFormat != "kern" && *notifyFormat != "slack" {
+			return nil, "notify_format must be kern or slack"
+		}
+		out["notify_format"] = *notifyFormat
+	}
 	return out, ""
 }
 
@@ -321,7 +357,7 @@ func (s *Server) putOrgSettings(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_body", "self_heal, public_ci or auto_update is required")
 		return
 	}
-	writes, msg := orgSettingWrites(req.SelfHeal, req.PublicCI, req.AutoUpdate, req.NotifyURL, req.NotifySecret)
+	writes, msg := orgSettingWrites(req.SelfHeal, req.PublicCI, req.AutoUpdate, req.NotifyURL, req.NotifySecret, req.NotifyEvents, req.NotifyFormat)
 	if msg != "" {
 		fail(c, http.StatusBadRequest, "invalid_body", msg)
 		return
@@ -331,9 +367,21 @@ func (s *Server) putOrgSettings(c *gin.Context) {
 			s.internalError(c, err)
 			return
 		}
+		v = auditSettingValue(k, v)
 		s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "settings."+k, v)
 	}
 	c.JSON(http.StatusOK, writes)
+}
+
+// auditSettingValue redacts secret-bearing settings before they are written
+// to the audit log — the audit trail (and its JSONL export) must not become
+// a credential store.
+func auditSettingValue(k, v string) string {
+	lk := strings.ToLower(k)
+	if strings.Contains(lk, "secret") || strings.Contains(lk, "token") || strings.Contains(lk, "password") {
+		return "(redacted)"
+	}
+	return v
 }
 
 func (s *Server) getProjectSettings(c *gin.Context) {
@@ -349,12 +397,23 @@ func (s *Server) getProjectSettings(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"settings":  raw,
-		"self_heal": settingsValue(raw, "self_heal", "inherit"),
-		"fork_gate": settingsValue(raw, "fork_gate", "off"),
-		"pr_trust":  settingsValue(raw, "pr_trust", "off"),
-		"icon_path": settingsValue(raw, "icon_path", ""),
+		"settings":          raw,
+		"self_heal":         settingsValue(raw, "self_heal", "inherit"),
+		"fork_gate":         settingsValue(raw, "fork_gate", "off"),
+		"pr_trust":          settingsValue(raw, "pr_trust", "off"),
+		"icon_path":         settingsValue(raw, "icon_path", ""),
+		"notify_url":        settingsValue(raw, "notify_url", ""),
+		"artifact_quota_mb": settingsValue(raw, "artifact_quota_mb", "0"),
+		"artifact_bytes":    s.projectArtifactBytes(c, p.ID),
 	})
+}
+
+func (s *Server) projectArtifactBytes(c *gin.Context, projectID uuid.UUID) int64 {
+	total, err := s.Store.ArtifactBytesForProject(c.Request.Context(), projectID)
+	if err != nil {
+		return 0
+	}
+	return total
 }
 
 // projectIcon serves the project's configured icon from its local checkout.
@@ -412,8 +471,8 @@ func (s *Server) putProjectSettings(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_body", "invalid JSON body")
 		return
 	}
-	if req.SelfHeal == "" && req.ForkGate == "" && req.PrTrust == "" && req.IconPath == nil {
-		fail(c, http.StatusBadRequest, "invalid_body", "self_heal, fork_gate, pr_trust or icon_path is required")
+	if req.SelfHeal == "" && req.ForkGate == "" && req.PrTrust == "" && req.IconPath == nil && req.NotifyURL == nil && req.ArtifactQuotaMB == nil {
+		fail(c, http.StatusBadRequest, "invalid_body", "self_heal, fork_gate, pr_trust, icon_path, notify_url or artifact_quota_mb is required")
 		return
 	}
 	writes := map[string]string{}
@@ -454,11 +513,27 @@ func (s *Server) putProjectSettings(c *gin.Context) {
 		}
 		writes["icon_path"] = v // empty string clears the icon
 	}
+	if req.NotifyURL != nil {
+		v := strings.TrimSpace(*req.NotifyURL)
+		if v != "" && v != "off" && !strings.HasPrefix(v, "https://") && !strings.HasPrefix(v, "http://") {
+			fail(c, http.StatusBadRequest, "invalid_body", "notify_url must be an http(s) URL, off, or empty to inherit the org webhook")
+			return
+		}
+		writes["notify_url"] = v
+	}
+	if req.ArtifactQuotaMB != nil {
+		if *req.ArtifactQuotaMB < 0 {
+			fail(c, http.StatusBadRequest, "invalid_body", "artifact_quota_mb must be >= 0 (0 disables the quota)")
+			return
+		}
+		writes["artifact_quota_mb"] = strconv.FormatInt(*req.ArtifactQuotaMB, 10)
+	}
 	for k, v := range writes {
 		if err := s.Store.PutProjectSetting(c.Request.Context(), p.ID, k, v); err != nil {
 			s.internalError(c, err)
 			return
 		}
+		v = auditSettingValue(k, v)
 		s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "settings."+k, p.Slug+"="+v)
 	}
 	resp := map[string]string{}

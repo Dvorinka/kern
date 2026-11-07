@@ -308,6 +308,57 @@ func (s *Store) DeleteSession(ctx context.Context, tokenHash string) error {
 	return err
 }
 
+// SessionInfo is one active login session. TokenHash is internal — it lets the
+// API mark the caller's current session without ever exposing the hash.
+type SessionInfo struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+	Current   bool      `json:"current"`
+	TokenHash string    `json:"-"`
+}
+
+// ListSessions returns a user's unexpired sessions, newest first.
+func (s *Store) ListSessions(ctx context.Context, userID uuid.UUID) ([]SessionInfo, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, token_hash, created_at, expires_at
+		FROM sessions WHERE user_id = $1 AND expires_at > now()
+		ORDER BY created_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []SessionInfo{}
+	for rows.Next() {
+		var se SessionInfo
+		if err := rows.Scan(&se.ID, &se.TokenHash, &se.CreatedAt, &se.ExpiresAt); err != nil {
+			return nil, err
+		}
+		out = append(out, se)
+	}
+	return out, rows.Err()
+}
+
+// DeleteSessionByID removes one of the user's own sessions.
+func (s *Store) DeleteSessionByID(ctx context.Context, userID, id uuid.UUID) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1 AND id = $2`, userID, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DeleteOtherSessions removes every session of the user except keepHash —
+// the "sign out everywhere else" path. Returns the number revoked.
+func (s *Store) DeleteOtherSessions(ctx context.Context, userID uuid.UUID, keepHash string) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM sessions WHERE user_id = $1 AND token_hash <> $2`, userID, keepHash)
+	return tag.RowsAffected(), err
+}
+
 type APIToken struct {
 	ID         uuid.UUID  `json:"id"`
 	Name       string     `json:"name"`

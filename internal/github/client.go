@@ -10,8 +10,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/dvorinka/kern/internal/telemetry"
 )
 
 type Client struct {
@@ -54,13 +57,21 @@ func (c *Client) do(ctx context.Context, method, path, accept string, body any, 
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
+		telemetry.IncGitHubAPI("error")
 		return err
 	}
 	defer resp.Body.Close()
+	if rem := resp.Header.Get("X-RateLimit-Remaining"); rem != "" {
+		if n, err := strconv.Atoi(rem); err == nil {
+			telemetry.SetGitHubRateLimit(n)
+		}
+	}
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if resp.StatusCode >= 300 {
+		telemetry.IncGitHubAPI("error")
 		return fmt.Errorf("github %s %s: %d %s", method, path, resp.StatusCode, strings.TrimSpace(string(data)))
 	}
+	telemetry.IncGitHubAPI("ok")
 	if out != nil && len(data) > 0 {
 		return json.Unmarshal(data, out)
 	}
@@ -155,12 +166,20 @@ func (c *Client) FileContent(ctx context.Context, repo, path, ref string) (strin
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
+		telemetry.IncGitHubAPI("error")
 		return "", err
 	}
 	defer resp.Body.Close()
+	if rem := resp.Header.Get("X-RateLimit-Remaining"); rem != "" {
+		if n, err := strconv.Atoi(rem); err == nil {
+			telemetry.SetGitHubRateLimit(n)
+		}
+	}
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if resp.StatusCode != http.StatusOK {
+		telemetry.IncGitHubAPI("error")
 		return "", fmt.Errorf("github contents %s: %d %s", path, resp.StatusCode, strings.TrimSpace(string(data)))
 	}
+	telemetry.IncGitHubAPI("ok")
 	return string(data), nil
 }

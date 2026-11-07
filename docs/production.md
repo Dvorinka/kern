@@ -18,7 +18,7 @@ diffs with a large security delta.
 | ~~`/api/v1/metrics` unauthenticated~~ | **DONE** — moved inside `requireAuth`; scrape with `Authorization: Bearer <token>` (read scope suffices) | — |
 | ~~No security headers~~ | **DONE** — CSP (`default-src 'self'` + Google Fonts allowances), `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy` on every response | — |
 | Login rate limit is in-process | `loginLimiter` lives in api memory — correct for one replica, silently weakens per-replica in a multi-replica future | Move to Postgres or the shared cache when multi-instance lands; not before |
-| No session management UI | One cookie, no "active sessions" list, no revocation | Sessions table exists — list + delete endpoints and a settings card |
+| ~~No session management UI~~ | **DONE** — `GET /auth/sessions`, `DELETE /auth/sessions/:id`, `POST /auth/sessions/revoke-others`; Settings → Sessions card lists live sessions, flags the current one, revokes individually or all others | — |
 | No native TLS | The api speaks HTTP; TLS terminates at the tunnel/proxy | Acceptable while ingress is the tunnel. Optional `KERN_TLS_CERT`/`KERN_TLS_KEY` is a small `ListenAndServeTLS` switch if an operator ever needs it |
 
 ## Operations and reliability
@@ -27,19 +27,19 @@ diffs with a large security delta.
 | --- | --- | --- |
 | ~~Backup story is one line~~ | **DONE** — `docs/backups.md`: nightly `pg_dump` + blob-dir sync script, retention, and a restore drill | Remaining: verify a restore once per quarter, not just write it |
 | ~~Blob store is filesystem-only~~ | **DONE** — `internal/blobs/s3.go` (minio-go): `KERN_BLOB_S3_BUCKET` switches the driver; verified live against an S3-compatible endpoint. `Append` is read-modify-write — live log streaming rules out multipart | Remaining: part-manifest scheme if single logs regularly exceed tens of MB |
-| Single control-plane replica | Scheduler, orchestrator, cron and sweeps run in-process. `SKIP LOCKED` claiming is already multi-instance safe, but ticks/sweeps would double-run | Either document "exactly one api replica" (current truth) or add a Postgres advisory-lock leader gate around `orchestrator.Tick` and the sweeps — a few dozen lines, not an election system |
-| ~~Notifications are pull-only~~ | **DONE** — org settings `notify_url` + `notify_secret`: every finished run POSTs `{event:"run.completed", run:{…}}` with `X-Kern-Signature` HMAC. One attempt, logged on failure | Remaining: event filters, retries, a Slack-shaped template |
-| No quotas | Artifacts expire at 90d, cache ages out, but there is no per-project storage cap, run-rate limit, or concurrency quota | Start with per-project artifact/blob bytes accounting (the store already knows sizes) + a reject threshold |
+| ~~Single control-plane replica~~ | **DONE** — `orchestrator.Tick` wraps all scheduler work (promotion, deployment release, advancement, lease/runner reaping, retention sweeps, notify delivery) in a Postgres advisory lock (`LeaderLockKey`); exactly one replica ticks at a time, a dead leader's lock dies with its connection. Job claiming was already `SKIP LOCKED`-safe | Remaining: the login limiter stays in-process (row above) — per-replica limits under multi-replica deploys |
+| ~~Notifications are pull-only~~ | **DONE** — org `notify_url`/`notify_secret`/`notify_events`/`notify_format`, per-project `notify_url` override (`off` opts out): finished runs enqueue a `notify_deliveries` row; the leader-gated tick retries with exponential backoff (3 attempts, dead-letters beyond). `kern` envelope or Slack `{"text"}` shape, `X-Kern-Signature` HMAC | Remaining: no delivery-status UI beyond `/notifications`; no Slack slash-command surface |
+| ~~No quotas~~ | **PARTIAL** — project `artifact_quota_mb` enforced at upload: bytes are summed live (`ArtifactBytesForProject`), same-name overwrites replace rather than add, over-quota uploads get `413 quota_exceeded` and the blob is dropped. `artifact_bytes`/`artifact_quota_mb` exposed on project settings; editable in the project page | Remaining: run-rate and concurrency quotas; blob-store-wide cap (artifacts are the dominant blob class today) |
 | Runner drain is one-way | `drain` stops new claims; nothing cordons the api's queue or reports drain progress | Minor: a "draining" runner badge exists; an in-flight-job ETA would be nice, not required |
 
 ## Enterprise surface
 
 | Gap | State | What it takes |
 | --- | --- | --- |
-| No SSO/OIDC | Local argon2id only (ADR-002). The biggest real enterprise blocker | OIDC login flow against a generic provider (Dex/Keycloak/Authentik), group→role mapping, local accounts kept as break-glass |
+| No SSO/OIDC | Local argon2id only (ADR-002). The biggest real enterprise blocker | Scoped in `docs/sso-oidc.md` (generic OIDC, Dex/Keycloak/Authentik, group→role onto `org_members`, local break-glass, JIT with `email_verified` link guard). Implementation waits on an IdP choice — do not build against a hypothetical provider |
 | Single-org effectively | `orgs`/`org_members` exist; no org switching, creation, or cross-org admin in UI or API | Multi-org UI is mostly frontend; untested multi-tenancy means scoping bugs are likely — audit `org_id` filters when it matters |
-| No OpenAPI contract | `plan.md` §2 promises OpenAPI 3.1 → generated TS client. The spec was never written; `apps/web/src/lib/api.ts` is hand-maintained | Writing the spec is documentation work, not plumbing; it also forces an error-shape audit. The generated client can replace the hand one incrementally |
-| Audit log has no export or retention knob | `audit_events` + `GET /audit` exist; nothing ages out or leaves the box | Retention sweep like the other tables, and a JSONL export endpoint for compliance pulls |
+| ~~No OpenAPI contract~~ | **DONE** — `openapi.yaml` (OpenAPI 3.1) covers the `/api/v1` surface; `apps/web/src/lib/api.gen.ts` generated via `openapi-typescript` + `openapi-fetch` (`src/lib/client.ts`), sessions domain migrated as the first consumer | Remaining: migrate remaining domains off `lib/api.ts` incrementally; regenerate on spec changes |
+| ~~Audit log has no export or retention knob~~ | **DONE** — `GET /audit/export?from=&to=` streams JSONL (admin, RFC3339/YYYY-MM-DD bounds, oldest-first); `KERN_AUDIT_RETENTION` (default 365d) sweeps `audit_events` in the hourly retention pass | — |
 | ~~MCP endpoint in flight~~ | **DONE** — merged as PR #36; scope/role gates applied in the same PR as HTTP enforcement | — |
 
 ## Compatibility tail (workflow surface)

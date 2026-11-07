@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/dvorinka/kern/internal/telemetry"
 )
 
 // App authenticates as a GitHub App and mints installation tokens.
@@ -128,13 +130,16 @@ func (a *App) doBody(ctx context.Context, method, path string, body any, out any
 	}
 	resp, err := a.http.Do(req)
 	if err != nil {
+		telemetry.IncGitHubAPI("error")
 		return err
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if resp.StatusCode >= 300 {
+		telemetry.IncGitHubAPI("error")
 		return fmt.Errorf("github %s %s: %d %s", method, path, resp.StatusCode, strings.TrimSpace(string(data)))
 	}
+	telemetry.IncGitHubAPI("ok")
 	if out != nil && len(data) > 0 {
 		return json.Unmarshal(data, out)
 	}

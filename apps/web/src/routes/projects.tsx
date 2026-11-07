@@ -235,9 +235,14 @@ export function ProjectDetailPage() {
 	const { data: psettings } = useQuery({
 		queryKey: ["project-settings", slug],
 		queryFn: () =>
-			api.get<{ self_heal: string; fork_gate: string; icon_path?: string }>(
-				`/projects/${slug}/settings`,
-			),
+			api.get<{
+				self_heal: string;
+				fork_gate: string;
+				icon_path?: string;
+				notify_url?: string;
+				artifact_quota_mb?: string;
+				artifact_bytes?: number;
+			}>(`/projects/${slug}/settings`),
 	});
 	const setIcon = useMutation({
 		mutationFn: (v: string) => api.put(`/projects/${slug}/settings`, { icon_path: v }),
@@ -254,6 +259,15 @@ export function ProjectDetailPage() {
 	});
 	const setGate = useMutation({
 		mutationFn: (v: string) => api.put(`/projects/${slug}/settings`, { fork_gate: v }),
+		onSuccess: () => qc.invalidateQueries({ queryKey: ["project-settings", slug] }),
+	});
+	const setNotify = useMutation({
+		mutationFn: (v: string) => api.put(`/projects/${slug}/settings`, { notify_url: v }),
+		onSuccess: () => qc.invalidateQueries({ queryKey: ["project-settings", slug] }),
+	});
+	const setQuota = useMutation({
+		mutationFn: (v: number) =>
+			api.put(`/projects/${slug}/settings`, { artifact_quota_mb: v }),
 		onSuccess: () => qc.invalidateQueries({ queryKey: ["project-settings", slug] }),
 	});
 	const sync = useMutation({
@@ -374,6 +388,53 @@ export function ProjectDetailPage() {
 								<option value="all">all</option>
 								<option value="first-time">first-time</option>
 							</select>
+						}
+					/>
+					<KV
+						k="Notify URL"
+						v={
+							<span className="flex items-center gap-2">
+								<input
+									className="h-7 w-52 rounded-lg border border-[var(--ctl)] bg-transparent px-2 font-mono text-[11px]"
+									placeholder="inherit org — or 'off'"
+									defaultValue={psettings?.notify_url ?? ""}
+									onKeyDown={(e) => {
+										if (e.key === "Enter") setNotify.mutate((e.target as HTMLInputElement).value.trim());
+									}}
+									onBlur={(e) => {
+										if (e.target.value.trim() !== (psettings?.notify_url ?? ""))
+											setNotify.mutate(e.target.value.trim());
+									}}
+								/>
+								{setNotify.isPending && <span className="text-[10px] text-[var(--faint)]">saving…</span>}
+							</span>
+						}
+					/>
+					<KV
+						k="Artifact quota"
+						v={
+							<span className="flex items-center gap-2">
+								<input
+									className="h-7 w-28 rounded-lg border border-[var(--ctl)] bg-transparent px-2 font-mono text-[11px]"
+									type="number"
+									min={0}
+									placeholder="MB — 0 = off"
+									defaultValue={psettings?.artifact_quota_mb ?? "0"}
+									onKeyDown={(e) => {
+										if (e.key === "Enter")
+											setQuota.mutate(parseInt((e.target as HTMLInputElement).value, 10) || 0);
+									}}
+									onBlur={(e) => {
+										const v = parseInt(e.target.value, 10) || 0;
+										if (String(v) !== (psettings?.artifact_quota_mb ?? "0")) setQuota.mutate(v);
+									}}
+								/>
+								<span className="text-[10px] text-[var(--faint)]">
+									{psettings?.artifact_bytes != null &&
+										`used ${(psettings.artifact_bytes / 1048576).toFixed(1)} MB`}
+									{setQuota.isPending && "saving…"}
+								</span>
+							</span>
 						}
 					/>
 				</div>
