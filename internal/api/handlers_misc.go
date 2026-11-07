@@ -64,6 +64,60 @@ func (s *Server) prometheus(c *gin.Context) {
 	writeMetric("kern_job_queue_seconds_avg", "Average queue wait over 24h", "gauge", o.AvgQueueSeconds)
 	writeMetric("kern_job_queue_seconds_p95", "p95 queue wait over 24h", "gauge", o.P95QueueSeconds)
 	writeMetric("kern_run_seconds_avg", "Average run duration", "gauge", o.AvgRunSeconds)
+
+	// Store-backed series. A failure on an optional query degrades to the
+	// series being absent rather than failing the whole scrape.
+	if h, err := s.Store.QueueWaitHistogram(ctx); err != nil {
+		s.Log.Warn("metrics: queue wait histogram", zap.Error(err))
+	} else {
+		writeDurationHistogram(&b, "kern_job_queue_wait_seconds",
+			"Job queue wait (queued to claimed), last 24h", h)
+	}
+	if h, err := s.Store.StepDurationHistogram(ctx); err != nil {
+		s.Log.Warn("metrics: step duration histogram", zap.Error(err))
+	} else {
+		writeDurationHistogram(&b, "kern_step_duration_seconds",
+			"Step execution duration, last 24h", h)
+	}
+	if runners, err := s.Store.RunnerUtilization(ctx); err != nil {
+		s.Log.Warn("metrics: runner utilization", zap.Error(err))
+	} else {
+		b.WriteString("# HELP kern_runner_active_jobs Jobs in progress on the runner\n" +
+			"# TYPE kern_runner_active_jobs gauge\n" +
+			"# HELP kern_runner_cpu_percent Runner host CPU utilization\n" +
+			"# TYPE kern_runner_cpu_percent gauge\n" +
+			"# HELP kern_runner_mem_used_bytes Runner host memory in use\n" +
+			"# TYPE kern_runner_mem_used_bytes gauge\n" +
+			"# HELP kern_runner_disk_free_bytes Runner host free disk bytes\n" +
+			"# TYPE kern_runner_disk_free_bytes gauge\n")
+		for _, r := range runners {
+			org, name := labelValue(r.OrgSlug), labelValue(r.Name)
+			labels := fmt.Sprintf("{org=\"%s\",runner=\"%s\"}", org, name)
+			fmt.Fprintf(&b, "kern_runner_active_jobs%s %d\n", labels, r.ActiveJobs)
+			if r.CPUPercent != nil {
+				fmt.Fprintf(&b, "kern_runner_cpu_percent%s %g\n", labels, *r.CPUPercent)
+			}
+			if r.MemUsedBytes != nil {
+				fmt.Fprintf(&b, "kern_runner_mem_used_bytes%s %d\n", labels, *r.MemUsedBytes)
+			}
+			if r.DiskFree != nil {
+				fmt.Fprintf(&b, "kern_runner_disk_free_bytes%s %d\n", labels, *r.DiskFree)
+			}
+		}
+	}
+
+	// Process-local series.
+	if s.metrics != nil {
+		lookups, claim, webhook, tick := s.metrics.snapshot()
+		b.WriteString("# HELP kern_cache_lookups_total Cache restore lookups by result\n" +
+			"# TYPE kern_cache_lookups_total counter\n")
+		for _, result := range []string{"exact", "prefix", "miss"} {
+			fmt.Fprintf(&b, "kern_cache_lookups_total{result=\"%s\"} %d\n", result, lookups[result])
+		}
+		claim.write(&b, "kern_claim_query_seconds", "Job claim query duration")
+		webhook.write(&b, "kern_webhook_process_seconds", "Webhook delivery processing time")
+		tick.write(&b, "kern_scheduler_tick_seconds", "Scheduler tick duration")
+	}
 	c.Header("Content-Type", "text/plain; version=0.0.4")
 	c.String(http.StatusOK, b.String())
 }
@@ -107,7 +161,11 @@ func (s *Server) githubWebhook(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"duplicate": true})
 		return
 	}
+	webhookStart := time.Now()
 	status, detail := s.processGithubDelivery(c, delivery, event, body)
+	if s.metrics != nil {
+		s.metrics.observeWebhook(time.Since(webhookStart))
+	}
 	if err := s.Store.MarkWebhookProcessed(c.Request.Context(), delivery, status, detail); err != nil {
 		s.Log.Error("mark webhook processed", zap.Error(err))
 	}

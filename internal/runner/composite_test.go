@@ -128,3 +128,32 @@ func TestMetaStepsParse(t *testing.T) {
 		t.Errorf("step parse: %+v", cs)
 	}
 }
+
+func TestParseLSRemote(t *testing.T) {
+	sha1 := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	sha2 := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	sha3 := "cccccccccccccccccccccccccccccccccccccccc"
+	out := sha1 + "\trefs/heads/main\n" +
+		sha2 + "\trefs/tags/v1\n" +
+		sha3 + "\trefs/tags/v1^{}\n"
+	cases := []struct{ ref, want string }{
+		{"main", sha1},            // branch
+		{"v1", sha3},              // annotated tag prefers peeled commit
+		{"refs/heads/main", sha1}, // full refname
+		{"nope", ""},              // no match
+	}
+	for _, c := range cases {
+		if got := parseLSRemote(out, c.ref); got != c.want {
+			t.Errorf("parseLSRemote(%q) = %q, want %q", c.ref, got, c.want)
+		}
+	}
+}
+
+func TestIsActionSHA(t *testing.T) {
+	if !isActionSHA("0123456789abcdef0123456789abcdef01234567") {
+		t.Error("40-hex sha rejected")
+	}
+	if isActionSHA("main") || isActionSHA("0123") || isActionSHA("0123456789abcdef0123456789abcdef0123456g") {
+		t.Error("non-sha accepted")
+	}
+}
