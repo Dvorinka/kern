@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/dvorinka/kern/internal/workflows"
@@ -217,6 +218,23 @@ func TestForkGateHold(t *testing.T) {
 	for _, tc := range cases {
 		if got := forkGateHold(tc.gate, tc.association); got != tc.want {
 			t.Errorf("forkGateHold(%q, %q) = %v, want %v", tc.gate, tc.association, got, tc.want)
+		}
+	}
+}
+
+func TestPrTrustPromoted(t *testing.T) {
+	cases := []struct {
+		settings string
+		want     bool
+	}{
+		{`{}`, false},
+		{`{"pr_trust":"off"}`, false},
+		{`{"pr_trust":"trusted"}`, true},
+		{`{"pr_trust":"bogus"}`, false},
+	}
+	for _, tc := range cases {
+		if got := prTrustPromoted(json.RawMessage(tc.settings)); got != tc.want {
+			t.Errorf("prTrustPromoted(%s) = %v, want %v", tc.settings, got, tc.want)
 		}
 	}
 }

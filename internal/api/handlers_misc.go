@@ -204,6 +204,7 @@ func (s *Server) getOrgSettings(c *gin.Context) {
 type settingsRequest struct {
 	SelfHeal string `json:"self_heal"`
 	ForkGate string `json:"fork_gate"`
+	PrTrust  string `json:"pr_trust"`
 }
 
 // orgSettingsRequest accepts either key. A self_heal-only body, which the
@@ -290,6 +291,7 @@ func (s *Server) getProjectSettings(c *gin.Context) {
 		"settings":  raw,
 		"self_heal": settingsValue(raw, "self_heal", "inherit"),
 		"fork_gate": settingsValue(raw, "fork_gate", "off"),
+		"pr_trust":  settingsValue(raw, "pr_trust", "off"),
 	})
 }
 
@@ -313,8 +315,8 @@ func (s *Server) putProjectSettings(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_body", "invalid JSON body")
 		return
 	}
-	if req.SelfHeal == "" && req.ForkGate == "" {
-		fail(c, http.StatusBadRequest, "invalid_body", "self_heal or fork_gate is required")
+	if req.SelfHeal == "" && req.ForkGate == "" && req.PrTrust == "" {
+		fail(c, http.StatusBadRequest, "invalid_body", "self_heal, fork_gate or pr_trust is required")
 		return
 	}
 	writes := map[string]string{}
@@ -340,6 +342,13 @@ func (s *Server) putProjectSettings(c *gin.Context) {
 			writes["fork_gate"] = req.ForkGate
 		}
 	}
+	if req.PrTrust != "" {
+		if req.PrTrust != "off" && req.PrTrust != "trusted" {
+			fail(c, http.StatusBadRequest, "invalid_body", "pr_trust must be off or trusted")
+			return
+		}
+		writes["pr_trust"] = req.PrTrust // "off" restores the sandboxed default
+	}
 	for k, v := range writes {
 		if err := s.Store.PutProjectSetting(c.Request.Context(), p.ID, k, v); err != nil {
 			s.internalError(c, err)
@@ -353,6 +362,9 @@ func (s *Server) putProjectSettings(c *gin.Context) {
 	}
 	if _, ok := writes["fork_gate"]; ok {
 		resp["fork_gate"] = req.ForkGate
+	}
+	if _, ok := writes["pr_trust"]; ok {
+		resp["pr_trust"] = req.PrTrust
 	}
 	c.JSON(http.StatusOK, resp)
 }
