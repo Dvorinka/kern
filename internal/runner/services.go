@@ -12,8 +12,12 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
+	"sync"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 // serviceNet names the per-job bridge network.
@@ -53,6 +57,9 @@ func (e *executor) ensureServiceNet(ctx context.Context) error {
 func (e *executor) startServices(ctx context.Context) error {
 	if len(e.claim.Job.Services) == 0 {
 		return nil
+	}
+	if err := e.acquireServicePorts(ctx); err != nil {
+		return err
 	}
 	net := e.serviceNet()
 	for _, svc := range e.claim.Job.Services {
@@ -115,14 +122,109 @@ func (e *executor) startService(ctx context.Context, net string, svc ClaimServic
 }
 
 // publishSpec normalises a workflow `ports:` entry ("5433:5432", "5432",
-// "8080:80/tcp") into docker's host:container publish form.
+// "8080:80/tcp", "53:53/udp") into docker's host:container publish form,
+// preserving the protocol suffix — dropping it would silently publish TCP
+// for a UDP service.
 func publishSpec(p string) string {
-	p = strings.TrimSuffix(p, "/tcp")
-	p = strings.TrimSuffix(p, "/udp")
-	if i := strings.Index(p, ":"); i >= 0 {
-		return p
+	proto := ""
+	if i := strings.LastIndex(p, "/"); i >= 0 {
+		proto, p = p[i:], p[:i]
 	}
-	return p + ":" + p
+	if i := strings.Index(p, ":"); i >= 0 {
+		return p + proto
+	}
+	return p + ":" + p + proto
+}
+
+// hostPortLocks serializes host-published service ports across the jobs one
+// runner executes concurrently. Trusted jobs publish services on the host
+// loopback, and the runner process is the contention domain — one
+// kern-runner per docker host — so an in-process lock suffices. A contending
+// job waits for the port instead of failing at docker-proxy bind time.
+var hostPortLocks = struct {
+	sync.Mutex
+	sems map[string]chan struct{}
+}{sems: map[string]chan struct{}{}}
+
+func hostPortSem(key string) chan struct{} {
+	hostPortLocks.Lock()
+	defer hostPortLocks.Unlock()
+	sem, ok := hostPortLocks.sems[key]
+	if !ok {
+		sem = make(chan struct{}, 1)
+		hostPortLocks.sems[key] = sem
+	}
+	return sem
+}
+
+// publishLockKey reduces a workflow ports: entry to the host-side bind it
+// will request — ip:hostPort/proto — the exact socket docker-proxy must own.
+// "/tcp" and no suffix share a socket, so they share a key.
+func publishLockKey(p string) string {
+	spec := publishSpec(p)
+	host := spec
+	if i := strings.IndexByte(host, ':'); i >= 0 {
+		host = host[:i]
+	}
+	proto := ""
+	if i := strings.LastIndexByte(spec, '/'); i >= 0 {
+		proto = spec[i:]
+		if proto == "/tcp" {
+			proto = ""
+		}
+	}
+	return "127.0.0.1:" + host + proto
+}
+
+// acquireServicePorts takes a hold on every host port this job's services
+// will publish, before any service container starts. Only privileged jobs
+// publish on the host — unprivileged services share the per-job netns and
+// cannot collide. Keys are sorted so concurrent multi-port jobs cannot
+// deadlock on lock ordering. Privileged services without a ports: entry
+// share the host netns directly; their bind port is image-defined and
+// outside what the runner can lock — a residual collision GitHub's
+// VM-per-job model never sees.
+func (e *executor) acquireServicePorts(ctx context.Context) error {
+	if !e.privileged() {
+		return nil
+	}
+	var keys []string
+	for _, svc := range e.claim.Job.Services {
+		for _, p := range svc.Ports {
+			keys = append(keys, publishLockKey(p))
+		}
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		sem := hostPortSem(key)
+		select {
+		case sem <- struct{}{}:
+			e.portReleases = append(e.portReleases, func() { <-sem })
+			continue
+		default:
+		}
+		e.log.Info("waiting for service port held by another job", zap.String("port", key))
+		select {
+		case sem <- struct{}{}:
+			e.portReleases = append(e.portReleases, func() { <-sem })
+		case <-ctx.Done():
+			e.releaseServicePorts()
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
+// releaseServicePorts frees every port hold; cleanup calls it after the
+// service containers are removed.
+func (e *executor) releaseServicePorts() {
+	for i := len(e.portReleases) - 1; i >= 0; i-- {
+		e.portReleases[i]()
+	}
+	e.portReleases = nil
 }
 
 // waitServiceHealthy polls until the container reports healthy, or simply
@@ -167,4 +269,5 @@ func (e *executor) stopServices(ctx context.Context) {
 	if len(e.networkedServices()) > 0 && !e.privileged() {
 		_ = exec.CommandContext(ctx, "docker", "network", "rm", e.serviceNet()).Run()
 	}
+	e.releaseServicePorts()
 }
