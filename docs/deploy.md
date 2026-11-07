@@ -145,8 +145,17 @@ commit status on the pushed SHA.
   `KERN_CACHE_MAX_AGE` evicts actions/cache entries,
   `KERN_WEBHOOK_RETENTION` prunes `webhook_deliveries` rows, artifacts expire after
   90 days, `KERN_RUNNER_IMAGE_MAX_AGE` GCs pulled job images on the runner.
+- Runner disk hygiene: stale per-job dirs under `KERN_RUNNER_WORK` are swept,
+  remote actions are cached by commit SHA under `_cache/_actions`, and when
+  free space drops below `KERN_RUNNER_DISK_MIN_FREE_PCT` (default `10`, `0`
+  disables) the runner prunes reclaimable Docker space while idle.
+  `KERN_RUNNER_PREPULL` (comma-separated images) keeps hot images local so
+  job pulls skip the registry.
 - Postgres lives in the `kern-db` volume — back it up with `docker exec
-  <pg> pg_dump -U kern kern`.
+  <pg> pg_dump -U kern kern`. Autovacuum defaults are adequate at current
+  scale; under heavy `jobs`/`steps` churn watch `pg_stat_user_tables`
+  `n_dead_tup` and tighten per-table `autovacuum_vacuum_scale_factor` if the
+  ratio stays high.
 - The runner-side persistent cache (mounted into jobs at `/kern/cache`)
   lives under `KERN_RUNNER_WORK/_cache`; delete it freely to force cold runs.
 - Fork-PR egress: `fork`-trust jobs run on a per-job `--internal` network

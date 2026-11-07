@@ -1,16 +1,24 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
 	<head>
 		<meta charset="UTF-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-		<meta name="theme-color" content="#08080a" />
+		<meta name="theme-color" content="#ececec" />
 		<link rel="preconnect" href="https://fonts.googleapis.com" />
 		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 		<link
-			href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap"
+			href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=JetBrains+Mono:wght@400;500&display=swap"
 			rel="stylesheet"
 		/>
+		<script>
+			// paint the right theme before first frame — paper or ink, never a flash
+			(function () {
+				var t = localStorage.getItem("kern-theme");
+				if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "ink" : "paper";
+				document.documentElement.dataset.theme = t;
+			})();
+		</script>
 		<title>KERN</title>
 	</head>
 	<body>

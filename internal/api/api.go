@@ -43,6 +43,7 @@ type Server struct {
 	ghApps    map[uuid.UUID]*github.App // github_apps.id -> lazily built app
 	ghRepoApp map[string]uuid.UUID      // repo -> github_apps.id (probe cache)
 	geoSelfMu sync.Mutex                // serializes the control-plane self-lookup
+	metrics   *kernMetrics
 }
 
 func New(cfg *config.Config, st *store.Store, orch *orchestrator.Orchestrator, blobStore blobs.Store,
@@ -64,7 +65,9 @@ func New(cfg *config.Config, st *store.Store, orch *orchestrator.Orchestrator, b
 		GH:     &github.Resolver{App: app, PAT: github.New(cfg.GitHub.APIBaseURL, cfg.GitHub.StatusToken)},
 		Geo:    geoip.New(cfg.GeoIPURL),
 		ghApps: make(map[uuid.UUID]*github.App), ghRepoApp: make(map[string]uuid.UUID),
+		metrics: newKernMetrics(),
 	}
+	orch.TickObserver = s.metrics.observeTick
 	s.wireCommitStatus()
 	s.Engine = s.buildRouter()
 	return s
@@ -204,6 +207,7 @@ func (s *Server) buildRouter() *gin.Engine {
 		auth.POST("/mcp", s.mcp)
 		auth.GET("/projects/:project/settings", s.getProjectSettings)
 		admin.PUT("/projects/:project/settings", s.putProjectSettings)
+		auth.GET("/projects/:project/icon", s.projectIcon)
 		write.POST("/jobs/:id/remediate", s.approveRemediation)
 		write.POST("/jobs/:id/remediate-dismiss", s.dismissRemediation)
 

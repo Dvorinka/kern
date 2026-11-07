@@ -145,7 +145,11 @@ func (s *Server) claimJob(c *gin.Context) {
 	}
 	deadline := time.Now().Add(time.Duration(wait) * time.Second)
 	for {
+		claimStart := time.Now()
 		claimed, err := s.Store.ClaimJob(c.Request.Context(), runner.ID, s.Cfg.JobLease)
+		if s.metrics != nil {
+			s.metrics.observeClaimQuery(time.Since(claimStart))
+		}
 		if err != nil {
 			s.internalError(c, err)
 			return
@@ -199,7 +203,7 @@ func (s *Server) respondWithClaim(c *gin.Context, claimed *store.ClaimedJob) {
 	// needs.* context: the runner resolves needs.<id>.outputs in step bodies and
 	// conditions; by then every needed job has reached a terminal state.
 	needsCtx := map[string]any{}
-	if jobs, err := s.Store.JobsForRun(c.Request.Context(), claimed.Job.RunID); err == nil {
+	if jobs, err := s.Store.JobsForRunNoSteps(c.Request.Context(), claimed.Job.RunID); err == nil {
 		byJobKey := map[string][]store.Job{}
 		for _, j := range jobs {
 			byJobKey[j.JobKey] = append(byJobKey[j.JobKey], j)

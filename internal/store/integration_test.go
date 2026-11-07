@@ -22,7 +22,7 @@ import (
 // packages in parallel; without this, store and orchestrator wipe each other.
 const testDBLock int64 = 8424242
 
-func lockTestDB(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+func lockTestDB(t testing.TB, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
@@ -38,7 +38,7 @@ func lockTestDB(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	})
 }
 
-func testStore(t *testing.T) (*Store, context.Context) {
+func testStore(t testing.TB) (*Store, context.Context) {
 	t.Helper()
 	dsn := os.Getenv("KERN_TEST_DATABASE_URL")
 	if dsn == "" {
@@ -54,22 +54,25 @@ func testStore(t *testing.T) (*Store, context.Context) {
 	}
 	t.Cleanup(s.Close)
 	lockTestDB(t, ctx, s.pool)
-	if _, err := s.Bootstrap(ctx, "it-org", "IT Org", "it@kern.local", "IT", "x"); err != nil {
-		t.Fatalf("bootstrap: %v", err)
-	}
 	for _, table := range []string{
 		"steps", "job_leases", "jobs", "artifacts", "cache_entries",
 		"workflow_runs", "workflow_versions", "workflows", "runners",
+		// Memberships too: Bootstrap's ON CONFLICT DO NOTHING never restores
+		// a demoted owner, so a prior run's leftovers break role tests.
+		"org_members",
 	} {
 		if _, err := s.pool.Exec(ctx, "DELETE FROM "+table); err != nil {
 			t.Fatalf("clean %s: %v", table, err)
 		}
 	}
+	if _, err := s.Bootstrap(ctx, "it-org", "IT Org", "it@kern.local", "IT", "x"); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
 	return s, ctx
 }
 
 // fixture creates a project + workflow + version and returns the ids.
-func fixture(t *testing.T, ctx context.Context, s *Store) (uuid.UUID, uuid.UUID, uuid.UUID) {
+func fixture(t testing.TB, ctx context.Context, s *Store) (uuid.UUID, uuid.UUID, uuid.UUID) {
 	t.Helper()
 	org, err := s.FirstOrg(ctx)
 	if err != nil {
@@ -90,7 +93,7 @@ func fixture(t *testing.T, ctx context.Context, s *Store) (uuid.UUID, uuid.UUID,
 	return p.ID, wf.ID, v.ID
 }
 
-func seedRun(t *testing.T, ctx context.Context, s *Store, p CreateRunParams, nJobs int) (Run, []Job) {
+func seedRun(t testing.TB, ctx context.Context, s *Store, p CreateRunParams, nJobs int) (Run, []Job) {
 	t.Helper()
 	seeds := make([]JobSeed, nJobs)
 	for i := range seeds {
@@ -118,7 +121,7 @@ func seedRun(t *testing.T, ctx context.Context, s *Store, p CreateRunParams, nJo
 	return run, jobs
 }
 
-func runner(t *testing.T, ctx context.Context, s *Store, name string) Runner {
+func runner(t testing.TB, ctx context.Context, s *Store, name string) Runner {
 	t.Helper()
 	org, _ := s.FirstOrg(ctx)
 	r, err := s.RegisterRunner(ctx, RegisterRunnerParams{

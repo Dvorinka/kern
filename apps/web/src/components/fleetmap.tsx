@@ -1,16 +1,35 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Minus, Plus, RotateCcw } from "lucide-react";
-import type { FleetMapResponse } from "../lib/types";
-import { WORLD_GRATICULE_PATH, WORLD_LAND_PATH } from "../lib/world-land";
+import type { FleetMapPin, FleetMapResponse } from "../lib/types";
+import { WORLD_DOTS } from "../lib/world-dots";
 import { jobHue } from "./fingerprint";
 
-// Equirectangular map on the 0 0 1000 500 asset; the viewBox crops the poles
-// (lat > ~74 and < ~-65) so the panel stays compact.
-const W = 1000;
-const H = 500;
-const VB = { x: 0, y: 46, w: 1000, h: 384 };
-const ASPECT = VB.h / VB.w;
+// Dot-matrix world, rasterized from Natural Earth 110m land — the mockup's
+// map verbatim. Equirectangular, cropped above 83°N and below 58°S.
+const MW = 1200;
+const MH = 470;
+const LAT_T = 83;
+const LAT_B = -58;
+const VB = { x: 0, y: 0, w: MW, h: MH };
+const ASPECT = MH / MW;
+
+const LON = (l: number) => ((l + 180) / 360) * MW;
+const LAT = (l: number) => ((LAT_T - l) / (LAT_T - LAT_B)) * MH;
+
+// one <circle> per "1" cell — the same dot grid the mockup renders
+const DOTS: { x: number; y: number }[] = [];
+{
+	const cols = WORLD_DOTS[0]!.length;
+	const rows = WORLD_DOTS.length;
+	const sp = MW / cols;
+	const rp = MH / rows;
+	WORLD_DOTS.forEach((row, ri) => {
+		for (let c = 0; c < row.length; c++) {
+			if (row[c] === "1") DOTS.push({ x: (c + 0.5) * sp, y: (ri + 0.5) * rp });
+		}
+	});
+}
 
 interface View {
 	x: number;
@@ -19,57 +38,52 @@ interface View {
 	h: number;
 }
 
-function project(lat: number, lng: number): [number, number] {
-	return [((lng + 180) / 360) * W, ((90 - lat) / 180) * H];
+export interface Site {
+	key: string;
+	x: number;
+	y: number;
+	runners: FleetMapPin[];
+	jobs: { runner_id: string; key: string; name: string }[];
+	/** live = a job is running here, idle = reachable, off = every runner down */
+	st: "live" | "idle" | "off";
+	city: string;
+	code: string;
 }
 
-// slerp follows the great circle between two lng/lat pairs — the honest arc.
-function slerpPoint(
-	from: [number, number],
-	to: [number, number],
-	t: number,
-	bow: number,
-): [number, number] {
-	const rad = Math.PI / 180;
-	const vec = (ll: [number, number]): [number, number, number] => {
-		const lam = ll[0] * rad;
-		const phi = ll[1] * rad;
-		return [Math.cos(phi) * Math.cos(lam), Math.cos(phi) * Math.sin(lam), Math.sin(phi)];
-	};
-	const a = vec(from);
-	const b = vec(to);
-	const dot = Math.min(1, Math.max(-1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]));
-	const theta = Math.acos(dot);
-	if (theta < 1e-4) return to;
-	const s1 = Math.sin((1 - t) * theta) / Math.sin(theta);
-	const s2 = Math.sin(t * theta) / Math.sin(theta);
-	const x = s1 * a[0] + s2 * b[0];
-	const y = s1 * a[1] + s2 * b[1];
-	const z = s1 * a[2] + s2 * b[2];
-	let lng = Math.atan2(y, x) / rad;
-	const lat = Math.atan2(z, Math.hypot(x, y)) / rad + bow * Math.sin(Math.PI * t);
-	if (lng > 180) lng -= 360;
-	if (lng < -180) lng += 360;
-	return [lng, lat];
-}
+// short site code like the mockup's hel/osl/fra — first three of the city
+const siteCode = (city: string, fallback: string) =>
+	(city.trim() || fallback).replace(/\s.*/, "").slice(0, 3).toLowerCase();
 
-// arcPath samples the great circle; bow fans coincident control→runner arcs
-// apart so a second live job to the same runner reads as its own line.
-function arcPath(from: [number, number], to: [number, number], bow: number): string {
-	let d = "";
-	for (let i = 0; i <= 48; i++) {
-		const [lng, lat] = slerpPoint(from, to, i / 48, bow);
-		const [x, y] = project(lat, lng);
-		d += `${i === 0 ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`;
+// runners sharing one egress resolve to one point — group them into a site.
+// Exported so the overview can draw the same sites as chips under the map.
+export function fleetSites(runners: FleetMapPin[]): Site[] {
+	const cells = new Map<string, FleetMapPin[]>();
+	for (const r of runners) {
+		if (r.lat == null || r.lng == null) continue;
+		const k = `${r.lat.toFixed(1)}|${r.lng.toFixed(1)}`;
+		(cells.get(k) ?? cells.set(k, []).get(k)!).push(r);
 	}
-	return d;
+	return [...cells.entries()].map(([key, rs]) => {
+		const lat = rs.reduce((a, r) => a + r.lat!, 0) / rs.length;
+		const lng = rs.reduce((a, r) => a + r.lng!, 0) / rs.length;
+		const jobs = rs.flatMap((r) => r.jobs);
+		const st: Site["st"] = jobs.length
+			? "live"
+			: rs.some((r) => r.status === "online" || r.status === "draining")
+				? "idle"
+				: "off";
+		return {
+			key,
+			x: LON(lng),
+			y: LAT(lat),
+			runners: rs,
+			jobs,
+			st,
+			city: rs.find((r) => r.city)?.city ?? rs[0]!.name,
+			code: siteCode(rs.find((r) => r.city)?.city ?? rs[0]!.name, rs[0]!.name),
+		};
+	});
 }
-
-const HUE_VAR: Record<string, string> = {
-	lint: "var(--lint)",
-	build: "var(--build)",
-	web: "var(--web)",
-};
 
 export function FleetMap({ data }: { data: FleetMapResponse }) {
 	const nav = useNavigate();
@@ -82,22 +96,11 @@ export function FleetMap({ data }: { data: FleetMapResponse }) {
 	const suppressClick = useRef(false);
 
 	const control = data.control;
-	const pins = data.runners.filter((r) => r.lat != null && r.lng != null);
-	const unlocated = data.runners.length - pins.length;
-	// runners sharing one egress resolve to one point — fan them into a ring
-	const cells = new Map<string, number>();
-	const placed = pins.map((r) => {
-		const cell = `${r.lat!.toFixed(1)}|${r.lng!.toFixed(1)}`;
-		const n = cells.get(cell) ?? 0;
-		cells.set(cell, n + 1);
-		const [x, y] = project(r.lat!, r.lng!);
-		return { r, x, y, slot: n };
-	});
-	const totals = new Map<string, number>();
-	for (const p of placed) {
-		const k = `${p.r.lat!.toFixed(1)}|${p.r.lng!.toFixed(1)}`;
-		totals.set(k, (totals.get(k) ?? 0) + 1);
-	}
+	const sites = useMemo<Site[]>(() => fleetSites(data.runners), [data.runners]);
+	const unlocated = data.runners.length - sites.reduce((a, s) => a + s.runners.length, 0);
+
+	const hx = control ? LON(control.lng) : 0;
+	const hy = control ? LAT(control.lat) : 0;
 
 	// client px → svg user units inside the current viewBox
 	const toSvg = useCallback(
@@ -120,16 +123,10 @@ export function FleetMap({ data }: { data: FleetMapResponse }) {
 			const [mx, my] = toSvg(e.clientX, e.clientY);
 			setView((v) => {
 				const f = e.deltaY > 0 ? 1.18 : 1 / 1.18;
-				const w = Math.min(1600, Math.max(220, v.w * f));
+				const w = Math.min(1600, Math.max(260, v.w * f));
 				const h = w * ASPECT;
-				// keep the cursor-anchored point stationary
 				const k = w / v.w;
-				return {
-					w,
-					h,
-					x: mx - (mx - v.x) * k,
-					y: my - (my - v.y) * k,
-				};
+				return { w, h, x: mx - (mx - v.x) * k, y: my - (my - v.y) * k };
 			});
 		};
 		el.addEventListener("wheel", onWheel, { passive: false });
@@ -140,13 +137,19 @@ export function FleetMap({ data }: { data: FleetMapResponse }) {
 		setView((v) => {
 			const cx = v.x + v.w / 2;
 			const cy = v.y + v.h / 2;
-			const w = Math.min(1600, Math.max(220, v.w * f));
+			const w = Math.min(1600, Math.max(260, v.w * f));
 			const h = w * ASPECT;
 			const k = w / v.w;
 			return { w, h, x: cx - (cx - v.x) * k, y: cy - (cy - v.y) * k };
 		});
 
-	const hovered = hover ? data.runners.find((r) => r.id === hover) : null;
+	const hovered = hover ? sites.find((s) => s.key === hover) : null;
+
+	// label side: right of the marker unless that runs off the edge
+	const labelFor = (s: Site) => {
+		const left = s.x > MW * 0.7;
+		return { x: s.x + (left ? -16 : 16), y: s.y + 6, an: left ? "end" : "start" };
+	};
 
 	return (
 		<div className="fleetmap" ref={wrapRef}>
@@ -154,7 +157,7 @@ export function FleetMap({ data }: { data: FleetMapResponse }) {
 				ref={svgRef}
 				viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`}
 				role="img"
-				aria-label="Fleet world map — scroll to zoom, drag to pan, click a runner"
+				aria-label="Fleet world map — scroll to zoom, drag to pan, click a site"
 				className={drag.current?.moved ? "fm-dragging" : ""}
 				onPointerDown={(e) => {
 					drag.current = { px: e.clientX, py: e.clientY, vx: view.x, vy: view.y, moved: false };
@@ -193,52 +196,60 @@ export function FleetMap({ data }: { data: FleetMapResponse }) {
 					setTip(null);
 				}}
 			>
-				<path className="fm-grat" d={WORLD_GRATICULE_PATH} />
-				<path className="fm-land" d={WORLD_LAND_PATH} />
+				{/* the land dot-matrix */}
+				{DOTS.map((d, i) => (
+					<circle key={i} cx={d.x.toFixed(1)} cy={d.y.toFixed(1)} r="3" className="fm-dot" />
+				))}
+				{/* logo-fan arcs to the hub — one per live job, one dashed per quiet site */}
 				{control &&
-					placed.flatMap(({ r }) =>
-						r.jobs.map((j, ji) => {
-							const hue = HUE_VAR[jobHue(j.key || j.name)] ?? "var(--dim)";
-							const bow = ji % 2 === 0 ? 3 + ji : -(3 + ji);
-							const d = arcPath([control.lng, control.lat], [r.lng!, r.lat!], bow);
-							const active = hover === r.id;
+					sites.map((s) => {
+						const n = Math.max(1, s.jobs.length);
+						return Array.from({ length: n }, (_, i) => {
+							// fan coincident job arcs apart, alternating sides
+							const bow = i === 0 ? 0 : i % 2 ? (i + 1) * 10 : -i * 10;
+							const mx = (s.x + hx) / 2;
+							const my = Math.min(s.y, hy) - Math.abs(hx - s.x) * 0.3 - 14 + bow;
+							const live = i < s.jobs.length;
 							return (
-								<g key={`${r.id}-${j.name}-${ji}`} className={active ? "fm-arc-hi" : ""}>
-									<path className="fm-arc" d={d} stroke={hue} />
-									<circle r="1.6" fill={hue}>
-										<animateMotion dur="2.8s" repeatCount="indefinite" path={d} />
-									</circle>
-								</g>
+								<path
+									key={`${s.key}-${i}`}
+									d={`M${s.x.toFixed(1)} ${s.y.toFixed(1)}Q${mx.toFixed(1)} ${my.toFixed(1)} ${hx.toFixed(1)} ${hy.toFixed(1)}`}
+									className={live ? "fm-arc" : "fm-arc fm-arc-idle"}
+									strokeOpacity={live ? 0.75 : 0.4}
+								/>
 							);
-						}),
-					)}
+						});
+					})}
+				{/* the hub — the rotated square, always at the control plane */}
 				{control && (
-					<g transform={`translate(${project(control.lat, control.lng).join(" ")})`}>
-						<rect className="fm-ctl" x="-4" y="-4" width="8" height="8" />
-						<rect className="fm-ctlcore" x="-1.5" y="-1.5" width="3" height="3" />
-						<title>{`control plane — ${control.city || "unknown city"}, ${control.country || ""} (${control.source})`}</title>
+					<g>
+						<rect
+							x={hx - 7}
+							y={hy - 7}
+							width="14"
+							height="14"
+							rx="4"
+							className="fm-hub"
+							transform={`rotate(45 ${hx} ${hy})`}
+						/>
+						<text x={hx - 16} y={hy + 6} textAnchor="end" className="fm-label">
+							{siteCode(control.city, "hub")}
+						</text>
 					</g>
 				)}
-				{placed.map(({ r, x, y, slot }) => {
-					const total = totals.get(`${r.lat!.toFixed(1)}|${r.lng!.toFixed(1)}`) ?? 1;
-					// fan radius grows with cluster size so hit areas don't overlap
-					const ringR = total > 1 ? 6 + total * 2.5 : 0;
-					const angle = total > 1 ? (slot / total) * Math.PI * 2 - Math.PI / 2 : 0;
-					const dx = total > 1 ? Math.cos(angle) * ringR : 0;
-					const dy = total > 1 ? Math.sin(angle) * ringR : 0;
-					const hue = r.jobs.length ? HUE_VAR[jobHue(r.jobs[0]!.key || r.jobs[0]!.name)] : undefined;
-					const cls = r.jobs.length ? "fm-run busy" : `fm-run ${r.status}`;
-					const isHover = hover === r.id;
+				{/* site markers */}
+				{sites.map((s) => {
+					const l = labelFor(s);
+					const isHover = hover === s.key;
 					return (
 						<g
-							key={r.id}
-							transform={`translate(${x + dx} ${y + dy})`}
-							className={isHover ? "fm-pin-hi" : ""}
+							key={s.key}
+							className={isHover ? "fm-site-hi" : ""}
 							onPointerEnter={(e) => {
 								e.stopPropagation();
-								setHover(r.id);
+								setHover(s.key);
 							}}
-							onPointerLeave={() => setHover((h) => (h === r.id ? null : h))}
+							onPointerLeave={() => setHover((h) => (h === s.key ? null : h))}
 							onClick={(e) => {
 								e.stopPropagation();
 								if (suppressClick.current) {
@@ -249,36 +260,38 @@ export function FleetMap({ data }: { data: FleetMapResponse }) {
 							}}
 							style={{ cursor: "pointer" }}
 						>
-							{r.jobs.length > 0 && <circle className="fm-ping" r="7" />}
-							{/* generous invisible hit area — the visible pin is 7px */}
-							<rect className="fm-hit" x="-9" y="-9" width="18" height="18" />
-							<rect
-								className={cls}
-								x="-3.5"
-								y="-3.5"
-								width="7"
-								height="7"
-								style={hue ? { fill: hue } : undefined}
-							/>
+							<rect x={s.x - 14} y={s.y - 14} width="28" height="28" className="fm-hit" />
+							{s.st === "live" && (
+								<>
+									<circle className="halosvg" cx={s.x} cy={s.y} r="8" fill="var(--live)" />
+									<circle cx={s.x} cy={s.y} r="8" fill="var(--paper)" stroke="var(--live)" strokeWidth="4" />
+								</>
+							)}
+							{s.st === "idle" && (
+								<circle cx={s.x} cy={s.y} r="7" fill="var(--paper)" stroke="var(--ink)" strokeWidth="3" />
+							)}
+							{s.st === "off" && (
+								<circle
+									cx={s.x}
+									cy={s.y}
+									r="7"
+									fill="var(--paper)"
+									stroke="var(--faint)"
+									strokeWidth="2"
+									strokeDasharray="3 3"
+								/>
+							)}
+							{s.runners.length > 1 && (
+								<text x={s.x} y={s.y + 22} textAnchor="middle" className="fm-count">
+									×{s.runners.length}
+								</text>
+							)}
+							<text x={l.x} y={l.y} textAnchor={l.an as "start" | "end"} className="fm-label">
+								{s.code}
+							</text>
 						</g>
 					);
 				})}
-				{(() => {
-					// one count label per co-located cell, not per runner
-					const seen = new Set<string>();
-					return placed.map(({ r, y }) => {
-						const cell = `${r.lat!.toFixed(1)}|${r.lng!.toFixed(1)}`;
-						const total = totals.get(cell) ?? 1;
-						if (total <= 1 || seen.has(cell)) return null;
-						seen.add(cell);
-						const cx = placed.find((p) => `${p.r.lat!.toFixed(1)}|${p.r.lng!.toFixed(1)}` === cell)!.x;
-						return (
-							<text key={`n-${cell}`} x={cx} y={y + 20} className="fm-count" textAnchor="middle">
-								×{total}
-							</text>
-						);
-					});
-				})()}
 			</svg>
 			<div className="fm-zoom">
 				<button onClick={() => zoomBy(1 / 1.4)} title="Zoom out" aria-label="Zoom out">
@@ -293,16 +306,16 @@ export function FleetMap({ data }: { data: FleetMapResponse }) {
 			</div>
 			{hovered && tip && (
 				<div className="fm-tip" style={{ left: `${tip.x}%`, top: `${tip.y}%` }}>
-					<div className="fm-tip-name">{hovered.name}</div>
+					<div className="fm-tip-name">{hovered.city}</div>
 					<div className="fm-tip-sub">
-						{hovered.city || "unlocated"}
-						{hovered.country ? `, ${hovered.country}` : ""} · {hovered.status}
+						{hovered.runners.map((r) => r.name).join(", ")} ·{" "}
+						{hovered.st === "live" ? `${hovered.jobs.length} live job${hovered.jobs.length === 1 ? "" : "s"}` : hovered.st}
 					</div>
 					{hovered.jobs.length > 0 && (
 						<div className="fm-tip-jobs">
 							{hovered.jobs.slice(0, 4).map((j, i) => (
 								<div key={i}>
-									<i style={{ background: HUE_VAR[jobHue(j.key || j.name)] ?? "var(--dim)" }} />
+									<i className={`jc-swatch j-${jobHue(j.key || j.name)}`} />
 									{j.name}
 								</div>
 							))}

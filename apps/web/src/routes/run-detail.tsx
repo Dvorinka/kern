@@ -1,22 +1,21 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { useState } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { Download, Wrench } from "lucide-react";
 import { api } from "../lib/api";
 import type { Artifact, Deployment, Job, RunDetail, Runner, Step } from "../lib/types";
-import { Button, PageHeader, Spinner, cn } from "../components/ui";
-import { StatusPill } from "../components/status";
+import { Button, Spinner, cn } from "../components/ui";
+
 import { useAuth } from "../lib/auth";
 import { LogView } from "../components/log-view";
 import { RunGantt } from "../components/gantt";
-import { CopyButton } from "./settings";
-import { bytes, duration, refName, shortSha } from "../lib/format";
+import { bytes, duration, refName, relTime, shortSha } from "../lib/format";
 
 export function RunDetailPage() {
 	const { id } = useParams<{ id: string }>();
-	const qc = useQueryClient();
+		const qc = useQueryClient();
 	const { data, isLoading } = useQuery({
 		queryKey: ["run", id],
 		queryFn: () => api.get<RunDetail>(`/runs/${id}`),
@@ -28,6 +27,11 @@ export function RunDetailPage() {
 	const { data: runners } = useQuery({
 		queryKey: ["runners"],
 		queryFn: () => api.get<{ runners: Runner[] }>("/runners"),
+	});
+	const { data: settings } = useQuery({
+		queryKey: ["settings"],
+		queryFn: () => api.get<{ public_ci: string }>("/settings"),
+		staleTime: 60_000,
 	});
 	const cancel = useMutation({
 		mutationFn: () => api.post(`/runs/${id}/cancel`),
@@ -55,70 +59,111 @@ export function RunDetailPage() {
 		jobs.find((j) => j.id === jobId) ?? jobs.find((j) => j.status === "in_progress") ?? jobs[0];
 
 	return (
-		<>
-			<PageHeader
-				title={title}
-				sub={
-					<div className="flex flex-wrap items-baseline gap-x-3.5">
-						<span>
-							{run.workflow_name} ·{" "}
-							<b className="font-medium text-[var(--ink)]">#{run.run_number}</b>
-						</span>
-						<span className="font-mono">{refName(run.ref)}</span>
-						<span className="flex items-center gap-1 font-mono">
-							{shortSha(run.sha)}
-							<CopyButton text={run.sha} />
-						</span>
-						<span>
-							{run.event} by {run.actor}
-						</span>
-						<span>started {new Date(run.started_at ?? run.created_at).toLocaleTimeString()}</span>
-					</div>
-				}
-				actions={
-					<>
-						<StatusPill status={run.status} conclusion={run.conclusion} className="normal-case" />
+		<div className="page">
+			<Link to="/runs" className="back">
+				← All runs
+			</Link>
+			<div className="rtag">
+				<b>
+					{run.workflow_name} #{run.run_number}
+				</b>
+				<span>{refName(run.ref)}</span>
+				<code>{shortSha(run.sha)}</code>
+				<span>
+					{run.event} by {run.actor}
+				</span>
+				<Link to={`/projects/${run.project_slug}`} className="lnk">
+					{run.project_name || run.project_slug}
+				</Link>
+				<Link to={`/runs?project=${run.project_slug}`} className="lnk">
+					project runs
+				</Link>
+				{settings?.public_ci === "on" && (
+					<Link to={`/ci/${run.id}`} className="lnk" title="Open the public run page">
+						public
+					</Link>
+				)}
+			</div>
+			<h2 className="rhead-h">{title}</h2>
+			<div
+				className={`clock ${live ? "live" : run.conclusion === "failure" || run.status === "cancelled" ? "fail" : ""}`}
+			>
+				<b>{duration(run.started_at ?? run.created_at, run.completed_at)}</b>
+				<span className="cst">
+					<i className={`sq ${live ? "live" : run.conclusion === "failure" || run.status === "cancelled" ? "bad" : "ok"}`} />
+					{live
+						? "running"
+						: run.conclusion === "failure"
+							? "failed"
+							: run.status === "cancelled"
+								? "cancelled"
+								: "passed"}
+					<span className="acts">
 						{run.status === "awaiting_approval" && (
-							<Button
-								variant="primary"
-								size="sm"
-								onClick={() => approve.mutate()}
-								disabled={approve.isPending}
-							>
+							<button className="pill solid" onClick={() => approve.mutate()} disabled={approve.isPending}>
 								Approve
-							</Button>
+							</button>
 						)}
 						{live && (
-							<Button
-								variant="danger"
-								size="sm"
-								onClick={() => cancel.mutate()}
-								disabled={cancel.isPending}
-							>
+							<button className="pill" onClick={() => cancel.mutate()} disabled={cancel.isPending}>
 								Cancel
-							</Button>
+							</button>
 						)}
-						<Button
-							variant="primary"
-							size="sm"
-							onClick={() => rerun.mutate()}
-							disabled={rerun.isPending}
-						>
+						<button className="pill solid" onClick={() => rerun.mutate()} disabled={rerun.isPending}>
 							Re-run
-						</Button>
-					</>
-				}
-			/>
+						</button>
+					</span>
+				</span>
+			</div>
+			<dl className="rkv">
+				<div>
+					<dt>Trigger</dt>
+					<dd>{run.event}</dd>
+				</div>
+				<div>
+					<dt>Branch</dt>
+					<dd>{refName(run.ref)}</dd>
+				</div>
+				<div>
+					<dt>Runner</dt>
+					<dd>
+						{[...new Set(jobs.map((j) => j.runner_id && runnerNames.get(j.runner_id)).filter(Boolean))].join(
+							", ",
+						) || "—"}
+					</dd>
+				</div>
+				<div>
+					<dt>Image</dt>
+					<dd>{jobs.find((j) => j.image)?.image ?? "—"}</dd>
+				</div>
+				<div>
+					<dt>Started</dt>
+					<dd>{relTime(run.started_at ?? run.created_at)}</dd>
+				</div>
+				<div>
+					<dt>Jobs</dt>
+					<dd>{jobs.length}</dd>
+				</div>
+			</dl>
 			<ApprovalGate
 				deployments={data.deployments ?? []}
 				jobs={jobs}
 				onDone={() => qc.invalidateQueries({ queryKey: ["run", id] })}
 			/>
-			<RunGantt run={run} jobs={jobs} runners={runnerNames} />
+			<RunGantt
+				run={run}
+				jobs={jobs}
+				runners={runnerNames}
+				onPickJob={(jid) => {
+					setJobId(jid);
+					setStepN(null);
+				}}
+			/>
 			{job && (
 				<StepsPanel
 					jobs={jobs}
 					job={job}
+					runners={runnerNames}
 					onPickJob={setJobId}
 					stepN={stepN}
 					onPickStep={setStepN}
@@ -126,13 +171,14 @@ export function RunDetailPage() {
 				/>
 			)}
 			<RunArtifacts runId={run.id} />
-		</>
+		</div>
 	);
 }
 
 function StepsPanel({
 	jobs,
 	job,
+	runners,
 	onPickJob,
 	stepN,
 	onPickStep,
@@ -140,6 +186,7 @@ function StepsPanel({
 }: {
 	jobs: Job[];
 	job: Job;
+	runners: Map<string, string>;
 	onPickJob: (id: string) => void;
 	stepN: number | null;
 	onPickStep: (n: number | null) => void;
@@ -151,14 +198,18 @@ function StepsPanel({
 		steps.find((s) => s.status === "running") ??
 		steps[steps.length - 1];
 	return (
-		<div className="panel mt-4">
-			<div className="phead">
-				<span className="pt">
-					Steps · {job.name}
-					{job.environment ? ` · ${job.environment}` : ""}
+		<div className="tsec gap">
+			<div className="sec2">
+				<h3>Log</h3>
+				<span>
+					{job.name}
+					{jobs.length > 1 &&
+						` · job ${jobs.findIndex((j) => j.id === job.id) + 1} of ${jobs.length}`}
+					{job.runner_id && runners.get(job.runner_id) && ` · on ${runners.get(job.runner_id)}`}
+					{job.environment && ` · ${job.environment}`}
 				</span>
 				{jobs.length > 1 && (
-					<span className="flex gap-3">
+					<span className="jpick">
 						{jobs.map((j) => (
 							<button
 								key={j.id}
@@ -166,12 +217,7 @@ function StepsPanel({
 									onPickJob(j.id);
 									onPickStep(null);
 								}}
-								className={cn(
-									"cursor-pointer border-0 bg-transparent p-0 text-[11px]",
-									j.id === job.id
-										? "text-[var(--ink)]"
-										: "text-[var(--faint)] hover:text-[var(--dim)]",
-								)}
+								className={j.id === job.id ? "on" : ""}
 							>
 								{j.name}
 							</button>
@@ -180,19 +226,16 @@ function StepsPanel({
 				)}
 				<span className="r">
 					{sel ? `step ${sel.number} of ${steps.length}` : `${steps.length} steps`}
-					{job.started_at && (
-						<>
-							<span>·</span>
-							{duration(job.started_at, job.completed_at)}
-						</>
-					)}
+					{job.started_at && ` · ${duration(job.started_at, job.completed_at)}`}
 				</span>
 			</div>
-			<div className="sbody">
-				<div className="slist">
+			<div className="lg">
+				<div className="steps">
 					{steps.length === 0 && (
 						<div className="px-4 py-3 text-[11px] text-[var(--faint)]">
-							{job.status === "waiting_approval" ? "Waiting for deployment approval." : "No steps yet."}
+							{job.status === "waiting_approval"
+								? "Waiting for deployment approval."
+								: "No steps yet."}
 						</div>
 					)}
 					{steps.map((s) => (
@@ -207,7 +250,7 @@ function StepsPanel({
 				{sel ? (
 					<StepLog key={sel.id} job={job} step={sel} live={live && sel.status === "running"} />
 				) : (
-					<div className="px-4 py-8 text-[11px] text-[var(--faint)]">
+					<div className="logwait">
 						{job.status === "waiting_approval"
 							? `Deployment to ${job.environment || "this environment"} is waiting for approval.`
 							: "Waiting for the first step."}
@@ -223,15 +266,14 @@ function StepButton({ step, sel, onClick }: { step: Step; sel: boolean; onClick:
 		step.conclusion === "failure"
 			? "err"
 			: step.status === "running"
-				? "live"
+				? "r"
 				: step.status === "completed"
 					? "done"
 					: step.status === "skipped" || step.status === "cancelled"
 						? "skip"
-						: "pend";
+						: "q";
 	return (
-		<button className={cn("step", cls, sel && "sel")} onClick={onClick}>
-			<span className="no">{String(step.number).padStart(2, "0")}</span>
+		<button className={cn("st", cls, sel && "sel")} onClick={onClick}>
 			<span className="g">
 				{cls === "done" && (
 					<svg viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8">
@@ -245,7 +287,7 @@ function StepButton({ step, sel, onClick }: { step: Step; sel: boolean; onClick:
 				)}
 			</span>
 			<span className="min-w-0 flex-1 truncate">{step.name}</span>
-			<span className="t">{duration(step.started_at, step.completed_at)}</span>
+			<span className="tm">{duration(step.started_at, step.completed_at)}</span>
 		</button>
 	);
 }
@@ -299,10 +341,11 @@ function RunArtifacts({ runId }: { runId: string }) {
 	});
 	if (!data || data.artifacts.length === 0) return null;
 	return (
-		<div className="panel mt-4">
-			<div className="phead">
-				<span className="pt">Artifacts</span>
+		<div className="tsec gap">
+			<div className="sec2">
+				<h3>Artifacts</h3>
 			</div>
+			<div className="plate" style={{ padding: "6px 22px" }}>
 			{data.artifacts.map((a) => (
 				<div
 					key={a.id}
@@ -322,6 +365,7 @@ function RunArtifacts({ runId }: { runId: string }) {
 					</a>
 				</div>
 			))}
+			</div>
 		</div>
 	);
 }
@@ -364,27 +408,44 @@ function ApprovalGate({
 	);
 	if (pending.length === 0) return null;
 	return (
-		<div className="panel mb-4">
-			<div className="phead">
-				<span className="pt">Deployment approval</span>
-				<span className="r">{pending.length} waiting</span>
+		<div className="plate" style={{ padding: "10px 22px", marginBottom: 30 }}>
+			<div className="sec2" style={{ marginTop: 6 }}>
+				<h3>Deployment approval</h3>
+				<span>{pending.length} waiting</span>
 			</div>
 			{pending.map((d) => (
-				<ApprovalRow key={d.id} d={d} email={user?.email ?? ""} role={user?.role ?? ""} onDone={onDone} />
+				<ApprovalRow
+					key={d.id}
+					d={d}
+					email={user?.email ?? ""}
+					role={user?.role ?? ""}
+					onDone={onDone}
+				/>
 			))}
 		</div>
 	);
 }
 
-function ApprovalRow({ d, email, role, onDone }: { d: Deployment; email: string; role: string; onDone: () => void }) {
+function ApprovalRow({
+	d,
+	email,
+	role,
+	onDone,
+}: {
+	d: Deployment;
+	email: string;
+	role: string;
+	onDone: () => void;
+}) {
 	const qc = useQueryClient();
 	const approvals = d.approvals ?? [];
 	const mine = approvals.some((a) => a.email === email);
 	const list = d.reviewer_emails ?? [];
 	const allowed = role === "owner" || role === "admin" || list.length === 0 || list.includes(email);
-	const timer = d.wait_until && new Date(d.wait_until).getTime() > Date.now()
-		? `wait ${Math.max(1, Math.round((new Date(d.wait_until).getTime() - Date.now()) / 60000))}m`
-		: "";
+	const timer =
+		d.wait_until && new Date(d.wait_until).getTime() > Date.now()
+			? `wait ${Math.max(1, Math.round((new Date(d.wait_until).getTime() - Date.now()) / 60000))}m`
+			: "";
 	const act = useMutation({
 		mutationFn: (op: "approve" | "reject") => api.post(`/jobs/${d.job_id}/${op}`),
 		onSuccess: () => {
@@ -412,7 +473,12 @@ function ApprovalRow({ d, email, role, onDone }: { d: Deployment; email: string;
 						>
 							{mine ? "Approved" : "Approve"}
 						</Button>
-						<Button size="sm" variant="danger" disabled={act.isPending} onClick={() => act.mutate("reject")}>
+						<Button
+							size="sm"
+							variant="danger"
+							disabled={act.isPending}
+							onClick={() => act.mutate("reject")}
+						>
 							Reject
 						</Button>
 					</>

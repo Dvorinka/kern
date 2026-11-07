@@ -12,6 +12,10 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 - GitHub App management: org-scoped app registration with unique manifest names,
   status endpoint, disconnect, and a Settings card; environment app shown alongside
   registered apps.
+- Cross-page drill-downs: project links inside run rows and artifact rows, filtered
+  run lists from projects/environments/usage charts, clickable gantt lanes that open
+  a job's steps, scope-aware secret management with rotation, expandable webhook
+  payloads with copy, and linkified audit-trail targets.
 
 ### Fixed
 - Runner `active_jobs` reporting: column mismatch made every runner report zero live jobs.

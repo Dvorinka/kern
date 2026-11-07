@@ -244,6 +244,17 @@ func (s *Store) Runs(ctx context.Context, f RunFilter) ([]Run, int, error) {
 }
 
 func (s *Store) JobsForRun(ctx context.Context, runID uuid.UUID) ([]Job, error) {
+	return s.jobsForRun(ctx, runID, true)
+}
+
+// JobsForRunNoSteps is JobsForRun without the per-job step queries. Scheduler
+// paths (AdvanceRun, claim payload needs-context) read only job state, and
+// Tick calls them once per active run — the steps join was pure overhead.
+func (s *Store) JobsForRunNoSteps(ctx context.Context, runID uuid.UUID) ([]Job, error) {
+	return s.jobsForRun(ctx, runID, false)
+}
+
+func (s *Store) jobsForRun(ctx context.Context, runID uuid.UUID, withSteps bool) ([]Job, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, run_id, job_key, key, name, status, conclusion, needs, runs_on, image, matrix, env,
 		       if_condition, timeout_seconds, continue_on_error, fail_fast, priority, attempt, runner_id,
@@ -264,6 +275,9 @@ func (s *Store) JobsForRun(ctx context.Context, runID uuid.UUID) ([]Job, error) 
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	if !withSteps {
+		return out, nil
 	}
 	for i := range out {
 		steps, err := s.StepsForJob(ctx, out[i].ID)

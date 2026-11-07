@@ -85,7 +85,7 @@ function PublicBody({ data }: { data: PublicPayload }) {
 	const title = run.commit_message || `${run.workflow_name} #${run.run_number}`;
 	return (
 		<>
-			<PageHeader
+			<PageHeader mark="build"
 				title={title}
 				sub={
 					<div className="flex flex-wrap items-baseline gap-x-3.5">

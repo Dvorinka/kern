@@ -48,6 +48,8 @@ Flags (each has an environment fallback, listed with it):
 Environment only:
   KERN_RUNNER_LOAD_GATE     pause claims while loadavg1 > n * cpu count (0=off)
   KERN_RUNNER_IMAGE_MAX_AGE GC pulled job images unused this long (default 168h, 0=off)
+  KERN_RUNNER_PREPULL       comma-separated images to keep pulled (job pulls hit local cache)
+  KERN_RUNNER_DISK_MIN_FREE_PCT  prune docker when work-root fs free drops below % (default 10, 0=off)
   KERN_ACTIONS_GIT_BASE     git base URL for remote actions (default: the run's
                             repo host, or https://github.com)
   KERN_JOB_CPUS / KERN_JOB_MEMORY   per-job container limits (unset CPUs share the host)
@@ -282,6 +284,18 @@ func agentConfig(o options) runner.Config {
 		cfg.ImageMaxAge, _ = time.ParseDuration(v)
 	} else {
 		cfg.ImageMaxAge = 7 * 24 * time.Hour
+	}
+	if v := os.Getenv("KERN_RUNNER_PREPULL"); v != "" {
+		for _, p := range strings.Split(v, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				cfg.Prepull = append(cfg.Prepull, p)
+			}
+		}
+	}
+	if v := os.Getenv("KERN_RUNNER_DISK_MIN_FREE_PCT"); v != "" {
+		cfg.DiskMinFreePct, _ = strconv.ParseFloat(v, 64)
+	} else {
+		cfg.DiskMinFreePct = 10
 	}
 	return cfg
 }

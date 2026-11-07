@@ -41,6 +41,9 @@ type Orchestrator struct {
 	// with "pending" at run creation and a terminal state on completion.
 	PostStatus        func(ctx context.Context, run store.Run, state string)
 	lastScheduleCheck time.Time
+	// TickObserver, when set, receives each Tick's wall-clock duration for
+	// the scheduler-cost metric.
+	TickObserver func(time.Duration)
 }
 
 // reportStatus invokes PostStatus when configured; reporting failures are
@@ -151,6 +154,12 @@ func (o *Orchestrator) StartRun(ctx context.Context, p store.CreateRunParams) (s
 // Tick advances every active run. Safe to call concurrently from one process; the
 // store operations it uses are idempotent per state transition.
 func (o *Orchestrator) Tick(ctx context.Context) {
+	tickStart := time.Now()
+	defer func() {
+		if o.TickObserver != nil {
+			o.TickObserver(time.Since(tickStart))
+		}
+	}()
 	if _, err := o.Store.PromoteQueuedRuns(ctx); err != nil {
 		o.Log.Error("promote queued runs", zap.Error(err))
 	}
@@ -250,7 +259,7 @@ func (o *Orchestrator) AdvanceRun(ctx context.Context, runID uuid.UUID) error {
 	if run.Status != "in_progress" {
 		return nil
 	}
-	jobs, err := o.Store.JobsForRun(ctx, runID)
+	jobs, err := o.Store.JobsForRunNoSteps(ctx, runID)
 	if err != nil {
 		return err
 	}

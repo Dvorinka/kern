@@ -55,6 +55,15 @@ type Config struct {
 	// EgressAllowlist replaces the default domain allowlist when set
 	// (KERN_EGRESS_ALLOWLIST, comma-separated suffixes).
 	EgressAllowlist string
+	// Prepull lists images pulled at startup and hourly
+	// (KERN_RUNNER_PREPULL, comma-separated) so job pulls hit the local
+	// daemon instead of the registry.
+	Prepull []string
+	// DiskMinFreePct triggers a Docker reclaim sweep when free space on the
+	// work-root filesystem drops below this percent
+	// (KERN_RUNNER_DISK_MIN_FREE_PCT, default 10). Zero disables pressure
+	// pruning; the stale-workspace sweep always runs.
+	DiskMinFreePct float64
 }
 
 type Agent struct {
@@ -184,6 +193,18 @@ func (a *Agent) Run(ctx context.Context) error {
 		go func() {
 			defer wg.Done()
 			a.imageGCLoop(ctx)
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		a.diskGCLoop(ctx)
+	}()
+	if len(a.cfg.Prepull) > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			a.prepullLoop(ctx)
 		}()
 	}
 

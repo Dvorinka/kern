@@ -18,15 +18,15 @@ export function Button({
 	return (
 		<button
 			className={cn(
-				"inline-flex cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-lg font-medium transition-colors",
+				"inline-flex cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-full font-medium transition-colors",
 				"disabled:cursor-not-allowed disabled:opacity-50",
 				size === "sm" ? "h-7 px-3 text-xs" : "h-8 px-3.5 text-xs",
 				variant === "default" &&
-					"border border-[var(--ctl)] bg-[var(--bg)] text-[var(--ink)] hover:border-[#555]",
+					"border border-[var(--line2)] bg-[var(--raise)] text-[var(--ink)] hover:border-[var(--ink)]",
 				variant === "primary" &&
-					"bg-[var(--ink)] text-black hover:bg-white border border-[var(--ink)] hover:border-white",
+					"bg-[var(--ink)] text-[var(--paper)] border border-[var(--ink)] hover:bg-[var(--live)] hover:border-[var(--live)] hover:text-white",
 				variant === "danger" &&
-					"border border-[var(--ctl)] bg-[var(--bg)] text-[var(--err)] hover:border-[var(--err)]",
+					"border border-[var(--ctl)] bg-[var(--raise)] text-[var(--err)] hover:border-[var(--err)]",
 				variant === "ghost" && "text-[var(--dim)] hover:bg-[var(--raise2)] hover:text-[var(--ink)]",
 				className,
 			)}
@@ -39,9 +39,9 @@ export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElem
 	return (
 		<input
 			className={cn(
-				"h-8 w-full rounded-[7px] border border-[var(--ctl)] bg-transparent px-2.5 font-mono text-xs",
+				"h-9 w-full rounded-full border border-[var(--line2)] bg-[var(--raise)] px-4 font-mono text-xs",
 				"text-[var(--ink)] placeholder:font-sans placeholder:text-[var(--faint)] outline-none",
-				"focus:border-[#555]",
+				"focus:border-[var(--ink)]",
 				className,
 			)}
 			{...props}
@@ -77,45 +77,66 @@ export function PageHeader({
 	title,
 	sub,
 	actions,
+	mark,
 }: {
 	title: string;
 	sub?: ReactNode;
 	actions?: ReactNode;
+	// mark gives each page its own tile — a pattern for pipeline-shaped
+	// pages, a state square for the rest.
+	mark?: "lint" | "build" | "web" | "live" | "err" | "ok";
 }) {
 	return (
-		<div className="mb-5">
-			<div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-				<h1 className="text-xl font-semibold tracking-[-0.02em]">{title}</h1>
-				{actions && <div className="ml-auto flex shrink-0 items-center gap-2">{actions}</div>}
+		<div className="ph">
+			<span
+				className={cn(
+					"phm",
+					mark === "lint" || mark === "build" || mark === "web"
+						? `pat-${mark}`
+						: mark
+							? `sqm ${mark}`
+							: "pat-build",
+				)}
+			/>
+			<div className="phb">
+				<h1>{title}</h1>
+				{sub && <p>{sub}</p>}
 			</div>
-			{sub && <div className="mt-1.5 text-xs text-[var(--dim)]">{sub}</div>}
+			{actions && <div className="pha">{actions}</div>}
 		</div>
 	);
 }
 
-// Honest empty states keep their frame: one dashed box, one sentence.
+// Honest empty states keep their frame: a dashed sheet, a state square,
+// one title, one hint, an optional action.
 export function EmptyState({
 	icon,
 	title,
 	hint,
+	action,
 }: {
 	icon?: ReactNode;
 	title: string;
 	hint?: string;
+	action?: ReactNode;
 }) {
 	return (
-		<div className="emptynote" style={{ margin: "14px 16px" }}>
-			{icon}
-			{title}
-			{hint ? ` — ${hint}` : ""}
+		<div className="empty">
+			<span className="empty-tile">{icon ?? <i className="sq dim" />}</span>
+			<b>{title}</b>
+			{hint && <p>{hint}</p>}
+			{action && <div className="empty-act">{action}</div>}
 		</div>
 	);
 }
 
+// Loading reads as the page it will become: three shimmering rows.
 export function Spinner() {
 	return (
-		<div className="flex justify-center py-14">
-			<span className="sq live" />
+		<div className="skel" role="status" aria-label="Loading">
+			{[88, 64, 74].map((w, i) => (
+				<i key={i} style={{ width: `${w}%`, animationDelay: `${i * 0.15}s` }} />
+			))}
 		</div>
 	);
 }
@@ -133,4 +154,33 @@ export function KV({ k, v, mono }: { k: string; v: ReactNode; mono?: boolean }) 
 			</div>
 		</div>
 	);
+}
+
+// ProjectIcon — the project-chosen image from the repo, falling back to the
+// pattern tile. GitHub repos load via raw.githubusercontent.com; local
+// checkouts via the /icon endpoint.
+export function ProjectIcon({
+	slug,
+	repoFullName,
+	defaultBranch,
+	iconPath,
+	localPath,
+	className = "phm",
+}: {
+	slug: string;
+	repoFullName?: string | null;
+	defaultBranch?: string | null;
+	iconPath?: string | null;
+	localPath?: string | null;
+	className?: string;
+}) {
+	if (iconPath) {
+		const src = repoFullName
+			? `https://raw.githubusercontent.com/${repoFullName}/${defaultBranch || "main"}/${iconPath}`
+			: localPath
+				? `/api/v1/projects/${encodeURIComponent(slug)}/icon`
+				: null;
+		if (src) return <img className={`${className} pimg`} src={src} alt="" />;
+	}
+	return null;
 }

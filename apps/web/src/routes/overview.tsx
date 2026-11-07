@@ -1,17 +1,131 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { api } from "../lib/api";
-import type { FleetMapResponse, OverviewResponse, Run, Runner } from "../lib/types";
-import { PageHeader, Spinner } from "../components/ui";
-import { StatusSq } from "../components/status";
-import { Fingerprint, jobHue, useRunDetails } from "../components/fingerprint";
-import { FleetMap } from "../components/fleetmap";
+import type { FleetMapResponse, Job, OverviewResponse, Run } from "../lib/types";
+import { Spinner } from "../components/ui";
+import { jobHue, useRunDetails } from "../components/fingerprint";
+import { FleetMap, fleetSites } from "../components/fleetmap";
 import { RunsChart, runsPerDay } from "../components/runschart";
-import { bytes, duration, projectColor, relTime, seconds } from "../lib/format";
+import { ActivityMap } from "../components/activitymap";
+import { duration, projectColor, refName, relTime, seconds, shortSha } from "../lib/format";
+
+const live = (r: Run) => r.status === "in_progress" || r.status === "queued";
+
+/* ── run graph: a commit-graph spine behind the recent list.
+	 main/master rides lane 0; every other ref gets its own lane and merges
+	 back into the spine below, like the git log you already read. ── */
+const RH = 68;
+const LX = [16, 40, 64];
+const GW = 80;
+
+function laneOf(runs: Run[]): number[] {
+	const lanes = new Map<string, number>();
+	let next = 1;
+	return runs.map((r) => {
+		const b = refName(r.ref || "") || "main";
+		if (b === "main" || b === "master") return 0;
+		if (!lanes.has(b)) lanes.set(b, Math.min(next++, LX.length - 1));
+		return lanes.get(b)!;
+	});
+}
+
+function graphSVG(runs: Run[], lanes: number[], selId: string | null) {
+	const H = runs.length * RH;
+	const rr = 14;
+	const y = (i: number) => i * RH + RH / 2;
+	let p = "";
+	runs.forEach((_, i) => {
+		const a = lanes[i]!;
+		// continue the lane to the next run on the same ref
+		const same = runs.findIndex((_, j) => j > i && lanes[j] === a);
+		if (same > i) {
+			p += `<path d="M${LX[a]!} ${y(i)}V${y(same)}" fill="none" stroke="var(--ink)" stroke-opacity="${a === 0 ? 1 : 0.5}" stroke-width="${a === 0 ? 3 : 2}" stroke-linecap="round"/>`;
+		} else if (a > 0) {
+			// no more runs on this ref — merge into the next main-lane run below
+			const m = runs.findIndex((_, j) => j > i && lanes[j] === 0);
+			const yb = m > i ? y(m) : H;
+			p += `<path d="M${LX[a]!} ${y(i)}V${yb - rr}Q${LX[a]!} ${yb} ${LX[a]! - rr} ${yb}H${LX[0]}" fill="none" stroke="var(--ink)" stroke-opacity="0.5" stroke-width="2" stroke-linecap="round"/>`;
+		} else if (i === runs.length - 1) {
+			p += `<path d="M${LX[0]} ${y(i)}V${y(i) + 40}" fill="none" stroke="url(#gfade)" stroke-width="3" stroke-linecap="round"/>`;
+		}
+	});
+	let n = "";
+	runs.forEach((r, i) => {
+		const cx = LX[lanes[i]!]!;
+		const cy = y(i);
+		if (r.id === selId) {
+			n += `<circle cx="${cx}" cy="${cy}" r="15" fill="none" stroke="var(--ink)" stroke-width="2"/>`;
+		}
+		if (live(r)) {
+			n += `<circle class="halosvg" cx="${cx}" cy="${cy}" r="8" fill="var(--live)"/><circle cx="${cx}" cy="${cy}" r="8" fill="var(--paper)" stroke="var(--live)" stroke-width="4"/>`;
+		} else if (r.conclusion === "failure" || r.status === "cancelled") {
+			n += `<circle cx="${cx}" cy="${cy}" r="9" fill="var(--err)"/><path d="M${cx - 3.4} ${cy - 3.4}l6.8 6.8M${cx + 3.4} ${cy - 3.4}l-6.8 6.8" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>`;
+		} else if (r.conclusion === "success" || r.status === "completed") {
+			n += `<circle cx="${cx}" cy="${cy}" r="9" fill="var(--ink)"/><path d="M${cx - 3.6} ${cy + 0.2}l2.6 2.8 4.6-5.6" stroke="var(--paper)" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`;
+		} else {
+			n += `<circle cx="${cx}" cy="${cy}" r="8" fill="var(--paper)" stroke="var(--ink)" stroke-width="3"/>`;
+		}
+	});
+	return `<svg width="${GW}" height="${H}" viewBox="0 0 ${GW} ${H}" aria-hidden="true"><defs><linearGradient id="gfade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--ink)"/><stop offset="1" stop-color="var(--ink)" stop-opacity="0"/></linearGradient></defs>${p}${n}</svg>`;
+}
+
+const mmss = (ms: number) =>
+	`${Math.floor(ms / 60000)}:${String(Math.floor((ms % 60000) / 1000)).padStart(2, "0")}`;
+
+/* ── live now: one compact lane per job on the run's own clock ── */
+function MiniTrace({ run, jobs }: { run: Run; jobs: Job[] }) {
+	const t0 = Date.parse(run.started_at ?? run.created_at);
+	const nowS = (Date.now() - t0) / 1000;
+	const endS = Math.max(240, Math.ceil((nowS * 1.18) / 60) * 60);
+	const pct = (s: number) => (s / endS) * 100;
+	const at = (iso: string | null) => (iso ? (Date.parse(iso) - t0) / 1000 : null);
+	return (
+		<div className="mini">
+			{jobs.map((j) => {
+				const st = at(j.started_at);
+				const en = at(j.completed_at);
+				const hue = `pat-${jobHue(j.job_key || j.name)}`;
+				const running = st != null && en == null;
+				return (
+					<div className="lane" key={j.id}>
+						{j.status === "skipped" || j.status === "cancelled" ? null : st == null ? (
+							// parked in the queue — a dashed stub just past now
+							<i
+								className="bar q"
+								style={{
+									left: `${pct(Math.min(nowS + 8, endS - 30))}%`,
+									width: `${pct(Math.min(40, Math.max(8, endS - nowS - 38)))}%`,
+								}}
+							/>
+						) : running ? (
+							<>
+								<i className={`bar ${hue}`} style={{ left: `${pct(st)}%`, width: `${pct(nowS - st)}%` }} />
+								<i className="head" style={{ left: `${pct(nowS)}%` }} />
+							</>
+						) : (
+							<>
+								<i className={`bar ${hue}`} style={{ left: `${pct(st)}%`, width: `${pct(en! - st)}%` }} />
+								{j.conclusion === "failure" && <i className="stopx" style={{ left: `${pct(en!)}%` }} />}
+							</>
+						)}
+					</div>
+				);
+			})}
+			<i className="nowline" style={{ left: `${pct(nowS)}%` }} />
+			<div className="ax">
+				<span>0:00</span>
+				<span>{mmss(endS * 1000)}</span>
+			</div>
+		</div>
+	);
+}
+
+const SEL_KEY = "kern-sel-run";
 
 export function OverviewPage() {
 	const nav = useNavigate();
+	const [selRun, setSelRun] = useState<string | null>(() => sessionStorage.getItem(SEL_KEY));
 	const { data, isLoading, dataUpdatedAt } = useQuery({
 		queryKey: ["overview"],
 		queryFn: () => api.get<OverviewResponse>("/overview"),
@@ -20,11 +134,6 @@ export function OverviewPage() {
 	const { data: runsData } = useQuery({
 		queryKey: ["runs", "all"],
 		queryFn: () => api.get<{ runs: Run[]; total: number }>("/runs?limit=100"),
-		refetchInterval: 8000,
-	});
-	const { data: runners } = useQuery({
-		queryKey: ["runners"],
-		queryFn: () => api.get<{ runners: Runner[] }>("/runners"),
 		refetchInterval: 8000,
 	});
 	const { data: fleetMap } = useQuery({
@@ -39,124 +148,72 @@ export function OverviewPage() {
 	});
 
 	const runs = useMemo(() => runsData?.runs ?? [], [runsData]);
-	const liveRun = runs.find((r) => r.status === "in_progress" || r.status === "queued");
-	// the live run earns its own slot in the detail fan-out — it is not
-	// necessarily inside the recent-six window
+	const liveRuns = useMemo(() => runs.filter(live), [runs]);
+	const recent = useMemo(() => runs.slice(0, 7), [runs]);
+	// job timings power the mini traces and the queue — fan out detail reads
 	const detailRuns = useMemo(
-		() => (liveRun && !runs.slice(0, 6).includes(liveRun) ? [liveRun, ...runs.slice(0, 5)] : runs.slice(0, 6)),
-		[runs, liveRun],
+		() => [...new Map([...liveRuns, ...recent].map((r) => [r.id, r])).values()],
+		[liveRuns, recent],
 	);
-	const recent = detailRuns.slice(0, 6);
 	const details = useRunDetails(detailRuns);
-
-	const liveDetail = useMemo(
-		() => (liveRun ? details[detailRuns.indexOf(liveRun)]?.data : undefined),
-		[liveRun, details, detailRuns],
-	);
-
-	// runner_id → hue of the job it's currently running, for the fleet tint
-	const runnerJob = useMemo(() => {
-		const m = new Map<string, string>();
-		for (const d of details) {
-			for (const j of d.data?.jobs ?? []) {
-				if ((j.status === "in_progress" || j.status === "waiting") && j.runner_id) {
-					m.set(j.runner_id, jobHue(j.job_key || j.name));
-				}
-			}
-		}
-		return m;
-	}, [details]);
+	const detailOf = (id: string) => details[detailRuns.findIndex((r) => r.id === id)]?.data;
 
 	const day = useMemo(() => runsPerDay(runs), [runs]);
+	const lanes = useMemo(() => laneOf(recent), [recent]);
+	const sites = useMemo(() => fleetSites(fleetMap?.runners ?? []), [fleetMap]);
 
 	if (isLoading || !data) return <Spinner />;
 	const o = data.overview;
 	const todayStart = new Date();
 	todayStart.setHours(0, 0, 0, 0);
 	const runsToday = runs.filter((r) => Date.parse(r.created_at) >= todayStart.getTime()).length;
-	const failsToday = runs.filter(
-		(r) => r.conclusion === "failure" && Date.parse(r.created_at) >= todayStart.getTime(),
-	).length;
 	const successRate = o.runs_total ? Math.round((o.runs_success / o.runs_total) * 100) : null;
 
-	const kpis: { k: string; v: string; vs?: string; c: string; cls: string; to: string }[] = [
-		{ k: "Runs today", v: String(runsToday), c: `${o.runs_total} total`, cls: "fl", to: "/runs" },
+	const kpis: { k: string; v: string; vs?: string; c: string; to: string }[] = [
+		{ k: "runs today", v: String(runsToday), c: `${o.runs_total} total`, to: "/runs" },
 		{
-			k: "Success",
+			k: "passed",
 			v: successRate != null ? `${successRate}%` : "—",
 			c: `${o.runs_failure} failed of ${o.runs_total}`,
-			cls: "fl",
 			to: "/usage",
 		},
 		{
-			k: "Queue p95",
-			v: o.p95_queue_seconds ? seconds(o.p95_queue_seconds) : "—",
-			c: o.jobs_queued ? `${o.jobs_queued} waiting` : "no queue waiting",
-			cls: "fl",
+			k: "median run",
+			v: o.avg_run_seconds ? seconds(o.avg_run_seconds) : "—",
+			c: `queue p95 ${o.p95_queue_seconds ? seconds(o.p95_queue_seconds) : "—"}`,
 			to: "/runs?tab=running",
 		},
 		{
-			k: "Runners",
+			k: "queue wait",
+			v: o.jobs_queued ? String(o.jobs_queued) : "0",
+			c: o.jobs_queued ? "jobs waiting" : "clear",
+			to: "/runs?tab=running",
+		},
+		{
+			k: "runners",
 			v: `${o.runners_online}`,
 			vs: `/${o.runners_total}`,
 			c: o.jobs_running ? `${o.jobs_running} jobs running` : "fleet idle",
-			cls: "fl",
 			to: "/runners",
 		},
-		{ k: "Cache", v: String(data.cache.entries), c: bytes(data.cache.bytes), cls: "fl", to: "/cache" },
 	];
+
+	// jobs parked on the queue, oldest first — the mockup's Queue sheet
+	const queued = details
+		.flatMap((d) => (d.data?.jobs ?? []).filter((j) => j.status === "queued" || j.status === "waiting_approval"))
+		.sort((a, b) => Date.parse(a.queued_at) - Date.parse(b.queued_at));
+
+	const pick = (id: string) => {
+		sessionStorage.setItem(SEL_KEY, id);
+		setSelRun(id);
+		nav(`/runs/${id}`);
+	};
 
 	return (
 		<>
-			<PageHeader
-				title={(meta?.name ?? "kern").toLowerCase()}
-				sub={`self-hosted · ${o.runners_online} runner${o.runners_online === 1 ? "" : "s"} · every push runs on contact`}
-				actions={
-					<>
-						<span className={failsToday === 0 && runsToday > 0 ? "tag ok" : "tag"}>
-							<span
-								className={`sq ${failsToday === 0 && runsToday > 0 ? "ok" : "dim"}`}
-								style={{ width: 7, height: 7 }}
-							/>
-							{failsToday === 0 && runsToday > 0 ? "healthy" : "watching"}
-						</span>
-						<span className="text-[11px] text-[var(--faint)]">
-							updated {relTime(new Date(dataUpdatedAt).toISOString())}
-						</span>
-					</>
-				}
-			/>
-
-			{liveRun && (
-				<div
-					className="panel rowlink mt-4 flex cursor-pointer items-center gap-3.5 px-4 py-3"
-					onClick={() => nav(`/runs/${liveRun.id}`)}
-				>
-					<span className="sq live" />
-					<span className="max-w-[46%] flex-none truncate text-[13px] font-medium">
-						{liveRun.workflow_name} #{liveRun.run_number}
-						{liveRun.commit_message ? ` · ${liveRun.commit_message.split("\n")[0]}` : ""}
-					</span>
-					<div className="min-w-[140px] flex-1">
-						<Fingerprint run={liveRun} jobs={liveDetail?.jobs} />
-					</div>
-					<span className="mono flex-none text-[11px] text-[var(--faint)]">
-						{duration(liveRun.started_at ?? liveRun.created_at, null)}
-					</span>
-					{o.avg_run_seconds > 0 && (
-						<span className="flex-none text-[11px] text-[var(--faint)]">
-							est ~{seconds(o.avg_run_seconds)}
-						</span>
-					)}
-					<button className="lnk flex-none" onClick={() => nav(`/runs/${liveRun.id}`)}>
-						View
-					</button>
-				</div>
-			)}
-
 			{(data.webhooks?.failed_24h ?? 0) > 0 && (
 				<div
-					className="panel rowlink mt-4 flex cursor-pointer items-center gap-3.5 border-[var(--err)]/40 px-4 py-3"
+					className="panel rowlink mb-4 flex cursor-pointer items-center gap-3.5 px-6 py-3.5"
 					onClick={() => nav("/deliveries")}
 				>
 					<span className="sq bad" />
@@ -164,7 +221,7 @@ export function OverviewPage() {
 						<span className="font-medium text-[var(--err)]">
 							{data.webhooks!.failed_24h} webhook{data.webhooks!.failed_24h === 1 ? "" : "s"}
 						</span>{" "}
-					failed in the last 24h — pushes may not have become runs.
+						failed in the last 24h — pushes may not have become runs.
 						{data.webhooks!.last_error && (
 							<span className="block truncate font-mono text-[11px] text-[var(--faint)]">
 								{data.webhooks!.last_error}
@@ -177,169 +234,238 @@ export function OverviewPage() {
 				</div>
 			)}
 
-			<div className="panel kpis mt-4">
+			<div className="panel kpis">
 				{kpis.map((k) => (
 					<Link className="kpi rowlink" key={k.k} to={k.to}>
 						<div className="k">{k.k}</div>
 						<div className="v">
 							{k.v}
-							{"vs" in k && k.vs ? <small>{k.vs}</small> : null}
+							{k.vs ? <small>{k.vs}</small> : null}
 						</div>
-						<div className={`c ${k.cls}`}>{k.c}</div>
+						<div className="c fl">{k.c}</div>
 					</Link>
 				))}
 			</div>
 
-			<div className="mt-4 grid grid-cols-[3fr_2fr] items-start gap-4 max-lg:grid-cols-1">
-				<div className="panel">
-					<div className="phead">
-						<span className="pt">Runs per day</span>
-						<span className="r">
-							<span className="jc">
-								<i style={{ background: "var(--ink)" }} />
-								runs
-							</span>
-							<span className="jc">
-								<i style={{ background: "var(--err)" }} />
-								failed
-							</span>
-						</span>
-					</div>
-					<RunsChart days={day} version={meta?.version} />
-				</div>
-				<div className="panel">
-					<div className="phead">
-						<span className="pt">Fleet</span>
-						<span className="r">utilisation now</span>
-					</div>
-					{(runners?.runners ?? []).map((r) => {
-						const hue = runnerJob.get(r.id);
-						const busy = (r.active_jobs ?? 0) > 0;
-						const pct = Math.round(r.cpu_percent ?? 0);
-						return (
-							<div className="fr rowlink" key={r.id} onClick={() => nav("/runners")}>
-								<StatusSq status={busy ? "in_progress" : r.status} />
-								<span className="rn">{r.name}</span>
-								<div className="ubar">
-									<i
-										className={hue ? `u-${hue}` : "u-grey"}
-										style={{ width: `${Math.max(pct, busy ? 4 : 0)}%` }}
-									/>
-								</div>
-								{hue && <span className={`chip ${hue}`}>{hue}</span>}
-								<span className="rs">{pct}%</span>
-							</div>
-						);
-					})}
-					{!runners?.runners.length && (
-						<div className="emptynote">
-							No runners registered — a push waits in queue until one joins.
-						</div>
-					)}
-					{o.jobs_queued ? (
-						<Link className="emptynote rowlink block" to="/runs?tab=running">
-							{o.jobs_queued} job{o.jobs_queued === 1 ? "" : "s"} queued for a runner —
-							click to watch.
-						</Link>
-					) : (
-						<div className="emptynote">
-							Queue is clear. A push picks a runner on contact.
-						</div>
-					)}
-				</div>
-				{fleetMap && (
-					<div className="panel col-span-full">
-						<div className="phead">
-							<span className="pt">Fleet map</span>
-							<span className="r">
-								{fleetMap.control
-									? `control at ${fleetMap.control.city || "?"}${fleetMap.control.country ? `, ${fleetMap.control.country}` : ""}`
-									: "control plane unlocated"}
-								{" · "}arcs are live jobs
-							</span>
-						</div>
-						<FleetMap data={fleetMap} />
-					</div>
-				)}
-			</div>
-
-			<div className="mt-4 grid grid-cols-[3fr_2fr] items-start gap-4 max-lg:grid-cols-1">
-				<div className="panel">
+			<div className="ov">
+				{/* left — recent runs on the commit graph */}
+				<div className="panel ovl">
 					<div className="phead">
 						<span className="pt">Recent runs</span>
 						<span className="r">
-							<span className="jc">
-								<i className="j-lint" />
-								lint
+							live, newest first
+							<span className="hidden sm:inline">
+								· updated {relTime(new Date(dataUpdatedAt).toISOString())}
 							</span>
-							<span className="jc">
-								<i className="j-build" />
-								build
-							</span>
-							<span className="jc">
-								<i className="j-web" />
-								web
-							</span>
-							<button className="lnk" onClick={() => nav("/runs")}>
-								View all
-							</button>
+							{meta?.name && <span className="hidden sm:inline">· {meta.name.toLowerCase()}</span>}
 						</span>
+					</div>
+					<div className="key">
+						<span>
+							<i className="sw pat-lint" />
+							lint
+						</span>
+						<span>
+							<i className="sw pat-build" />
+							build
+						</span>
+						<span>
+							<i className="sw pat-web" />
+							web
+						</span>
+						<Link to="/runs" className="keygo">
+							All runs
+						</Link>
 					</div>
 					{recent.length === 0 && (
 						<div className="emptynote">
 							No runs yet — push to a wired repo or trigger a workflow.
 						</div>
 					)}
-					{recent.map((r, i) => {
-						const live = r.status === "in_progress" || r.status === "queued";
-						return (
-							<Link
+					<div className="rl" style={{ paddingLeft: GW, marginLeft: 14, marginRight: 4 }}>
+						<div
+							dangerouslySetInnerHTML={{ __html: graphSVG(recent, lanes, selRun) }}
+							style={{ position: "absolute", left: 0, top: 0, pointerEvents: "none" }}
+						/>
+						{recent.map((r) => (
+							<div
 								key={r.id}
-								to={`/runs/${r.id}`}
-								className="rowlink grid grid-cols-[14px_44px_minmax(0,1fr)_84px_76px_52px] items-center gap-3 border-b border-[var(--line)] px-4 py-[9px] last:border-0"
+								className={`rw${r.id === selRun ? " sel" : ""}`}
+								role="link"
+								tabIndex={0}
+								onClick={() => pick(r.id)}
+								onKeyDown={(e) => {
+									if (e.key === "Enter") pick(r.id);
+								}}
 							>
-								<StatusSq status={r.status} conclusion={r.conclusion} />
-								<span className="font-mono text-xs text-[var(--faint)]">#{r.run_number}</span>
-								<Fingerprint run={r} jobs={details[i]?.data?.jobs} small />
-								<span
-									className="truncate text-right font-mono text-[10px]"
-									style={{ color: projectColor(r.project_slug) }}
-									title={r.project_name}
+								<div style={{ minWidth: 0 }}>
+									<div className="t">
+										<span>
+											{r.commit_message?.split("\n")[0] ||
+												`${r.workflow_name} #${r.run_number}`}
+										</span>
+									</div>
+									<div className="m">
+										<b>
+											{r.workflow_name} #{r.run_number}
+										</b>
+										<span>{refName(r.ref)}</span>
+										<code className="font-mono">{shortSha(r.sha)}</code>
+										<Link
+											to={`/projects/${r.project_slug}`}
+											onClick={(e) => e.stopPropagation()}
+											className="lnk"
+											style={{ color: projectColor(r.project_slug) }}
+										>
+											{r.project_slug}
+										</Link>
+									</div>
+								</div>
+								<div
+									className={`du ${live(r) ? "live" : r.conclusion === "failure" ? "fail" : ""}`}
 								>
-									{r.project_slug}
-								</span>
-								<span className="text-right font-mono text-xs text-[var(--dim)]">
 									{duration(r.started_at, r.completed_at)}
-								</span>
-								<span className="text-right text-[11px] text-[var(--faint)]">
-									{live ? "now" : relTime(r.created_at)}
-								</span>
-							</Link>
-						);
-					})}
+									<small>{live(r) ? "now" : relTime(r.created_at)}</small>
+								</div>
+							</div>
+						))}
+					</div>
 				</div>
-				<div className="panel rowlink cursor-pointer" onClick={() => nav("/cache")}>
-					<div className="phead">
-						<span className="pt">Cache</span>
-						<span className="r">7d eviction · click to manage</span>
-					</div>
-					<div className="bwrap">
-						<div className="flex justify-between text-xs">
-							<span className="pt">Stored</span>
-							<span className="mono text-[var(--dim)]">{bytes(data.cache.bytes)}</span>
+
+				{/* right — live runs, the fleet, and the shape of the work */}
+				<div className="stack">
+					{liveRuns.length > 0 && (
+						<div className="panel">
+							<div className="phead">
+								<span className="pt">Live now</span>
+								<span className="r">across the fleet</span>
+							</div>
+							{liveRuns.map((r) => (
+								<div
+									key={r.id}
+									className="ln"
+									role="link"
+									tabIndex={0}
+									onClick={() => pick(r.id)}
+									onKeyDown={(e) => {
+										if (e.key === "Enter") pick(r.id);
+									}}
+								>
+									<div className="h">
+										<div className="lt">
+											{r.commit_message?.split("\n")[0] ||
+												`${r.workflow_name} #${r.run_number}`}
+										</div>
+										<div className="ld">
+											{duration(r.started_at ?? r.created_at, null)}
+											<small>
+												{r.workflow_name} #{r.run_number}
+											</small>
+										</div>
+									</div>
+									<div className="lm">
+										{refName(r.ref)} · {shortSha(r.sha)} · {r.project_slug}
+										{(detailOf(r.id)?.jobs ?? []).filter(
+											(j) => j.status === "in_progress" || j.status === "waiting",
+										).length > 0 &&
+											` · ${(detailOf(r.id)?.jobs ?? [])
+												.filter((j) => j.status === "in_progress" || j.status === "waiting")
+												.map((j) => j.name)
+												.join(", ")} running`}
+									</div>
+									<MiniTrace run={r} jobs={detailOf(r.id)?.jobs ?? []} />
+								</div>
+							))}
 						</div>
-					</div>
-					<div className="kv">
-						<span className="k">Entries</span>
-						<span className="v">{data.cache.entries}</span>
-					</div>
-					<div className="kv">
-						<span className="k">Avg run</span>
-						<span className="v">{o.avg_run_seconds ? seconds(o.avg_run_seconds) : "—"}</span>
-					</div>
-					<div className="kv">
-						<span className="k">Last run</span>
-						<span className="v">{o.last_run_at ? relTime(o.last_run_at) : "—"}</span>
+					)}
+
+					{fleetMap && (
+						<div className="panel">
+							<div className="phead">
+								<span className="pt">Fleet</span>
+								<span className="r">
+									{`${sites.length} site${sites.length === 1 ? "" : "s"} · arcs are live jobs`}
+									<Link to="/runners" className="keygo">
+										Manage
+									</Link>
+								</span>
+							</div>
+							<div className="map">
+								<FleetMap data={fleetMap} />
+							</div>
+							<div className="mapfoot">
+								{sites.map((s) => (
+									<span className="chip2" key={s.key}>
+										<i
+											className={`sq ${s.st === "live" ? "live" : s.st === "idle" ? "idle" : "dim"}`}
+										/>
+										{s.code} · {s.runners.length} runner{s.runners.length === 1 ? "" : "s"}
+										{s.st === "live" ? ` · ${s.jobs.length} live` : s.st === "off" ? " · down" : ""}
+									</span>
+								))}
+								{fleetMap.control && (
+									<span className="chip2">
+										<i className="sq ok" />
+										{siteLabel(fleetMap.control.city)} · control plane
+									</span>
+								)}
+							</div>
+							{o.jobs_queued ? (
+								<Link className="emptynote rowlink block" to="/runs?tab=running">
+									{o.jobs_queued} job{o.jobs_queued === 1 ? "" : "s"} queued for a runner —
+									click to watch.
+								</Link>
+							) : null}
+						</div>
+					)}
+
+					<div className="duo">
+						<div className="panel">
+							<div className="phead">
+								<span className="pt">Runs per day</span>
+								<span className="r">14d bars · 10w grid</span>
+							</div>
+							<RunsChart days={day} version={meta?.version} />
+							<ActivityMap runs={runsData?.runs ?? []} weeks={10} />
+						</div>
+						<div className="panel">
+							<div className="phead">
+								<span className="pt">Queue</span>
+								<span className="r">
+									{o.jobs_queued} job{o.jobs_queued === 1 ? "" : "s"} waiting
+								</span>
+							</div>
+							<div className="qwrap">
+								{queued.length === 0 && (
+									<div className="qrow dim">nothing waiting — the fleet is clear</div>
+								)}
+								{queued.slice(0, 5).map((j) => (
+									<Link
+										to={`/runs/${j.run_id}`}
+										className="qrow rowlink"
+										key={j.id}
+									>
+										<i className={`sw pat-${jobHue(j.job_key || j.name)}`} />
+										<div>
+											<b>{j.name}</b>
+											<small>
+												{j.status === "waiting_approval"
+													? "needs an approval"
+													: j.needs.length
+														? `waits for ${j.needs.join(", ")}`
+														: "waiting for a runner"}
+											</small>
+										</div>
+										<span className="wt">
+											~{mmss(Date.now() - Date.parse(j.queued_at))}
+										</span>
+									</Link>
+								))}
+								{queued.length > 5 && (
+									<div className="qrow dim">+{queued.length - 5} more waiting</div>
+								)}
+							</div>
+						</div>
 					</div>
 				</div>
 			</div>
@@ -347,4 +473,4 @@ export function OverviewPage() {
 	);
 }
 
-
+const siteLabel = (city: string) => city.replace(/\s.*/, "").slice(0, 3).toLowerCase() || "hub";

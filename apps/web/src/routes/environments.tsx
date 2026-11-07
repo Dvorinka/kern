@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Trash2 } from "lucide-react";
+import { Globe, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import type { Deployment, Environment, Project } from "../lib/types";
@@ -28,7 +28,9 @@ export function EnvironmentsPage() {
 		queryKey: ["environments", slug],
 		enabled: slug !== "",
 		queryFn: () =>
-			api.get<{ environments: Environment[] }>(`/projects/${encodeURIComponent(slug)}/environments`),
+			api.get<{ environments: Environment[] }>(
+				`/projects/${encodeURIComponent(slug)}/environments`,
+			),
 	});
 	const deps = useQuery({
 		queryKey: ["deployments", slug],
@@ -44,7 +46,7 @@ export function EnvironmentsPage() {
 
 	return (
 		<>
-			<PageHeader
+			<PageHeader mark="live"
 				title="Environments"
 				sub="A protected environment can require reviewers, a wait, and a branch pattern"
 				actions={
@@ -62,6 +64,11 @@ export function EnvironmentsPage() {
 									</option>
 								))}
 							</select>
+							{slug && (
+								<Link to={`/projects/${slug}`} className="lnk text-xs" title="Open project">
+									project
+								</Link>
+							)}
 							<Button size="sm" variant="primary" onClick={() => setAdding((a) => !a)}>
 								Add environment
 							</Button>
@@ -75,36 +82,60 @@ export function EnvironmentsPage() {
 				</Card>
 			) : (
 				<>
-					{adding && slug && (
-						<AddEnvironment
-							slug={slug}
-							onClose={() => setAdding(false)}
-						/>
-					)}
+					{adding && slug && <AddEnvironment slug={slug} onClose={() => setAdding(false)} />}
 					{envs.isLoading ? (
 						<Spinner />
 					) : (
-						<Card>
-							{!envs.data || envs.data.environments.length === 0 ? (
-								<EmptyState
-									title="No environments"
-									hint="A job's environment: key creates one on first use. Protect it here before that run."
-								/>
-							) : (
-								envs.data.environments.map((env) => (
-									<EnvRow key={env.id} slug={slug} env={env} />
-								))
+						<>
+							{(envs.data?.environments.length ?? 0) > 0 && (
+								<div className="panel kpis mb-4">
+									<div className="kpi">
+										<div className="k">environments</div>
+										<div className="v">{envs.data!.environments.length}</div>
+										<div className="c">in {slug}</div>
+									</div>
+									<div className="kpi">
+										<div className="k">protected</div>
+										<div className="v">
+											{envs.data!.environments.filter((e) => e.protected).length}
+										</div>
+										<div className="c">with gates on</div>
+									</div>
+									<div className="kpi">
+										<div className="k">waiting</div>
+										<div className="v">
+											{(deps.data?.deployments ?? []).filter((d) => d.status === "queued").length}
+										</div>
+										<div className="c">for approval</div>
+									</div>
+								</div>
 							)}
-						</Card>
+							<Card>
+								{!envs.data || envs.data.environments.length === 0 ? (
+									<EmptyState icon={<Globe size={19} />}
+										title="No environments"
+										hint="A job's environment: key creates one on first use. Protect it here before that run."
+									/>
+								) : (
+									envs.data.environments.map((env) => <EnvRow key={env.id} slug={slug} env={env} />)
+								)}
+							</Card>
+						</>
 					)}
 					{envs.error && <p className="mt-2 text-xs text-[var(--err)]">{envs.error.message}</p>}
-					<h2 className="mb-2 mt-6 text-[13px] font-semibold">Deployments</h2>
+					<div className="sec2">
+						<h3>Deployments</h3>
+						<span>{slug} history</span>
+					</div>
 					{deps.isLoading ? (
 						<Spinner />
 					) : (
 						<Card>
 							{!deps.data || deps.data.deployments.length === 0 ? (
-								<EmptyState title="No deployments" hint="They appear when a job names an environment." />
+								<EmptyState
+									title="No deployments"
+									hint="They appear when a job names an environment."
+								/>
 							) : (
 								deps.data.deployments.map((d) => <DeploymentRow key={d.id} d={d} slug={slug} />)
 							)}
@@ -120,10 +151,13 @@ function AddEnvironment({ slug, onClose }: { slug: string; onClose: () => void }
 	const qc = useQueryClient();
 	const put = useMutation({
 		mutationFn: (body: { name: string; protected: boolean; required_approvals: number }) =>
-			api.put(`/projects/${encodeURIComponent(slug)}/environments/${encodeURIComponent(body.name)}`, {
-				protected: body.protected,
-				required_approvals: body.required_approvals,
-			}),
+			api.put(
+				`/projects/${encodeURIComponent(slug)}/environments/${encodeURIComponent(body.name)}`,
+				{
+					protected: body.protected,
+					required_approvals: body.required_approvals,
+				},
+			),
 		onSuccess: () => {
 			onClose();
 			qc.invalidateQueries({ queryKey: ["environments", slug] });
@@ -187,7 +221,10 @@ function EnvRow({ slug, env }: { slug: string; env: Environment }) {
 	const qc = useQueryClient();
 	const put = useMutation({
 		mutationFn: (body: EnvRule) =>
-			api.put(`/projects/${encodeURIComponent(slug)}/environments/${encodeURIComponent(env.name)}`, body),
+			api.put(
+				`/projects/${encodeURIComponent(slug)}/environments/${encodeURIComponent(env.name)}`,
+				body,
+			),
 		onSuccess: () => qc.invalidateQueries({ queryKey: ["environments", slug] }),
 	});
 	const del = useMutation({
@@ -216,7 +253,12 @@ function EnvRow({ slug, env }: { slug: string; env: Environment }) {
 			branch_patterns: splitList(patterns),
 			...patch,
 		};
-		if (next.protected && next.required_approvals < 1 && next.wait_minutes < 1 && next.branch_policy !== "selected") {
+		if (
+			next.protected &&
+			next.required_approvals < 1 &&
+			next.wait_minutes < 1 &&
+			next.branch_policy !== "selected"
+		) {
 			next.required_approvals = 1;
 		}
 		return next;
@@ -241,7 +283,11 @@ function EnvRow({ slug, env }: { slug: string; env: Environment }) {
 					))}
 				</select>
 			</label>
-			<Button size="sm" disabled={put.isPending} onClick={() => put.mutate(rule({ protected: !env.protected }))}>
+			<Button
+				size="sm"
+				disabled={put.isPending}
+				onClick={() => put.mutate(rule({ protected: !env.protected }))}
+			>
 				{env.protected ? "Open" : "Protect"}
 			</Button>
 			<Button
@@ -312,7 +358,9 @@ function EnvRow({ slug, env }: { slug: string; env: Environment }) {
 				</div>
 			)}
 			{(put.error || del.error) && (
-				<span className="basis-full text-xs text-[var(--err)]">{(put.error ?? del.error)?.message}</span>
+				<span className="basis-full text-xs text-[var(--err)]">
+					{(put.error ?? del.error)?.message}
+				</span>
 			)}
 		</Row>
 	);
@@ -368,11 +416,21 @@ function DeploymentRow({ d, slug }: { d: Deployment; slug: string }) {
 			{waiting && allowed && (
 				<>
 					{waitingOnPeople && (
-						<Button size="sm" variant="primary" disabled={act.isPending} onClick={() => act.mutate("approve")}>
+						<Button
+							size="sm"
+							variant="primary"
+							disabled={act.isPending}
+							onClick={() => act.mutate("approve")}
+						>
 							Approve
 						</Button>
 					)}
-					<Button size="sm" variant="danger" disabled={act.isPending} onClick={() => act.mutate("reject")}>
+					<Button
+						size="sm"
+						variant="danger"
+						disabled={act.isPending}
+						onClick={() => act.mutate("reject")}
+					>
 						Reject
 					</Button>
 				</>

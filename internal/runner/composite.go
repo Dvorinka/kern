@@ -19,10 +19,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dvorinka/kern/internal/actions"
 	"github.com/dvorinka/kern/internal/expressions"
+	"go.uber.org/zap"
 )
 
 const (
@@ -212,27 +214,38 @@ func (e *executor) fetchAction(ctx context.Context, step StepSpec, r actions.Rem
 			return "", "", err
 		}
 		repoURL := e.actionRepoBase() + "/" + r.Owner + "/" + r.Repo
-		git := func(args ...string) error {
-			cmd := exec.CommandContext(ctx, "git", append([]string{"-C", base}, args...)...)
-			out, err := cmd.CombinedOutput()
-			if err != nil {
-				return fmt.Errorf("git %s: %s", strings.Join(args, " "), tailStr(string(out), 300))
+		fetched := false
+		if sha := e.resolveActionSHA(ctx, repoURL, r.Ref); sha != "" {
+			if err := e.fetchViaActionCache(ctx, repoURL, r, sha, base); err != nil {
+				e.log.Debug("action cache path failed, fetching directly",
+					zap.String("repo", repoURL), zap.Error(err))
+			} else {
+				fetched = true
 			}
-			return nil
 		}
-		if err := git("init", "-q"); err != nil {
-			return "", "", err
-		}
-		if err := git("remote", "add", "origin", repoURL); err != nil {
-			return "", "", err
-		}
-		// fetch by name works for branches and tags; GitHub also serves
-		// reachable commit SHAs, which covers pinned actions.
-		if err := git("fetch", "--depth", "1", "origin", r.Ref); err != nil {
-			return "", "", fmt.Errorf("ref %s not fetchable from %s (public https only)", r.Ref, repoURL)
-		}
-		if err := git("checkout", "-q", "FETCH_HEAD"); err != nil {
-			return "", "", err
+		if !fetched {
+			git := func(args ...string) error {
+				cmd := exec.CommandContext(ctx, "git", append([]string{"-C", base}, args...)...)
+				out, err := cmd.CombinedOutput()
+				if err != nil {
+					return fmt.Errorf("git %s: %s", strings.Join(args, " "), tailStr(string(out), 300))
+				}
+				return nil
+			}
+			if err := git("init", "-q"); err != nil {
+				return "", "", err
+			}
+			if err := git("remote", "add", "origin", repoURL); err != nil {
+				return "", "", err
+			}
+			// fetch by name works for branches and tags; GitHub also serves
+			// reachable commit SHAs, which covers pinned actions.
+			if err := git("fetch", "--depth", "1", "origin", r.Ref); err != nil {
+				return "", "", fmt.Errorf("ref %s not fetchable from %s (public https only)", r.Ref, repoURL)
+			}
+			if err := git("checkout", "-q", "FETCH_HEAD"); err != nil {
+				return "", "", err
+			}
 		}
 		e.actionDirs[key] = base
 	}
@@ -245,6 +258,232 @@ func (e *executor) fetchAction(ctx context.Context, step StepSpec, r actions.Rem
 		container += "/" + r.Path
 	}
 	return host, container, nil
+}
+
+// --- persistent action cache ----------------------------------------------
+//
+// Remote actions were re-cloned per job. They are now cached under
+// _cache/_actions keyed by resolved commit SHA — content-addressed, so a
+// branch that moved simply produces a new key and old entries age out.
+// Each job still gets its own copy under the job workdir: the container
+// mount stays per-job, and trusted jobs keep their read-write actions mount
+// without ever touching the shared cache.
+
+var actionCacheLocks sync.Map // cacheKey → *sync.Mutex
+
+func actionCacheRoot(workRoot string) string {
+	return filepath.Join(cacheDir(workRoot), "_actions")
+}
+
+// isActionSHA reports whether ref is already a pinned commit SHA.
+func isActionSHA(ref string) bool {
+	if len(ref) != 40 && len(ref) != 64 {
+		return false
+	}
+	for _, c := range ref {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+// parseLSRemote picks the best ref from `git ls-remote` output for the
+// requested ref: a branch, a peeled annotated tag (^{}, i.e. the commit),
+// a lightweight tag, or an exact full refname — in that order.
+func parseLSRemote(out, ref string) string {
+	lines := strings.Split(out, "\n")
+	want := []string{
+		"refs/heads/" + ref,
+		"refs/tags/" + ref + "^{}",
+		"refs/tags/" + ref,
+		ref,
+	}
+	for _, w := range want {
+		for _, ln := range lines {
+			f := strings.Fields(ln)
+			if len(f) == 2 && f[1] == w {
+				return f[0]
+			}
+		}
+	}
+	for _, ln := range lines {
+		f := strings.Fields(ln)
+		if len(f) == 2 && (f[1] == ref || strings.HasSuffix(f[1], "/"+ref)) {
+			return f[0]
+		}
+	}
+	return ""
+}
+
+func (e *executor) refPointerPath(repoURL, ref string) string {
+	return filepath.Join(actionCacheRoot(e.cfg.WorkRoot), "refs",
+		nonIDRe.ReplaceAllString(repoURL+"__"+ref, "-"))
+}
+
+func (e *executor) rememberRefSHA(repoURL, ref, sha string) {
+	p := e.refPointerPath(repoURL, ref)
+	_ = os.MkdirAll(filepath.Dir(p), 0o755)
+	_ = os.WriteFile(p, []byte(sha+"\n"), 0o644)
+}
+
+func (e *executor) cachedRefSHA(repoURL, ref string) string {
+	b, err := os.ReadFile(e.refPointerPath(repoURL, ref))
+	if err != nil {
+		return ""
+	}
+	sha := strings.TrimSpace(string(b))
+	if !isActionSHA(sha) {
+		return ""
+	}
+	return sha
+}
+
+// resolveActionSHA maps a mutable ref (branch/tag) to a commit SHA so the
+// cache key is content-addressed. Pinned SHAs pass through untouched.
+// Returns "" when the ref cannot be resolved — the caller then fetches
+// directly, preserving the old behaviour for unreachable git hosts.
+func (e *executor) resolveActionSHA(ctx context.Context, repoURL, ref string) string {
+	if isActionSHA(ref) {
+		return strings.ToLower(ref)
+	}
+	ctxCmd, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctxCmd, "git", "ls-remote", repoURL, ref).CombinedOutput()
+	if err != nil {
+		if sha := e.cachedRefSHA(repoURL, ref); sha != "" {
+			e.log.Debug("ls-remote failed; using last resolved SHA",
+				zap.String("repo", repoURL), zap.String("ref", ref), zap.Error(err))
+			return sha
+		}
+		return ""
+	}
+	if sha := parseLSRemote(string(out), ref); sha != "" {
+		e.rememberRefSHA(repoURL, ref, sha)
+		return sha
+	}
+	return ""
+}
+
+// fetchViaActionCache exports the cached tree for sha into the job's actions
+// dir. The cache itself lives outside the job dir so concurrent jobs share
+// one clone; .git is stripped because actions run without it anyway (the
+// official runner downloads actions as tarballs).
+func (e *executor) fetchViaActionCache(ctx context.Context, repoURL string, r actions.RemoteRef, sha, base string) error {
+	cacheKey := nonIDRe.ReplaceAllString(r.Owner+"__"+r.Repo+"__"+sha, "-")
+	src, err := e.ensureActionCache(ctx, repoURL, cacheKey, sha, r.Ref)
+	if err != nil {
+		return err
+	}
+	if out, err := exec.CommandContext(ctx, "cp", "-a", src+string(os.PathSeparator)+".", base+string(os.PathSeparator)).CombinedOutput(); err != nil {
+		return fmt.Errorf("copy action cache: %s", tailStr(string(out), 200))
+	}
+	_ = os.RemoveAll(filepath.Join(base, ".git"))
+	e.maybePruneActionCache(filepath.Dir(src))
+	return nil
+}
+
+func actionCacheLock(key string) *sync.Mutex {
+	v, _ := actionCacheLocks.LoadOrStore(key, &sync.Mutex{})
+	return v.(*sync.Mutex)
+}
+
+func actionCacheGitDir(dir string) bool {
+	st, err := os.Stat(filepath.Join(dir, ".git"))
+	return err == nil && st.IsDir()
+}
+
+// ensureActionCache returns the populated cache dir for cacheKey, cloning
+// into a temp dir and renaming into place so concurrent jobs never observe a
+// half-fetched tree. sha is tried first; hosts that refuse SHA fetches fall
+// back to the original ref.
+func (e *executor) ensureActionCache(ctx context.Context, repoURL, cacheKey, sha, ref string) (string, error) {
+	root := actionCacheRoot(e.cfg.WorkRoot)
+	dir := filepath.Join(root, cacheKey)
+	if actionCacheGitDir(dir) {
+		touchDir(dir)
+		return dir, nil
+	}
+	mu := actionCacheLock(cacheKey)
+	mu.Lock()
+	defer mu.Unlock()
+	if actionCacheGitDir(dir) {
+		touchDir(dir)
+		return dir, nil
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return "", err
+	}
+	tmp, err := os.MkdirTemp(root, ".tmp-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(tmp)
+	git := func(args ...string) error {
+		cmd := exec.CommandContext(ctx, "git", append([]string{"-C", tmp}, args...)...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("git %s: %s", strings.Join(args, " "), tailStr(string(out), 300))
+		}
+		return nil
+	}
+	if err := git("init", "-q"); err != nil {
+		return "", err
+	}
+	if err := git("remote", "add", "origin", repoURL); err != nil {
+		return "", err
+	}
+	fetchErr := git("fetch", "--depth", "1", "origin", sha)
+	if fetchErr != nil && ref != sha {
+		fetchErr = git("fetch", "--depth", "1", "origin", ref)
+	}
+	if fetchErr != nil {
+		return "", fmt.Errorf("ref %s not fetchable from %s (public https only)", ref, repoURL)
+	}
+	if err := git("checkout", "-q", "FETCH_HEAD"); err != nil {
+		return "", err
+	}
+	if err := os.Rename(tmp, dir); err != nil {
+		if actionCacheGitDir(dir) {
+			return dir, nil
+		}
+		return "", err
+	}
+	return dir, nil
+}
+
+func touchDir(dir string) {
+	now := time.Now()
+	_ = os.Chtimes(dir, now, now)
+}
+
+// maybePruneActionCache sweeps cache entries unused for 7 days, once per
+// job. Entries in use get their mtime refreshed on every hit, so hot actions
+// stay resident and cold ones age out.
+func (e *executor) maybePruneActionCache(root string) {
+	if e.actionCachePruned {
+		return
+	}
+	e.actionCachePruned = true
+	cutoff := time.Now().Add(-7 * 24 * time.Hour)
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	for _, en := range entries {
+		if !en.IsDir() {
+			continue
+		}
+		name := en.Name()
+		if name == "refs" {
+			continue
+		}
+		info, err := en.Info()
+		if err != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		_ = os.RemoveAll(filepath.Join(root, name))
+	}
 }
 
 // actionRepoBase derives the git host for remote actions from the run's clone
