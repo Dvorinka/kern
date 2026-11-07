@@ -172,6 +172,10 @@ func (e *executor) runDockerHook(ctx context.Context, h *actionHook, script stri
 	if script == "" {
 		return "success", 0
 	}
+	if e.host {
+		e.logStep(h.step, "KERN: "+h.step.Uses+" (runs.using: docker) needs the docker executor — this runner uses host execution")
+		return "failure", 1
+	}
 	image, err := e.resolveDockerImage(ctx, h.step, h.meta, h.hostDir)
 	if err != nil {
 		e.logStep(h.step, "KERN: "+err.Error())
@@ -239,7 +243,7 @@ func (e *executor) resolveStepAction(ctx context.Context, step StepSpec) (*actio
 		}
 		dir := strings.TrimPrefix(filepath.ToSlash(filepath.Clean(ref)), "./")
 		hostDir = filepath.Join(e.workRoot(), "workspace", filepath.FromSlash(dir))
-		actionPath = containerWorkspace + "/" + dir
+		actionPath = e.wsPath() + "/" + dir
 	case actions.KindRemote:
 		r, err := actions.ParseRemote(ref)
 		if err != nil {

@@ -40,21 +40,25 @@ func (e *executor) nodeHostDir() string {
 	return filepath.Join(e.cfg.WorkRoot, "_node", nodeRelease)
 }
 
-// containerNodeBin is the node binary as the job container sees it.
-func containerNodeBin() string {
+// containerNodeBin is the node binary as executed code sees it: /kern/node
+// inside job containers, the host path on the host executor.
+func (e *executor) nodeBin() string {
+	if e.host {
+		return filepath.Join(e.nodeHostDir(), "bin", "node")
+	}
 	return containerNodeRoot + "/" + nodeRelease + "/bin/node"
 }
 
-// containerNodeDir is that binary's directory. Actions start with an absolute
+// nodeBinDir is that binary's directory. Actions start with an absolute
 // node path, but scripts they spawn (pnpm's preinstall) call `node` on PATH.
-func containerNodeDir() string {
-	return filepath.Dir(containerNodeBin())
+func (e *executor) nodeBinDir() string {
+	return filepath.Dir(e.nodeBin())
 }
 
-// nodeArchive maps the host platform to the dist tarball name.
+// nodeArchive maps the runner platform to the dist tarball name.
 func nodeArchive() (string, error) {
-	if runtime.GOOS != "linux" {
-		return "", fmt.Errorf("JavaScript actions need a linux runner host (got %s)", runtime.GOOS)
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		return "", fmt.Errorf("JavaScript actions need a linux or darwin runner host (got %s)", runtime.GOOS)
 	}
 	var arch string
 	switch runtime.GOARCH {
@@ -65,7 +69,7 @@ func nodeArchive() (string, error) {
 	default:
 		return "", fmt.Errorf("JavaScript actions are unsupported on %s runners", runtime.GOARCH)
 	}
-	return fmt.Sprintf("node-%s-linux-%s.tar.gz", nodeRelease, arch), nil
+	return fmt.Sprintf("node-%s-%s-%s.tar.gz", nodeRelease, runtime.GOOS, arch), nil
 }
 
 // ensureNode provisions the Node distribution once per runner host. A
@@ -215,12 +219,12 @@ func (e *executor) runNodeScript(ctx context.Context, step StepSpec, meta *actio
 		e.logStep(step, "KERN: node runtime: "+err.Error())
 		return "failure", 1
 	}
-	e.enc.persistPaths([]string{containerNodeDir()})
+	e.enc.persistPaths([]string{e.nodeBinDir()})
 	sub := StepSpec{
 		Number:         step.Number,
 		ID:             step.ID,
 		Name:           step.Name,
-		Run:            shellQuote(containerNodeBin()) + " " + shellQuote(actionPath+"/"+script),
+		Run:            shellQuote(e.nodeBin()) + " " + shellQuote(actionPath+"/"+script),
 		Shell:          e.shell,
 		Env:            e.nodeActionEnv(step, meta, actionPath, state),
 		TimeoutSeconds: step.TimeoutSeconds,

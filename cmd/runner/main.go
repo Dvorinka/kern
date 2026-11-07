@@ -53,6 +53,9 @@ Environment only:
   KERN_ACTIONS_GIT_BASE     git base URL for remote actions (default: the run's
                             repo host, or https://github.com)
   KERN_JOB_CPUS / KERN_JOB_MEMORY   per-job container limits (unset CPUs share the host)
+  KERN_RUNNER_EXECUTOR    docker|host — execution substrate (default: docker on
+                          linux, host on darwin; host runs steps as local
+                          processes and only claims trusted-tier jobs)
   KERN_RUNNER_UPDATE=1      replace this container when the control plane
                             offers a signed ghcr.io/dvorinka/kern-runner image.
                             Leave unset on the compose runner; the host updater
@@ -296,6 +299,18 @@ func agentConfig(o options) runner.Config {
 		cfg.DiskMinFreePct, _ = strconv.ParseFloat(v, 64)
 	} else {
 		cfg.DiskMinFreePct = 10
+	}
+	cfg.Executor = os.Getenv("KERN_RUNNER_EXECUTOR")
+	if cfg.Executor == "" {
+		if runtime.GOOS == "darwin" {
+			cfg.Executor = "host"
+		} else {
+			cfg.Executor = "docker"
+		}
+	}
+	if cfg.Executor != "docker" && cfg.Executor != "host" {
+		fmt.Fprintf(os.Stderr, "kern-runner: KERN_RUNNER_EXECUTOR must be docker or host, got %q\n", cfg.Executor)
+		os.Exit(2)
 	}
 	return cfg
 }

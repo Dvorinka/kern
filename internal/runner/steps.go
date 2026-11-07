@@ -113,8 +113,14 @@ func (e *executor) runStep(ctx context.Context, step StepSpec) (string, error) {
 // container. Commands never contain secrets — they are fixed templates.
 func (e *executor) applyFix(ctx context.Context, step StepSpec, fix []string) bool {
 	for _, cmdline := range fix {
-		cmd := exec.CommandContext(ctx, "docker", "exec", "--user", "0:0",
-			e.container, "sh", "-c", cmdline)
+		var cmd *exec.Cmd
+		if e.host {
+			cmd = exec.CommandContext(ctx, "sh", "-c", cmdline)
+			cmd.Dir = e.wsPath()
+		} else {
+			cmd = exec.CommandContext(ctx, "docker", "exec", "--user", "0:0",
+				e.container, "sh", "-c", cmdline)
+		}
 		out, err := cmd.CombinedOutput()
 		if len(out) > 0 {
 			e.logStep(step, "KERN: fix: "+tailStr(string(out), 500))
@@ -193,21 +199,26 @@ func (e *executor) runStepBody(ctx context.Context, step StepSpec) (string, int,
 		pump.write([]byte(hdr))
 	}
 
-	execArgs := []string{"exec",
-		"--user", fmt.Sprintf("%d:%d", e.execUID(), e.execUID()),
-		"-w", containerWorkspace,
-		"--env-file", e.stepEnvPath(step),
+	var cmd *exec.Cmd
+	if e.host {
+		cmd = e.hostStepCmd(stepCtx, step, shell, script)
+	} else {
+		execArgs := []string{"exec",
+			"--user", fmt.Sprintf("%d:%d", e.execUID(), e.execUID()),
+			"-w", containerWorkspace,
+			"--env-file", e.stepEnvPath(step),
+		}
+		extraKeys := make([]string, 0, len(e.stepEnvExtra))
+		for k := range e.stepEnvExtra {
+			extraKeys = append(extraKeys, k)
+		}
+		sort.Strings(extraKeys)
+		for _, k := range extraKeys {
+			execArgs = append(execArgs, "-e", k+"="+e.stepEnvExtra[k])
+		}
+		execArgs = append(execArgs, e.container, shell, script)
+		cmd = exec.CommandContext(stepCtx, "docker", execArgs...)
 	}
-	extraKeys := make([]string, 0, len(e.stepEnvExtra))
-	for k := range e.stepEnvExtra {
-		extraKeys = append(extraKeys, k)
-	}
-	sort.Strings(extraKeys)
-	for _, k := range extraKeys {
-		execArgs = append(execArgs, "-e", k+"="+e.stepEnvExtra[k])
-	}
-	execArgs = append(execArgs, e.container, shell, script)
-	cmd := exec.CommandContext(stepCtx, "docker", execArgs...)
 	stdout, perr := cmd.StdoutPipe()
 	if perr != nil {
 		return "failure", 1, fmt.Errorf("stdout pipe: %w", perr)
@@ -256,6 +267,48 @@ func (e *executor) runStepBody(ctx context.Context, step StepSpec) (string, int,
 		return "success", 0, nil
 	}
 	return "failure", code, nil
+}
+
+// hostStepCmd runs a rendered step script as a local process on the runner
+// host. Environment layering mirrors docker exec: the env file carries job
+// env/secrets/persisted state, jobEnv carries the GITHUB_* contract and wins
+// on conflicts (docker -e beats --env-file), stepEnvExtra wins last.
+func (e *executor) hostStepCmd(ctx context.Context, step StepSpec, shell, script string) *exec.Cmd {
+	// Start from the runner's own environment so steps inherit locale,
+	// USER, SSH_AUTH_SOCK, toolchain PATH additions and friends — host
+	// execution is a bare process, not a container.
+	env := map[string]string{}
+	for _, kv := range os.Environ() {
+		if k, v, ok := strings.Cut(kv, "="); ok {
+			env[k] = v
+		}
+	}
+	if data, err := os.ReadFile(e.stepEnvPath(step)); err == nil {
+		if pairs, perr := parseKeyValue(string(data)); perr == nil {
+			for k, v := range pairs {
+				env[k] = v
+			}
+		}
+	}
+	for k, v := range e.jobEnv() {
+		env[k] = v
+	}
+	for k, v := range e.stepEnvExtra {
+		env[k] = v
+	}
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	cmdEnv := make([]string, 0, len(keys))
+	for _, k := range keys {
+		cmdEnv = append(cmdEnv, k+"="+env[k])
+	}
+	cmd := exec.CommandContext(ctx, shell, script)
+	cmd.Dir = e.wsPath()
+	cmd.Env = cmdEnv
+	return cmd
 }
 
 // runUsesStep dispatches a `uses` step to its runtime: native actions,
@@ -325,17 +378,18 @@ func (e *executor) renderScript(step StepSpec) (string, string, error) {
 	if filepath.Base(shell) != "bash" {
 		pipefail = "set -e\n" // pipefail is a bashism
 	}
+	cmdEnv, scriptBase := e.cmdEnvPath(), e.scriptDirPath()
 	wrapper := "#!" + shell + "\n" +
 		pipefail +
-		"if [ -f " + containerCmdDir + "/PATH_LINES ]; then\n" +
-		"  while IFS= read -r p; do export PATH=\"$p:$PATH\"; done < " + containerCmdDir + "/PATH_LINES\n" +
+		"if [ -f " + cmdEnv + "/PATH_LINES ]; then\n" +
+		"  while IFS= read -r p; do export PATH=\"$p:$PATH\"; done < " + cmdEnv + "/PATH_LINES\n" +
 		"fi\n" +
-		"export GITHUB_ENV=" + containerCmdDir + "/GITHUB_ENV\n" +
-		"export GITHUB_PATH=" + containerCmdDir + "/PATH_LINES\n" +
-		"export GITHUB_OUTPUT=" + containerCmdDir + "/GITHUB_OUTPUT\n" +
-		"export GITHUB_STEP_SUMMARY=" + containerCmdDir + "/STEP_SUMMARY\n" +
-		"export GITHUB_STATE=" + containerCmdDir + "/GITHUB_STATE\n" +
-		"cd " + shellQuote(containerWorkspace) + "\n"
+		"export GITHUB_ENV=" + cmdEnv + "/GITHUB_ENV\n" +
+		"export GITHUB_PATH=" + cmdEnv + "/PATH_LINES\n" +
+		"export GITHUB_OUTPUT=" + cmdEnv + "/GITHUB_OUTPUT\n" +
+		"export GITHUB_STEP_SUMMARY=" + cmdEnv + "/STEP_SUMMARY\n" +
+		"export GITHUB_STATE=" + cmdEnv + "/GITHUB_STATE\n" +
+		"cd " + shellQuote(e.wsPath()) + "\n"
 	if wd := strings.TrimSpace(step.WorkingDirectory); wd != "" {
 		wrapper += "cd " + shellQuote(wd) + "\n"
 	}
@@ -345,7 +399,7 @@ func (e *executor) renderScript(step StepSpec) (string, string, error) {
 	if filepath.Base(shell) == "bash" {
 		bodyFlags = " -eo pipefail "
 	}
-	wrapper += shell + bodyFlags + shellQuote(filepath.Join(containerScriptDir, body)) + "\n"
+	wrapper += shell + bodyFlags + shellQuote(filepath.Join(scriptBase, body)) + "\n"
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(wrapper), 0o755); err != nil {
 		return "", "", err
 	}
@@ -360,7 +414,7 @@ func (e *executor) renderScript(step StepSpec) (string, string, error) {
 	if err := os.WriteFile(filepath.Join(dir, body), []byte(bodyText), 0o644); err != nil {
 		return "", "", err
 	}
-	return filepath.Join(containerScriptDir, name), shell, nil
+	return filepath.Join(scriptBase, name), shell, nil
 }
 
 // writeStepEnv builds the per-step --env-file with job env, secrets, step env and
@@ -420,7 +474,7 @@ func (e *executor) runnerContext() map[string]any {
 	github := map[string]any{
 		"event_name": e.claim.Run.Event, "ref": e.claim.Run.Ref, "sha": e.claim.Run.SHA,
 		"actor": e.claim.Run.Actor, "run_id": e.claim.Run.ID,
-		"run_number": float64(e.claim.Run.Number), "workspace": containerWorkspace,
+		"run_number": float64(e.claim.Run.Number), "workspace": e.wsPath(),
 		"repository": e.claim.Run.RepoFullName, "job": e.claim.Job.Key,
 		"workflow": e.claim.Run.Workflow, "head_ref": e.claim.Run.HeadRef,
 		"head_sha": e.claim.Run.HeadSHA, "event": e.eventPayload,
@@ -436,7 +490,7 @@ func (e *executor) runnerContext() map[string]any {
 	return map[string]any{
 		"github": github, "matrix": matrix, "env": env, "steps": steps, "needs": needs,
 		"inputs": inputs,
-		"runner": runnerContext(e.cfg.Name), "job": map[string]any{},
+		"runner": e.runnerCtxMap(), "job": map[string]any{},
 		"__job_status": e.jobStatusSoFar(),
 		"__workspace":  filepath.Join(e.workRoot(), "workspace"),
 	}
@@ -446,6 +500,18 @@ func (e *executor) runnerContext() map[string]any {
 // containers actually see. Steps like dtolnay/rust-toolchain branch on
 // runner.os inside bash; an empty map interpolates to nothing and breaks
 // the script's syntax.
+// runnerCtxMap is runnerContext plus mode-aware filesystem paths: on the
+// host executor steps see host paths, inside containers the /kern mounts.
+func (e *executor) runnerCtxMap() map[string]any {
+	rc := runnerContext(e.cfg.Name)
+	if e.host {
+		rc["tool_cache"] = e.cachePath() + "/_toolcache"
+		rc["temp"] = e.tmpPath()
+		rc["workspace"] = e.wsPath()
+	}
+	return rc
+}
+
 func runnerContext(name string) map[string]any {
 	if name == "" {
 		name, _ = os.Hostname()

@@ -32,6 +32,7 @@ type registerRequest struct {
 	Labels      []string `json:"labels"`
 	Version     string   `json:"version"`
 	Ephemeral   bool     `json:"ephemeral"`
+	Executor    string   `json:"executor"`
 }
 
 // registerRunner accepts either the shared static join token (dev escape
@@ -63,6 +64,12 @@ func (s *Server) registerRunner(c *gin.Context) {
 	if req.Name == "" {
 		req.Name = "runner-" + uuid.NewString()[:8]
 	}
+	switch req.Executor {
+	case "", "docker", "host":
+	default:
+		fail(c, http.StatusBadRequest, "invalid_executor", "executor must be docker or host")
+		return
+	}
 	token, hash, err := auth.NewToken(auth.RunnerPrefix)
 	if err != nil {
 		s.internalError(c, err)
@@ -72,6 +79,7 @@ func (s *Server) registerRunner(c *gin.Context) {
 		OrgID: orgID, Name: req.Name, Hostname: req.Hostname, OS: req.OS, Arch: req.Arch,
 		CPUs: req.CPUs, MemoryBytes: req.MemoryBytes, DiskBytes: req.DiskBytes,
 		Labels: req.Labels, Version: req.Version, TokenHash: hash, Ephemeral: req.Ephemeral,
+		Executor: req.Executor,
 	})
 	if err != nil {
 		s.internalError(c, err)

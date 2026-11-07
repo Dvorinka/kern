@@ -246,7 +246,10 @@ type Runner struct {
 	GeoSource       string     `json:"geo_source"`
 	GeoIP           string     `json:"geo_ip"`
 	GeoUpdatedAt    *time.Time `json:"geo_updated_at"`
-	CreatedAt       time.Time  `json:"created_at"`
+	// Executor is the job execution substrate: "docker" (container, default)
+	// or "host" (local processes — trusted trust tiers only).
+	Executor  string    `json:"executor"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // HostMetrics is the live utilization snapshot a runner sends with each

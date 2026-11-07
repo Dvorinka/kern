@@ -29,6 +29,10 @@ const containerActionHome = "/github/home"
 // runDockerRef handles `uses: docker://image[:tag]` — no action.yml, the
 // image's own entrypoint runs with the `with:` keys as INPUT_* and args.
 func (e *executor) runDockerRef(ctx context.Context, step StepSpec) (string, int) {
+	if e.host {
+		e.logStep(step, "KERN: "+step.Uses+" needs the docker executor — this runner uses host execution")
+		return "failure", 1
+	}
 	image := strings.TrimPrefix(strings.TrimSpace(step.Uses), "docker://")
 	if !imageRe.MatchString(image) {
 		e.logStep(step, "KERN: invalid docker image reference "+step.Uses)
@@ -109,6 +113,10 @@ func (e *executor) dockerActionEnv(step StepSpec, meta *actions.Meta, actionPath
 // the action directory or pull the named image, then run it with the
 // action's entrypoint/args contract.
 func (e *executor) runDockerAction(ctx context.Context, step StepSpec, meta *actions.Meta, hostDir, actionPath string, evalCtx map[string]any) (string, int) {
+	if e.host {
+		e.logStep(step, "KERN: "+step.Uses+" (runs.using: docker) needs the docker executor — this runner uses host execution")
+		return "failure", 1
+	}
 	image, err := e.resolveDockerImage(ctx, step, meta, hostDir)
 	if err != nil {
 		e.logStep(step, "KERN: "+err.Error())

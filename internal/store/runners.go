@@ -31,23 +31,28 @@ type RegisterRunnerParams struct {
 	Version     string
 	TokenHash   string
 	Ephemeral   bool
+	// Executor is "docker" or "host"; empty stores as 'docker'.
+	Executor string
 }
 
 func (s *Store) RegisterRunner(ctx context.Context, p RegisterRunnerParams) (Runner, error) {
 	return scanRunner(s.pool.QueryRow(ctx, `
 		INSERT INTO runners (org_id, name, hostname, os, arch, cpus, memory_bytes, disk_bytes,
-		                     labels, version, status, ephemeral, token_hash, last_heartbeat_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'online', $11, $12, now())
+		                     labels, version, status, ephemeral, token_hash, last_heartbeat_at,
+		                     executor)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'online', $11, $12, now(),
+		        COALESCE(NULLIF($13, ''), 'docker'))
 		ON CONFLICT (org_id, name) DO UPDATE SET
 			hostname = EXCLUDED.hostname, os = EXCLUDED.os, arch = EXCLUDED.arch,
 			cpus = EXCLUDED.cpus, memory_bytes = EXCLUDED.memory_bytes,
 			disk_bytes = EXCLUDED.disk_bytes, labels = EXCLUDED.labels,
 			version = EXCLUDED.version, status = 'online',
 			ephemeral = EXCLUDED.ephemeral,
-			token_hash = EXCLUDED.token_hash, last_heartbeat_at = now()
+			token_hash = EXCLUDED.token_hash, last_heartbeat_at = now(),
+			executor = EXCLUDED.executor
 		RETURNING `+runnerCols,
 		p.OrgID, p.Name, p.Hostname, p.OS, p.Arch, p.CPUs, p.MemoryBytes, p.DiskBytes,
-		p.Labels, p.Version, p.Ephemeral, p.TokenHash))
+		p.Labels, p.Version, p.Ephemeral, p.TokenHash, p.Executor))
 }
 
 // InsertRunner creates a runner row without the (org, name) upsert used by
@@ -56,18 +61,20 @@ func (s *Store) RegisterRunner(ctx context.Context, p RegisterRunnerParams) (Run
 func (s *Store) InsertRunner(ctx context.Context, p RegisterRunnerParams) (Runner, error) {
 	return scanRunner(s.pool.QueryRow(ctx, `
 		INSERT INTO runners (org_id, name, hostname, os, arch, cpus, memory_bytes, disk_bytes,
-		                     labels, version, status, ephemeral, token_hash, last_heartbeat_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'online', $11, $12, now())
+		                     labels, version, status, ephemeral, token_hash, last_heartbeat_at,
+		                     executor)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'online', $11, $12, now(),
+		        COALESCE(NULLIF($13, ''), 'docker'))
 		RETURNING `+runnerCols,
 		p.OrgID, p.Name, p.Hostname, p.OS, p.Arch, p.CPUs, p.MemoryBytes, p.DiskBytes,
-		p.Labels, p.Version, p.Ephemeral, p.TokenHash))
+		p.Labels, p.Version, p.Ephemeral, p.TokenHash, p.Executor))
 }
 
 // runnerCols is the full runners column list; keep scan order in lockstep.
 const runnerCols = `id, org_id, name, hostname, os, arch, cpus, memory_bytes, disk_bytes, labels,
 	version, status, draining, ephemeral, last_heartbeat_at, cpu_percent,
 	mem_used_bytes, disk_free_bytes, metrics_at, geo_lat, geo_lng, geo_city,
-	geo_country, geo_source, geo_ip, geo_updated_at, created_at`
+	geo_country, geo_source, geo_ip, geo_updated_at, executor, created_at`
 
 func scanRunner(row pgx.Row) (Runner, error) {
 	var r Runner
@@ -75,7 +82,7 @@ func scanRunner(row pgx.Row) (Runner, error) {
 		&r.MemoryBytes, &r.DiskBytes, &r.Labels, &r.Version, &r.Status, &r.Draining,
 		&r.Ephemeral, &r.LastHeartbeatAt, &r.CPUPercent, &r.MemUsedBytes,
 		&r.DiskFreeBytes, &r.MetricsAt, &r.GeoLat, &r.GeoLng, &r.GeoCity,
-		&r.GeoCountry, &r.GeoSource, &r.GeoIP, &r.GeoUpdatedAt, &r.CreatedAt)
+		&r.GeoCountry, &r.GeoSource, &r.GeoIP, &r.GeoUpdatedAt, &r.Executor, &r.CreatedAt)
 	return r, err
 }
 

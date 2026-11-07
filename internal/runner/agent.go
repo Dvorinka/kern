@@ -64,6 +64,12 @@ type Config struct {
 	// (KERN_RUNNER_DISK_MIN_FREE_PCT, default 10). Zero disables pressure
 	// pruning; the stale-workspace sweep always runs.
 	DiskMinFreePct float64
+	// Executor selects the job execution substrate: "docker" (default)
+	// runs steps in ephemeral containers; "host" runs them as local
+	// processes on the runner host. Host mode has no isolation and the
+	// control plane only lets it claim trusted trust tiers. Empty means
+	// docker.
+	Executor string
 }
 
 type Agent struct {
@@ -119,6 +125,7 @@ func (a *Agent) Register(ctx context.Context) error {
 		"labels":       a.labels(),
 		"version":      version.Version,
 		"ephemeral":    a.cfg.Ephemeral,
+		"executor":     a.executor(),
 	}
 	runnerID, token, err := a.c.register(ctx, req)
 	if err != nil {
@@ -140,19 +147,47 @@ func (a *Agent) SetToken(token string) {
 // Token exposes the credential issued at registration for the join flow.
 func (a *Agent) Token() string { return a.token }
 
+// executor is the effective execution substrate; anything but "host" is docker.
+func (a *Agent) executor() string {
+	if a.cfg.Executor == "host" {
+		return "host"
+	}
+	return "docker"
+}
+
 func (a *Agent) labels() []string {
-	base := []string{"self-hosted", "kern", runtime.GOOS, "linux-" + string(runtime.GOARCH)}
-	switch runtime.GOARCH {
+	return a.labelsFor(runtime.GOOS, runtime.GOARCH)
+}
+
+// labelsFor computes the advertised label set for a platform. Split from
+// labels() so tests can exercise the darwin mapping on a linux host.
+func (a *Agent) labelsFor(goos, arch string) []string {
+	base := []string{"self-hosted", "kern", goos + "-" + arch}
+	switch arch {
 	case "amd64":
-		base = append(base, "x64", "linux-x64")
+		base = append(base, "x64")
 	case "arm64":
-		base = append(base, "arm64", "linux-arm64")
+		base = append(base, "arm64")
 	}
-	if dockerAvailable() {
+	// OS-specific labels: linux runners also answer ubuntu-* workflow
+	// selectors; darwin runners answer macos. Neither may leak onto the
+	// other platform — a darwin runner claiming linux-* jobs was a real
+	// scheduling hazard before this fix.
+	switch goos {
+	case "linux":
+		base = append(base, "linux", "linux-"+arch)
+		if arch == "amd64" {
+			base = append(base, "linux-x64", "ubuntu-latest", "ubuntu-24.04")
+		} else if arch == "arm64" {
+			base = append(base, "linux-arm64")
+		}
+	case "darwin":
+		base = append(base, "macos")
+	}
+	// The docker label advertises container execution; a host-mode runner
+	// must never carry it even if a daemon happens to be installed.
+	if a.executor() == "docker" && dockerAvailable() {
 		base = append(base, "docker")
-	}
-	if runtime.GOOS == "linux" {
-		base = append(base, "ubuntu-latest", "ubuntu-24.04", "linux")
 	}
 	seen := map[string]bool{}
 	out := make([]string, 0, len(base)+len(a.cfg.Labels))
@@ -188,25 +223,27 @@ func (a *Agent) Run(ctx context.Context) error {
 			a.ephemeralLoop(ctx)
 		}()
 	}
-	if a.cfg.ImageMaxAge > 0 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			a.imageGCLoop(ctx)
-		}()
+	if a.executor() == "docker" {
+		if a.cfg.ImageMaxAge > 0 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				a.imageGCLoop(ctx)
+			}()
+		}
+		if len(a.cfg.Prepull) > 0 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				a.prepullLoop(ctx)
+			}()
+		}
 	}
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		a.diskGCLoop(ctx)
 	}()
-	if len(a.cfg.Prepull) > 0 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			a.prepullLoop(ctx)
-		}()
-	}
 
 	workers := a.cfg.Concurrency
 	a.log.Info("runner ready", zap.Int("concurrency", workers), zap.Strings("labels", a.labels()))
@@ -495,6 +532,16 @@ func dockerAvailable() bool {
 }
 
 func totalMemory() int64 {
+	if runtime.GOOS == "darwin" {
+		out, err := exec.Command("sysctl", "-n", "hw.memsize").Output()
+		if err == nil {
+			var b int64
+			if _, err := fmt.Sscanf(strings.TrimSpace(string(out)), "%d", &b); err == nil {
+				return b
+			}
+		}
+		return 0
+	}
 	data, err := os.ReadFile("/proc/meminfo")
 	if err != nil {
 		return 0
