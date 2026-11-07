@@ -14,7 +14,11 @@ func TestLabelsDarwin(t *testing.T) {
 	a := &Agent{cfg: Config{Executor: "host"}}
 	for _, arch := range []string{"amd64", "arm64"} {
 		ls := a.labelsFor("darwin", arch)
-		for _, want := range []string{"self-hosted", "kern", "macos", "darwin-" + arch, arch} {
+		archLabel := arch
+		if arch == "amd64" {
+			archLabel = "x64"
+		}
+		for _, want := range []string{"self-hosted", "kern", "macos", "darwin-" + arch, archLabel} {
 			if !hasLabel(ls, want) {
 				t.Errorf("darwin/%s labels %v missing %q", arch, ls, want)
 			}

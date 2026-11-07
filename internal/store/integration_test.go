@@ -135,6 +135,81 @@ func runner(t testing.TB, ctx context.Context, s *Store, name string) Runner {
 	return r
 }
 
+// A host-executor runner has no isolation boundary: fork/pull_request trust
+// tiers (untrusted code) must never be claimable by it. The claim query
+// excludes them at SQL level — this is the mandatory trust-gate test.
+func TestHostRunnerCannotClaimUntrusted(t *testing.T) {
+	s, ctx := testStore(t)
+	pid, wid, vid := fixture(t, ctx, s)
+	org, _ := s.FirstOrg(ctx)
+
+	hostRunner, err := s.RegisterRunner(ctx, RegisterRunnerParams{
+		OrgID: org.ID, Name: "mac-host", Hostname: "mac-host", OS: "darwin", Arch: "arm64",
+		Labels: []string{"macos", "self-hosted", "kern"}, TokenHash: "h-mac",
+		Executor: "host",
+	})
+	if err != nil {
+		t.Fatalf("host runner: %v", err)
+	}
+	if hostRunner.Executor != "host" {
+		t.Fatalf("executor = %q, want host", hostRunner.Executor)
+	}
+
+	seed := func(trust string) {
+		t.Helper()
+		run, err := s.CreateRun(ctx, CreateRunParams{
+			ProjectID: pid, WorkflowID: wid, WorkflowVersionID: vid,
+			Event: "push", Ref: "refs/heads/main", TrustLevel: trust,
+		}, []JobSeed{{
+			Key: "j", JobKey: "build", RunsOn: []string{"macos"},
+			Needs: []string{}, Image: "macos-15", TimeoutSeconds: 3600,
+		}})
+		if err != nil {
+			t.Fatalf("create run: %v", err)
+		}
+		jobs, err := s.JobsForRun(ctx, run.ID)
+		if err != nil {
+			t.Fatalf("jobs: %v", err)
+		}
+		for _, j := range jobs {
+			if err := s.SetJobQueued(ctx, j.ID); err != nil {
+				t.Fatalf("queue: %v", err)
+			}
+		}
+	}
+
+	// Fork-tier job: host runner must not claim it.
+	seed("fork")
+	if _, err := s.PromoteQueuedRuns(ctx); err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	if claimed, err := s.ClaimJob(ctx, hostRunner.ID, time.Minute); err != nil || claimed != nil {
+		t.Fatalf("host runner claimed a fork job: %+v err=%v", claimed, err)
+	}
+
+	// pull_request tier is equally untrusted.
+	seed("pull_request")
+	if _, err := s.PromoteQueuedRuns(ctx); err != nil {
+		t.Fatalf("promote2: %v", err)
+	}
+	if claimed, err := s.ClaimJob(ctx, hostRunner.ID, time.Minute); err != nil || claimed != nil {
+		t.Fatalf("host runner claimed a pull_request job: %+v err=%v", claimed, err)
+	}
+
+	// Trusted-tier job on matching labels: claimable.
+	seed("trusted")
+	if _, err := s.PromoteQueuedRuns(ctx); err != nil {
+		t.Fatalf("promote3: %v", err)
+	}
+	claimed, err := s.ClaimJob(ctx, hostRunner.ID, time.Minute)
+	if err != nil || claimed == nil {
+		t.Fatalf("host runner should claim trusted job: %v %+v", err, claimed)
+	}
+	if claimed.Run.TrustLevel != "trusted" {
+		t.Fatalf("claimed wrong run trust=%q", claimed.Run.TrustLevel)
+	}
+}
+
 // Two runners racing for one job must not both get it.
 func TestClaimRace(t *testing.T) {
 	s, ctx := testStore(t)
