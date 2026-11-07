@@ -31,29 +31,34 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 	leaseSeconds := int(lease.Seconds())
 	var jobID uuid.UUID
 	err := s.pool.QueryRow(ctx, `
-		WITH candidate AS (
+		WITH me AS (
+			SELECT * FROM runners WHERE id = $1
+		), fleet AS MATERIALIZED (
+			-- Per-runner in-progress counts, computed once per claim instead of
+			-- once per (candidate job × peer runner) pair in the yield check.
+			SELECT r.id, r.labels,
+				(SELECT count(*) FROM jobs a
+				 WHERE a.runner_id = r.id AND a.status = 'in_progress') AS load
+			FROM runners r, me
+			WHERE r.org_id = me.org_id
+			  AND r.status = 'online'
+			  AND NOT r.draining
+		), candidate AS (
 			SELECT j.id
 			FROM jobs j
 			JOIN workflow_runs r ON r.id = j.run_id
-			JOIN runners rn ON rn.id = $1
+			CROSS JOIN me
+			JOIN fleet me_f ON me_f.id = me.id
 			WHERE j.status = 'queued'
 			  AND r.status = 'in_progress'
-			  AND rn.status = 'online'
-			  AND NOT rn.draining
-			  AND j.runs_on <@ (rn.labels || ARRAY['self-hosted', 'kern'])
+			  AND j.runs_on <@ (me_f.labels || ARRAY['self-hosted', 'kern'])
 			  -- Least-loaded placement: yield to any eligible runner carrying
 			  -- fewer in-progress jobs than this one.
 			  AND NOT EXISTS (
-				SELECT 1 FROM runners o
-				WHERE o.org_id = rn.org_id
-				  AND o.id <> rn.id
-				  AND o.status = 'online'
-				  AND NOT o.draining
+				SELECT 1 FROM fleet o
+				WHERE o.id <> me_f.id
 				  AND j.runs_on <@ (o.labels || ARRAY['self-hosted', 'kern'])
-				  AND (SELECT count(*) FROM jobs a
-				       WHERE a.runner_id = o.id AND a.status = 'in_progress')
-				    < (SELECT count(*) FROM jobs a
-				       WHERE a.runner_id = rn.id AND a.status = 'in_progress')
+				  AND o.load < me_f.load
 			  )
 			ORDER BY j.priority DESC, j.queued_at
 			FOR UPDATE OF j SKIP LOCKED
