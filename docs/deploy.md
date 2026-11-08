@@ -58,7 +58,7 @@ at `/opt/kern/work` for exactly this reason — keep the two paths identical.
 Verify: `curl -s localhost:8080/healthz` and log in at the web UI with the
 bootstrap admin.
 
-Set `KERN_VERSION` to the release you are deploying (`v0.3.0`, not `dev`)
+Set `KERN_VERSION` to the release you are deploying (`v0.4.2`, not `dev`)
 before the build. An unstamped binary reports `dev`, and automatic apply
 refuses to compare that.
 

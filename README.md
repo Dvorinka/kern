@@ -8,13 +8,28 @@ Distributed, self-hosted CI/CD platform that executes existing GitHub Actions
 workflow YAML on your own infrastructure. GitHub stays the source-code
 provider; KERN owns the control plane, scheduler, execution engine and storage.
 
-Status: **v0.3.0, dogfooded in production.** The full loop runs live —
+Status: **v0.4.2, dogfooded in production.** The full loop runs live —
 GitHub App webhooks → compiled run → ephemeral container on a registered
 runner → commit status/check-run posted back — including composite,
 JavaScript and Docker actions, reusable workflows, service containers and
-environment approvals. The honest feature matrix is
-`docs/compatibility.md`; remaining production gaps are tracked in
-`docs/production.md`.
+environment approvals. Native macOS runners are proven end to end
+(launchd agent on a Proxmox VM, autoscaled on queued `runs-on: macos`
+work). The honest feature matrix is `docs/compatibility.md`; remaining
+production gaps are tracked in `docs/production.md`.
+
+## Screenshots
+
+| Overview | Runs |
+| --- | --- |
+| ![Overview](docs/screenshots/overview.png) | ![Runs](docs/screenshots/runs.png) |
+
+| Projects | Usage |
+| --- | --- |
+| ![Projects](docs/screenshots/projects.png) | ![Usage](docs/screenshots/usage.png) |
+
+| Runners | Run detail |
+| --- | --- |
+| ![Runners](docs/screenshots/runners.png) | ![Run detail](docs/screenshots/run-detail.png) |
 
 ## Components
 
@@ -48,7 +63,10 @@ environment approvals. The honest feature matrix is
 - **Runner fleet** — one-time enrollment tokens, heartbeats with live
   cpu/mem/disk, least-loaded placement, per-job container hardening
   (uid 1000, dropped caps, read-only root, resource limits), persistent
-  tool caches, image GC, load gates.
+  tool caches with a bounded LRU, image GC, load gates. Docker executor
+  plus a host executor for native jobs; custom runner icons; JIT
+  single-job runners; proven on Linux containers and macOS (launchd,
+  autoscaled VM on demand).
 - **Operations** — AES-256-GCM secrets at rest, server-side log masking,
   environment approvals, audit log, Prometheus `/metrics`, retention
   sweeps, signed-release auto-update, `kern exec` remote offload.
@@ -71,7 +89,10 @@ just dev          # http://localhost:8080, admin@kern.local / kern-admin-passwor
 # 3. Runner agent (any machine with Docker; outbound-only)
 just runner       # registers, heartbeats, long-polls for jobs
 
-# 4. Create a project pointing at a repo checkout, then sync + trigger
+# 4. Dashboard (optional — `just dev` serves the API only)
+cd apps/web && pnpm install && pnpm dev   # http://localhost:5173
+
+# 5. Create a project pointing at a repo checkout, then sync + trigger
 curl -b cookies -c cookies -X POST localhost:8080/api/v1/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"email":"admin@kern.local","password":"kern-admin-password"}'
