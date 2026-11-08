@@ -2,6 +2,18 @@ name: disk-diag
 on: [push, workflow_dispatch]
 jobs:
   diag:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [lxc-902, lxc-903, lxc-906, lxc-901]
+    runs-on: [self-hosted, linux, x64, "${{ matrix.lane }}"]
     steps:
-      - run: echo hello
+      - name: disk usage
+        run: |
+          df -h / | tail -1
+          echo "=== top-level ==="
+          du -xh --max-depth=1 / 2>/dev/null | sort -rh | head -12
+          echo "=== deep ==="
+          for d in /home /data /var /opt /root /srv /kern /actions-runner /_work; do
+            [ -d "$d" ] && du -xh --max-depth=2 "$d" 2>/dev/null | sort -rh | head -8
+          done
