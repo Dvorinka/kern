@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Minus, Plus, RotateCcw } from "lucide-react";
 import type { FleetMapPin, FleetMapResponse } from "../lib/types";
 import { WORLD_DOTS } from "../lib/world-dots";
-import { WORLD_GRATICULE_PATH, WORLD_LAND_PATH } from "../lib/world-land";
+import { WORLD_BORDERS_PATH, WORLD_GRATICULE_PATH, WORLD_LAND_PATH } from "../lib/world-land";
 import { jobHue } from "./fingerprint";
 
 // Dot-matrix world, rasterized from Natural Earth 110m land — the mockup's
@@ -14,7 +14,7 @@ const LAT_T = 83;
 const LAT_B = -58;
 const VB = { x: 0, y: 0, w: MW, h: MH };
 const ASPECT = MH / MW;
-const MIN_W = 40;
+const MIN_W = 12;
 const MAX_W = 1600;
 
 // land/graticule paths live in a 1000×500 equirectangular canvas; our view
@@ -121,7 +121,11 @@ export function FleetMap({ data }: { data: FleetMapResponse }) {
 	// deep zoom swaps the dot raster for the real land path; markers shrink so
 	// they stay honest at country scale instead of swallowing the viewport.
 	const landA = clamp((820 - view.w) / 420, 0, 1);
-	const dotsA = clamp((view.w - 320) / 500, 0, 1);
+	// The dot matrix is the map's identity — it never fully leaves. Below
+	// land-fade range it flips to a paper knockout so it still reads as
+	// texture over the solid land fill instead of disappearing.
+	const dotsA = Math.max(clamp((view.w - 320) / 500, 0, 1), 0.5);
+	const dotsInv = landA > 0.35;
 	const dotR = clamp(view.w / 400, 0.4, 3);
 	const mk = clamp(view.w / 700, 0.22, 1);
 	const showLabels = view.w >= 140;
@@ -227,9 +231,10 @@ export function FleetMap({ data }: { data: FleetMapResponse }) {
 				<g opacity={landA} className="fm-land">
 					<path d={WORLD_GRATICULE_PATH} transform={LAND_TF} className="fm-grat" />
 					<path d={WORLD_LAND_PATH} transform={LAND_TF} className="fm-landpath" />
+					<path d={WORLD_BORDERS_PATH} transform={LAND_TF} className="fm-borders" />
 				</g>
-				{/* the land dot-matrix */}
-				<g opacity={dotsA}>
+				{/* the land dot-matrix — persists at every zoom */}
+				<g opacity={dotsA} className={dotsInv ? "fm-dots-inv" : ""}>
 					{DOTS.map((d, i) => (
 						<circle key={i} cx={d.x.toFixed(1)} cy={d.y.toFixed(1)} r={dotR.toFixed(2)} className="fm-dot" />
 					))}
@@ -519,6 +524,7 @@ export function GeoPicker({
 				<g opacity={clamp((view.w - 260) / 400, 0, 1)} className="fm-land">
 					<path d={WORLD_GRATICULE_PATH} transform={LAND_TF} className="fm-grat" />
 					<path d={WORLD_LAND_PATH} transform={LAND_TF} className="fm-landpath" />
+					<path d={WORLD_BORDERS_PATH} transform={LAND_TF} className="fm-borders" />
 				</g>
 				<g opacity={clamp((560 - view.w) / 260, 0, 1)}>
 					{DOTS.map((d, i) => (
