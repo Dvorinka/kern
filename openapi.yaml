@@ -119,7 +119,7 @@ paths:
   /auth/me:
     get:
       tags: [auth]
-      summary: Current user
+      summary: Current user and preferences
       responses:
         "200":
           description: Current user
@@ -129,6 +129,34 @@ paths:
                 type: object
                 properties:
                   user: { $ref: "#/components/schemas/User" }
+                  prefs:
+                    type: object
+                    additionalProperties: true
+                    description: Per-user UI preferences (e.g. `theme`: `paper`|`ink`)
+        "401": { $ref: "#/components/responses/Error" }
+  /auth/me/prefs:
+    put:
+      tags: [auth]
+      summary: Replace the caller's preference object (max 8 KiB)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [prefs]
+              properties:
+                prefs: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          description: Stored preferences
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  prefs: { type: object, additionalProperties: true }
+        "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
   /auth/tokens:
     get:

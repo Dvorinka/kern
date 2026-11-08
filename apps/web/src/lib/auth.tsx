@@ -5,6 +5,7 @@ import type { User } from "./types";
 
 interface AuthState {
 	user: User | null;
+	prefs: Record<string, unknown> | null;
 	loading: boolean;
 	login: (email: string, password: string) => Promise<void>;
 	logout: () => Promise<void>;
@@ -12,6 +13,7 @@ interface AuthState {
 
 const AuthCtx = createContext<AuthState>({
 	user: null,
+	prefs: null,
 	loading: true,
 	login: async () => {},
 	logout: async () => {},
@@ -23,8 +25,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 		queryKey: ["me"],
 		queryFn: async () => {
 			try {
-				const res = await api.get<{ user: User }>("/auth/me");
-				return res.user;
+				const res = await api.get<{ user: User; prefs?: Record<string, unknown> }>("/auth/me");
+				return { user: res.user, prefs: res.prefs ?? {} };
 			} catch {
 				return null;
 			}
@@ -34,7 +36,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 	});
 
 	const state: AuthState = {
-		user: data ?? null,
+		user: data?.user ?? null,
+		prefs: data?.prefs ?? null,
 		loading: isLoading,
 		login: async (email, password) => {
 			await api.post("/auth/login", { email, password });
