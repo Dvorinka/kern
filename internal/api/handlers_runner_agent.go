@@ -163,7 +163,7 @@ func (s *Server) claimJob(c *gin.Context) {
 			return
 		}
 		if claimed != nil {
-			s.respondWithClaim(c, claimed)
+			s.respondWithClaim(c, claimed, runner)
 			return
 		}
 		if time.Now().After(deadline) {
@@ -178,7 +178,17 @@ func (s *Server) claimJob(c *gin.Context) {
 	}
 }
 
-func (s *Server) respondWithClaim(c *gin.Context, claimed *store.ClaimedJob) {
+// jobImageFor picks the image the claiming runner should pull. The default
+// job image gets an arch-specific substitute on arm64 runners when one is
+// configured; explicit container: and label-mapped images are untouched.
+func (s *Server) jobImageFor(runner store.Runner, image string) string {
+	if runner.Arch == "arm64" && s.Cfg.Arm64Image != "" && image == s.Cfg.DefaultImage {
+		return s.Cfg.Arm64Image
+	}
+	return image
+}
+
+func (s *Server) respondWithClaim(c *gin.Context, claimed *store.ClaimedJob, runner store.Runner) {
 	steps := make([]gin.H, 0, len(claimed.Job.Steps))
 	for _, st := range claimed.Job.Steps {
 		var spec workflows.StepPlan
@@ -262,7 +272,7 @@ func (s *Server) respondWithClaim(c *gin.Context, claimed *store.ClaimedJob) {
 	c.JSON(http.StatusOK, gin.H{
 		"job": gin.H{
 			"id": claimed.Job.ID, "run_id": claimed.Job.RunID, "key": claimed.Job.Key,
-			"name": claimed.Job.Name, "attempt": claimed.Attempt, "image": claimed.Job.Image,
+			"name": claimed.Job.Name, "attempt": claimed.Attempt, "image": s.jobImageFor(runner, claimed.Job.Image),
 			"env": claimed.Job.Env, "matrix": claimed.Job.Matrix, "runs_on": claimed.Job.RunsOn,
 			"timeout_seconds": claimed.Job.TimeoutSeconds, "continue_on_error": claimed.Job.ContinueOnError,
 			"outputs_spec": claimed.Job.OutputsSpec,
