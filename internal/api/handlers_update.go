@@ -190,10 +190,17 @@ func (s *Server) cachedRelease(ctx context.Context, repo string, force bool) upd
 	}
 	updateCache.mu.Unlock()
 
-	info := s.fetchRelease(ctx, repo)
+	// The fetch must outlive the caller's request: a runner heartbeat has a
+	// ~5s client budget, and its cancellation used to poison the cache with
+	// "context canceled" for a full hour.
+	info := s.fetchRelease(context.WithoutCancel(ctx), repo)
 	updateCache.mu.Lock()
 	updateCache.info = info
-	updateCache.until = time.Now().Add(time.Hour)
+	ttl := time.Hour
+	if !info.OK || !info.ManifestOK {
+		ttl = 5 * time.Minute
+	}
+	updateCache.until = time.Now().Add(ttl)
 	updateCache.mu.Unlock()
 	return info
 }
@@ -245,14 +252,17 @@ func (s *Server) githubToken() string {
 	return s.Cfg.GitHub.StatusToken
 }
 
+type ghAsset struct {
+	Name               string `json:"name"`
+	URL                string `json:"url"`
+	BrowserDownloadURL string `json:"browser_download_url"`
+}
+
 type ghRelease struct {
 	TagName     string    `json:"tag_name"`
 	HTMLURL     string    `json:"html_url"`
 	PublishedAt time.Time `json:"published_at"`
-	Assets      []struct {
-		Name               string `json:"name"`
-		BrowserDownloadURL string `json:"browser_download_url"`
-	} `json:"assets"`
+	Assets      []ghAsset `json:"assets"`
 }
 
 func (s *Server) latestRelease(ctx context.Context, repo string) (ghRelease, error) {
@@ -276,35 +286,59 @@ func (s *Server) latestRelease(ctx context.Context, repo string) (ghRelease, err
 }
 
 func releaseAssets(ctx context.Context, rel ghRelease, token string) (manifest, sig []byte, err error) {
-	var manifestURL, sigURL string
-	for _, a := range rel.Assets {
-		switch a.Name {
+	var manifestAsset, sigAsset *ghAsset
+	for i := range rel.Assets {
+		switch rel.Assets[i].Name {
 		case "kern-update.json":
-			manifestURL = a.BrowserDownloadURL
+			manifestAsset = &rel.Assets[i]
 		case "kern-update.json.sig":
-			sigURL = a.BrowserDownloadURL
+			sigAsset = &rel.Assets[i]
 		}
 	}
-	if manifestURL == "" || sigURL == "" {
+	if manifestAsset == nil || sigAsset == nil {
 		return nil, nil, fmt.Errorf("release has no signed manifest")
 	}
-	manifest, err = githubGet(ctx, manifestURL, token, 64<<10)
+	manifest, err = assetBytes(ctx, *manifestAsset, token)
 	if err != nil {
 		return nil, nil, fmt.Errorf("manifest download: %w", err)
 	}
-	sig, err = githubGet(ctx, sigURL, token, 64<<10)
+	sig, err = assetBytes(ctx, *sigAsset, token)
 	if err != nil {
 		return nil, nil, fmt.Errorf("signature download: %w", err)
 	}
 	return manifest, sig, nil
 }
 
+// assetBytes prefers the browser download URL and falls back to the
+// asset API endpoint: the release CDN 504s in bursts while api.github.com
+// keeps serving. Same fallback as deployments/runner.Dockerfile.
+func assetBytes(ctx context.Context, a ghAsset, token string) ([]byte, error) {
+	body, err := githubGet(ctx, a.BrowserDownloadURL, token, 64<<10)
+	if err == nil {
+		return body, nil
+	}
+	if a.URL == "" {
+		return nil, err
+	}
+	body, ferr := githubGetAccept(ctx, a.URL, "application/octet-stream", token, 64<<10)
+	if ferr != nil {
+		return nil, fmt.Errorf("%w (asset api fallback: %v)", err, ferr)
+	}
+	return body, nil
+}
+
 func githubGet(ctx context.Context, endpoint, token string, limit int64) ([]byte, error) {
+	return githubGetAccept(ctx, endpoint, "", token, limit)
+}
+
+func githubGetAccept(ctx context.Context, endpoint, accept, token string, limit int64) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
-	if strings.Contains(endpoint, "://api.github.com/") || strings.Contains(endpoint, "/api/v3/") {
+	if accept != "" {
+		req.Header.Set("Accept", accept)
+	} else if strings.Contains(endpoint, "://api.github.com/") || strings.Contains(endpoint, "/api/v3/") {
 		req.Header.Set("Accept", "application/vnd.github+json")
 	}
 	req.Header.Set("User-Agent", "kern/"+version.Version)
