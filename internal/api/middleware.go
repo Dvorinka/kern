@@ -148,11 +148,12 @@ func (s *Server) securityHeaders() gin.HandlerFunc {
 		c.Header("X-Frame-Options", "DENY")
 		c.Header("Referrer-Policy", "no-referrer")
 		c.Header("Content-Security-Policy",
-			"default-src 'self'; script-src 'self'; "+
+			"default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; "+
 				"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "+
 				"font-src 'self' data: https://fonts.gstatic.com; "+
-				"img-src 'self' data:; connect-src 'self'; "+
-				"frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+				"img-src 'self' data: https://raw.githubusercontent.com https://avatars.githubusercontent.com; "+
+				"connect-src 'self'; "+
+				"frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://github.com")
 		c.Next()
 	}
 }
