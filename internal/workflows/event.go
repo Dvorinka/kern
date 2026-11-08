@@ -28,6 +28,21 @@ func EventPayload(event, ref, sha, actor, commitMessage, repoFullName, repoURL, 
 			"id":      sha,
 			"message": commitMessage,
 		}
+	case "workflow_run":
+		payload["action"] = srcString(source, "action")
+		payload["workflow_run"] = map[string]any{
+			"id":          source["wr_id"],
+			"name":        srcString(source, "wr_name"),
+			"path":        srcString(source, "wr_path"),
+			"event":       srcString(source, "wr_event"),
+			"status":      srcString(source, "wr_status"),
+			"conclusion":  srcString(source, "wr_conclusion"),
+			"head_branch": srcString(source, "wr_head_branch"),
+			"head_sha":    srcString(source, "wr_head_sha"),
+			"run_number":  source["wr_number"],
+			"run_attempt": source["wr_attempt"],
+			"html_url":    srcString(source, "wr_url"),
+		}
 	case "pull_request", "pull_request_target":
 		head := map[string]any{
 			"ref": srcString(source, "head_ref"),
