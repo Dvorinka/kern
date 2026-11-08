@@ -1,13 +1,15 @@
 package runner
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/dvorinka/kern/internal/actions"
 )
 
 func TestContainerNodeDir(t *testing.T) {
-	if got := containerNodeDir(); got != "/kern/node/v20.18.1/bin" {
+	e := &executor{}
+	if got := e.nodeBinDir(); got != "/kern/node/v20.18.1/bin" {
 		t.Fatal(got)
 	}
 }
@@ -54,7 +56,10 @@ func TestNodeArchive(t *testing.T) {
 	if err != nil {
 		t.Skipf("unsupported host: %v", err)
 	}
-	want := "node-v20.18.1-linux-x64.tar.gz"
+	want := "node-v20.18.1-" + runtime.GOOS + "-x64.tar.gz"
+	if runtime.GOARCH == "arm64" {
+		want = "node-v20.18.1-" + runtime.GOOS + "-arm64.tar.gz"
+	}
 	if archive != want {
 		t.Errorf("archive = %q, want %q", archive, want)
 	}

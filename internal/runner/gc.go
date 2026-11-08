@@ -158,6 +158,9 @@ func (a *Agent) sweepWorkspaces() {
 }
 
 func (a *Agent) maybePruneDisk(ctx context.Context) {
+	if a.executor() != "docker" {
+		return // host mode has no daemon to prune
+	}
 	pct := a.cfg.DiskMinFreePct
 	if pct <= 0 {
 		return

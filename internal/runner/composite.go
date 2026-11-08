@@ -54,7 +54,7 @@ func (e *executor) runAction(ctx context.Context, step StepSpec, evalCtx map[str
 		}
 		dir := strings.TrimPrefix(filepath.ToSlash(filepath.Clean(ref)), "./")
 		host := filepath.Join(e.workRoot(), "workspace", filepath.FromSlash(dir))
-		return e.runActionDir(ctx, step, host, containerWorkspace+"/"+dir, evalCtx, depth)
+		return e.runActionDir(ctx, step, host, e.wsPath()+"/"+dir, evalCtx, depth)
 	case actions.KindRemote:
 		r, err := actions.ParseRemote(ref)
 		if err != nil {
@@ -253,7 +253,7 @@ func (e *executor) fetchAction(ctx context.Context, step StepSpec, r actions.Rem
 	if _, err := os.Stat(host); err != nil {
 		return "", "", fmt.Errorf("action path %q not found in %s/%s@%s", r.Path, r.Owner, r.Repo, r.Ref)
 	}
-	container := containerActionsDir + "/" + key
+	container := e.actionsPath() + "/" + key
 	if r.Path != "" {
 		container += "/" + r.Path
 	}

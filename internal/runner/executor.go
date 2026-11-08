@@ -17,6 +17,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -125,6 +127,14 @@ type executor struct {
 	preDone   map[string]bool        // top-level uses-steps whose pre phase was decided
 	preFailed map[int]string         // step number -> setup/pre failure; main never runs
 
+	// host marks the bare-metal executor: steps run as local processes with
+	// no container boundary. The control plane only lets host runners claim
+	// trusted trust tiers, so privileged() semantics still apply.
+	host bool
+	// eventHostPath is the host-side GITHUB_EVENT_PATH file on host executor;
+	// docker mode mounts it at containerEventPath instead.
+	eventHostPath string
+
 	// preJobContainers snapshots daemon container IDs before this job's
 	// container is created; cleanup reaps anything new that is not
 	// KERN-managed. Nil when concurrency > 1 — parallel jobs cannot tell
@@ -218,6 +228,7 @@ func newJobExecutor(cfg Config, c *client, claim *Claim, secretMap map[string]st
 		enc:         newEnvBuilder(claim, secretMap),
 		stepResults: map[string]*stepOutcome{},
 		stop:        make(chan struct{}),
+		host:        cfg.Executor == "host",
 	}, nil
 }
 
@@ -225,6 +236,58 @@ func sanitizeID(id string) string { return nonIDRe.ReplaceAllString(id, "-") }
 
 func (e *executor) workRoot() string {
 	return filepath.Join(e.cfg.WorkRoot, sanitizeID(e.claim.Job.ID))
+}
+
+// The helpers below resolve paths as executed code sees them: inside the job
+// container for the docker executor, on the host filesystem for the host
+// executor. The runner itself always uses the host paths (cmdDir, workRoot).
+func (e *executor) wsPath() string {
+	if e.host {
+		return filepath.Join(e.workRoot(), "workspace")
+	}
+	return containerWorkspace
+}
+func (e *executor) cmdEnvPath() string {
+	if e.host {
+		return e.cmdDir()
+	}
+	return containerCmdDir
+}
+func (e *executor) scriptDirPath() string {
+	if e.host {
+		return filepath.Join(e.workRoot(), "scripts")
+	}
+	return containerScriptDir
+}
+func (e *executor) actionsPath() string {
+	if e.host {
+		return filepath.Join(e.workRoot(), "actions")
+	}
+	return containerActionsDir
+}
+func (e *executor) cachePath() string {
+	if e.host {
+		return cacheDir(e.cfg.WorkRoot)
+	}
+	return containerCacheDir
+}
+func (e *executor) tmpPath() string {
+	if e.host {
+		return filepath.Join(e.workRoot(), "tmp")
+	}
+	return containerTmpDir
+}
+func (e *executor) actionHomePath() string {
+	if e.host {
+		return filepath.Join(e.workRoot(), "home")
+	}
+	return containerActionHome
+}
+func (e *executor) eventPath() string {
+	if e.host {
+		return e.eventHostPath
+	}
+	return containerEventPath
 }
 
 // prepare provisions the workspace and starts the idle job container. Lease
@@ -243,6 +306,9 @@ func (e *executor) prepare(ctx context.Context) error {
 	if err := e.checkout(ctx); err != nil {
 		e.goStop()
 		return fmt.Errorf("checkout: %w", err)
+	}
+	if e.host {
+		return e.prepareHost()
 	}
 	// Steps run as jobUID but checkout ran as the runner user; hand the
 	// workspace over so steps can write inside it (node_modules, dist).
@@ -270,6 +336,46 @@ func (e *executor) prepare(ctx context.Context) error {
 		return fmt.Errorf("start services: %w", err)
 	}
 	return nil
+}
+
+// prepareHost finishes provisioning for the bare-metal executor: no image
+// pull, no container, no services, no egress proxy — the job's trust tier
+// already guarantees this runner only sees trusted work. Unsupported
+// substrate features surface as explicit KERN: diagnostics in the first
+// step's log rather than failing silently.
+func (e *executor) prepareHost() error {
+	e.shell = hostShell()
+	e.eventPayload = e.eventPayloadMap()
+	if p, err := e.writeEventPayload(); err != nil {
+		e.log.Warn("event payload write failed; GITHUB_EVENT_PATH unset", zap.Error(err))
+	} else {
+		e.eventHostPath = p
+	}
+	if len(e.claim.Steps) > 0 {
+		step := StepSpec{Number: e.claim.Steps[0].Number}
+		notes := []string{}
+		if e.claim.Job.Image != "" {
+			notes = append(notes, fmt.Sprintf("container image %q ignored (no container on host executor)", e.claim.Job.Image))
+		}
+		if len(e.claim.Job.Services) > 0 {
+			notes = append(notes, fmt.Sprintf("%d service container(s) ignored (services need the docker executor)", len(e.claim.Job.Services)))
+		}
+		if len(notes) > 0 {
+			e.logStep(step, "KERN: host executor on "+runtime.GOOS+"/"+runtime.GOARCH+" — "+strings.Join(notes, "; "))
+		}
+	}
+	return nil
+}
+
+// hostShell picks the interpreter for host-mode steps: bash when present,
+// sh otherwise — the same fallback the container path applies.
+func hostShell() string {
+	for _, p := range []string{"/bin/bash", "/bin/sh", "bash", "sh"} {
+		if _, err := exec.LookPath(p); err == nil {
+			return p
+		}
+	}
+	return "/bin/sh"
 }
 
 func (e *executor) goStop() {
@@ -402,59 +508,15 @@ func (e *executor) startContainer(ctx context.Context) error {
 	if eventPath != "" {
 		args = append(args, "-v", eventPath+":"+containerEventPath+":ro")
 	}
-	args = append(args,
-		"-e", "KERN_CACHE_DIR="+containerCacheDir,
-		// setup-* actions resolve @actions/tool-cache via RUNNER_TOOL_CACHE;
-		// pointing it at the persistent runner cache makes installed SDKs warm.
-		"-e", "RUNNER_TOOL_CACHE="+containerCacheDir+"/_toolcache",
-		// Same trick for Playwright: `npx playwright install` lands browsers
-		// in the persistent cache so the next job skips a ~15min download.
-		// Step-level env still overrides this container default.
-		"-e", "PLAYWRIGHT_BROWSERS_PATH="+containerCacheDir+"/ms-playwright",
-		// RUNNER_TEMP must be exec-allowed: setup-* actions extract and run
-		// installers there, and the container's /tmp tmpfs is noexec.
-		"-e", "RUNNER_TEMP="+containerTmpDir,
-		// go build/test scratch (GOTMPDIR) and generic temp (TMPDIR) must be
-		// exec-allowed and roomier than the noexec /tmp tmpfs — `go test`
-		// writes and executes binaries there.
-		"-e", "GOTMPDIR="+containerTmpDir,
-		"-e", "TMPDIR="+containerTmpDir,
-		"-v", filepath.Join(workRoot, "tmp")+":"+containerTmpDir,
-		// Actions resolve $HOME for tool state (setup-go GOPATH, npm config);
-		// images may carry no writable home for uid 1000 at all.
-		"-e", "HOME="+containerActionHome,
-		// Leave PATH to the image. golang:1.26 puts go on its own PATH, and
-		// replacing that hides the toolchain. Node is prepended per step.
-		"-e", "GITHUB_WORKSPACE="+containerWorkspace,
-		"-e", "GITHUB_REPOSITORY="+defaultStr(e.claim.Run.RepoFullName, e.claim.Run.Project),
-		"-e", "GITHUB_SHA="+e.claim.Run.SHA,
-		"-e", "GITHUB_REF="+e.claim.Run.Ref,
-		"-e", "GITHUB_RUN_ID="+e.claim.Run.ID,
-		"-e", "GITHUB_RUN_NUMBER="+itoa(e.claim.Run.Number),
-		"-e", "GITHUB_JOB="+e.claim.Job.Key,
-		// Actions test GITHUB_ACTIONS to detect CI; gh and release actions
-		// read the event/workflow/actor triple.
-		"-e", "GITHUB_ACTIONS=true",
-		"-e", "GITHUB_EVENT_NAME="+e.claim.Run.Event,
-		"-e", "GITHUB_WORKFLOW="+e.claim.Run.Workflow,
-		"-e", "GITHUB_ACTOR="+e.claim.Run.Actor,
-		"-e", "GITHUB_SERVER_URL="+serverURL(e.claim.Run.RepoURL),
-		"-e", "GITHUB_API_URL="+apiURL(e.claim.Run.RepoURL),
-		"-e", "RUNNER_OS=Linux",
-		"-e", "RUNNER_ARCH=X64",
-		"-e", "RUNNER_NAME="+e.cfg.Name,
-		"-e", "KERN=true", "-e", "CI=true",
-		// The workspace is cloned by the runner (uid 0) but steps run as
-		// jobUID — tell git the tree is safe so VCS stamping works.
-		"-e", "GIT_CONFIG_COUNT=1",
-		"-e", "GIT_CONFIG_KEY_0=safe.directory",
-		"-e", "GIT_CONFIG_VALUE_0=*",
-	)
+	args = append(args, e.dockerEnvArgs()...)
 	if e.egressRestricted() {
 		for k, v := range e.egressEnv() {
 			args = append(args, "-e", k+"="+v)
 		}
 	}
+	args = append(args,
+		"-v", filepath.Join(workRoot, "tmp")+":"+containerTmpDir,
+	)
 	if eventPath != "" {
 		args = append(args, "-e", "GITHUB_EVENT_PATH="+containerEventPath)
 	}
@@ -490,6 +552,78 @@ func (e *executor) startContainer(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// jobEnv is the environment every step sees, expressed mode-aware: container
+// paths for docker, host paths for host. The docker executor flattens it to
+// `-e K=V` args; the host executor merges it into the process environment.
+// Docker `-e` semantics apply in both modes: these values override the
+// per-step env file.
+func (e *executor) jobEnv() map[string]string {
+	env := map[string]string{
+		// setup-* actions resolve @actions/tool-cache via RUNNER_TOOL_CACHE;
+		// pointing it at the persistent runner cache makes installed SDKs warm.
+		"KERN_CACHE_DIR":    e.cachePath(),
+		"RUNNER_TOOL_CACHE": e.cachePath() + "/_toolcache",
+		// Same trick for Playwright: `npx playwright install` lands browsers
+		// in the persistent cache so the next job skips a ~15min download.
+		"PLAYWRIGHT_BROWSERS_PATH": e.cachePath() + "/ms-playwright",
+		// RUNNER_TEMP must be exec-allowed: setup-* actions extract and run
+		// installers there, and the container's /tmp tmpfs is noexec.
+		"RUNNER_TEMP": e.tmpPath(),
+		// go build/test scratch (GOTMPDIR) and generic temp (TMPDIR) must be
+		// exec-allowed and roomier than the noexec /tmp tmpfs — `go test`
+		// writes and executes binaries there.
+		"GOTMPDIR": e.tmpPath(),
+		"TMPDIR":   e.tmpPath(),
+		// Actions resolve $HOME for tool state (setup-go GOPATH, npm config);
+		// images may carry no writable home for uid 1000 at all.
+		"HOME":              e.actionHomePath(),
+		"GITHUB_WORKSPACE":  e.wsPath(),
+		"GITHUB_REPOSITORY": defaultStr(e.claim.Run.RepoFullName, e.claim.Run.Project),
+		"GITHUB_SHA":        e.claim.Run.SHA,
+		"GITHUB_REF":        e.claim.Run.Ref,
+		"GITHUB_RUN_ID":     e.claim.Run.ID,
+		"GITHUB_RUN_NUMBER": itoa(e.claim.Run.Number),
+		"GITHUB_JOB":        e.claim.Job.Key,
+		// Actions test GITHUB_ACTIONS to detect CI; gh and release actions
+		// read the event/workflow/actor triple.
+		"GITHUB_ACTIONS":    "true",
+		"GITHUB_EVENT_NAME": e.claim.Run.Event,
+		"GITHUB_WORKFLOW":   e.claim.Run.Workflow,
+		"GITHUB_ACTOR":      e.claim.Run.Actor,
+		"GITHUB_SERVER_URL": serverURL(e.claim.Run.RepoURL),
+		"GITHUB_API_URL":    apiURL(e.claim.Run.RepoURL),
+		"RUNNER_OS":         runnerGOOS(),
+		"RUNNER_ARCH":       runnerArch(),
+		"RUNNER_NAME":       e.cfg.Name,
+		"KERN":              "true",
+		"CI":                "true",
+		// The workspace is cloned by the runner (uid 0) but steps run as
+		// jobUID — tell git the tree is safe so VCS stamping works.
+		"GIT_CONFIG_COUNT":   "1",
+		"GIT_CONFIG_KEY_0":   "safe.directory",
+		"GIT_CONFIG_VALUE_0": "*",
+	}
+	if p := e.eventPath(); p != "" {
+		env["GITHUB_EVENT_PATH"] = p
+	}
+	return env
+}
+
+// dockerEnvArgs flattens jobEnv into sorted `-e K=V` docker create args.
+func (e *executor) dockerEnvArgs() []string {
+	env := e.jobEnv()
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	args := make([]string, 0, len(keys)*2)
+	for _, k := range keys {
+		args = append(args, "-e", k+"="+env[k])
+	}
+	return args
 }
 
 // privileged reports whether this job runs with GitHub parity — root, a
@@ -641,9 +775,11 @@ func (e *executor) cleanup() {
 	e.stopped.Wait()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	_ = exec.CommandContext(ctx, "docker", "rm", "-f", e.container).Run()
-	e.stopServices(ctx)
-	e.reapOrphanContainers(ctx)
+	if !e.host {
+		_ = exec.CommandContext(ctx, "docker", "rm", "-f", e.container).Run()
+		e.stopServices(ctx)
+		e.reapOrphanContainers(ctx)
+	}
 	_ = os.RemoveAll(e.workRoot())
 }
 

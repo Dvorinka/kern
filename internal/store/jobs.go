@@ -36,7 +36,7 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 		), fleet AS MATERIALIZED (
 			-- Per-runner in-progress counts, computed once per claim instead of
 			-- once per (candidate job × peer runner) pair in the yield check.
-			SELECT r.id, r.labels,
+			SELECT r.id, r.labels, r.executor,
 				(SELECT count(*) FROM jobs a
 				 WHERE a.runner_id = r.id AND a.status = 'in_progress') AS load
 			FROM runners r, me
@@ -52,6 +52,10 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 			WHERE j.status = 'queued'
 			  AND r.status = 'in_progress'
 			  AND j.runs_on <@ (me_f.labels || ARRAY['self-hosted', 'kern'])
+			  -- Host-exec runners have no isolation: fork/pull_request trust
+			  -- tiers (untrusted code) may never land on them. Same boundary
+			  -- as secrets eligibility.
+			  AND (me_f.executor <> 'host' OR r.trust_level NOT IN ('fork', 'pull_request'))
 			  -- Least-loaded placement: yield to any eligible runner carrying
 			  -- fewer in-progress jobs than this one.
 			  AND NOT EXISTS (
