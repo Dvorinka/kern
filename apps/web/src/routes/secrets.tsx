@@ -3,7 +3,7 @@ import { useMemo, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Code2, Copy, KeyRound, Pencil, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
-import type { Environment, Project, SecretSummary } from "../lib/types";
+import type { Environment, Project, ProjectVar, SecretSummary } from "../lib/types";
 import { Button, Card, EmptyState, Input, PageHeader, Spinner } from "../components/ui";
 import { relTime } from "../lib/format";
 
@@ -306,7 +306,145 @@ export function SecretsPage() {
 					)}
 				</Card>
 			)}
+			{slug && <VarsCard slug={slug} />}
 		</>
+	);
+}
+
+// VarsCard manages a project's configuration variables — the GitHub `vars`
+// expression context. Unlike secrets, values are plaintext configuration:
+// visible here, delivered to every run including untrusted pull_request runs,
+// and never masked in logs.
+function VarsCard({ slug }: { slug: string }) {
+	const qc = useQueryClient();
+	const qs = `?project=${encodeURIComponent(slug)}`;
+	const { data, isLoading } = useQuery({
+		queryKey: ["vars", slug],
+		queryFn: () => api.get<{ vars: ProjectVar[] }>(`/vars${qs}`),
+	});
+	const [adding, setAdding] = useState(false);
+	const [q, setQ] = useState("");
+
+	const put = useMutation({
+		mutationFn: ({ name, value }: { name: string; value: string }) =>
+			api.put(`/vars/${encodeURIComponent(name)}${qs}`, { value }),
+		onSuccess: () => {
+			setAdding(false);
+			qc.invalidateQueries({ queryKey: ["vars", slug] });
+		},
+	});
+	const del = useMutation({
+		mutationFn: (name: string) => api.del(`/vars/${encodeURIComponent(name)}${qs}`),
+		onSuccess: () => qc.invalidateQueries({ queryKey: ["vars", slug] }),
+	});
+
+	const submit = (e: FormEvent<HTMLFormElement>) => {
+		e.preventDefault();
+		const fd = new FormData(e.currentTarget);
+		put.mutate({ name: String(fd.get("name")), value: String(fd.get("value")) });
+	};
+
+	const vars = (data?.vars ?? []).filter(
+		(v) => !q.trim() || v.name.toLowerCase().includes(q.trim().toLowerCase()),
+	);
+
+	return (
+		<div className="mt-6">
+			<PageHeader mark="ok"
+				title="Variables"
+				sub={`Project configuration for the vars context — plaintext, delivered to all runs — ${slug}`}
+				actions={
+					<Button size="sm" variant="primary" onClick={() => setAdding((a) => !a)}>
+						Add variable
+					</Button>
+				}
+			/>
+			{adding && (
+				<Card className="mb-4 p-4">
+					<form onSubmit={submit} className="flex gap-2">
+						<Input
+							name="name"
+							placeholder="NAME (no spaces)"
+							required
+							pattern="[^\s=]+"
+							className="w-56"
+						/>
+						<Input name="value" placeholder="value" required className="flex-1" />
+						<Button type="submit" variant="primary" size="sm" disabled={put.isPending}>
+							Save
+						</Button>
+					</form>
+					{put.error && <p className="mt-2 text-xs text-[var(--err)]">{put.error.message}</p>}
+				</Card>
+			)}
+			{!isLoading && (data?.vars.length ?? 0) > 0 && (
+				<input
+					className="fsel mb-3 w-64"
+					placeholder="Filter by name…"
+					value={q}
+					onChange={(e) => setQ(e.target.value)}
+				/>
+			)}
+			{isLoading ? (
+				<Spinner />
+			) : (
+				<Card>
+					{vars.length === 0 ? (
+						<EmptyState icon={<Code2 size={19} />}
+							title="No variables"
+							hint={`Add one, or use kern vars set NAME VALUE --project ${slug}.`}
+						/>
+					) : (
+						vars.map((v) => (
+							<div className="vrow" key={v.id}>
+								<i className="vkey" />
+								<span className="font-mono min-w-0 truncate text-[13px]">{v.name}</span>
+								<span className="vdots font-mono">{v.value}</span>
+								<span className="vacts">
+									<button
+										className="ract"
+										title={`Copy name ${v.name}`}
+										onClick={() => navigator.clipboard.writeText(v.name)}
+									>
+										<Copy size={12} />
+									</button>
+									<button
+										className="ract"
+										title={`Copy workflow snippet  vars.${v.name}`}
+										onClick={() =>
+											navigator.clipboard.writeText(`\${{ vars.${v.name} }}`)
+										}
+									>
+										<Code2 size={12} />
+									</button>
+									<button
+										className="ract"
+										title="Edit variable"
+										onClick={() => {
+											const value = prompt(`New value for ${v.name}`, v.value);
+											if (value !== null) put.mutate({ name: v.name, value });
+										}}
+									>
+										<Pencil size={12} />
+									</button>
+									<button
+										className="ract err"
+										title="Delete variable"
+										disabled={del.isPending}
+										onClick={() => {
+											if (confirm(`Delete variable ${v.name}?`)) del.mutate(v.name);
+										}}
+									>
+										<Trash2 size={12} />
+									</button>
+								</span>
+								<span className="vwhen">updated {relTime(v.updated_at)}</span>
+							</div>
+						))
+					)}
+				</Card>
+			)}
+		</div>
 	);
 }
 

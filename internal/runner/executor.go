@@ -88,7 +88,10 @@ type executor struct {
 	c       *client
 	claim   *Claim
 	secrets map[string]string
-	log     *zap.Logger
+	// vars is the project configuration-variable map behind the `vars`
+	// expression context. Values are plaintext like GitHub's — never masked.
+	vars map[string]string
+	log  *zap.Logger
 	// logMask masks the per-run credentials (clone + GITHUB_TOKEN) that the
 	// server-side secret masker cannot know about.
 	logMask *secrets.Masker
@@ -165,7 +168,7 @@ type stepOutcome struct {
 	Outputs    map[string]string
 }
 
-func newJobExecutor(cfg Config, c *client, claim *Claim, secretMap map[string]string, log *zap.Logger) (*executor, error) {
+func newJobExecutor(cfg Config, c *client, claim *Claim, secretMap, varMap map[string]string, log *zap.Logger) (*executor, error) {
 	if !imageRe.MatchString(claim.Job.Image) {
 		return nil, fmt.Errorf("invalid container image %q", claim.Job.Image)
 	}
@@ -226,7 +229,7 @@ func newJobExecutor(cfg Config, c *client, claim *Claim, secretMap map[string]st
 		logMask = secrets.NewMasker(maskValues)
 	}
 	return &executor{
-		cfg: cfg, c: c, claim: claim, secrets: secretMap, log: log, logMask: logMask,
+		cfg: cfg, c: c, claim: claim, secrets: secretMap, vars: varMap, log: log, logMask: logMask,
 		jobID:       claim.Job.ID,
 		container:   fmt.Sprintf("kern-job-%s-%d", id, claim.Job.Attempt),
 		enc:         newEnvBuilder(claim, secretMap),

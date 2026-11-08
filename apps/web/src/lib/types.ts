@@ -275,6 +275,15 @@ export interface SecretSummary {
 	updated_at: string;
 }
 
+export interface ProjectVar {
+	id: string;
+	project_id: string;
+	name: string;
+	value: string;
+	created_at: string;
+	updated_at: string;
+}
+
 export interface Artifact {
 	id: string;
 	run_id: string;

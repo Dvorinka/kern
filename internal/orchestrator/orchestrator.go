@@ -126,6 +126,16 @@ func (o *Orchestrator) StartRun(ctx context.Context, p store.CreateRunParams) (s
 	}
 
 	p.CancelInProgress = res.Plan.CancelInProgress
+	// Project vars join the runs-on resolution context so
+	// `runs-on: ${{ vars.LABEL }}` works at seed time.
+	varRows, err := o.Store.VarsForProject(ctx, p.ProjectID)
+	if err != nil {
+		return store.Run{}, err
+	}
+	varsCtx := make(map[string]any, len(varRows))
+	for _, v := range varRows {
+		varsCtx[v.Name] = v.Value
+	}
 	seeds := make([]store.JobSeed, 0, len(res.Plan.Jobs))
 	for _, jp := range res.Plan.Jobs {
 		// Dispatch inputs merge over plan (workflow_call) inputs and take part
@@ -144,7 +154,7 @@ func (o *Orchestrator) StartRun(ctx context.Context, p store.CreateRunParams) (s
 		for k, v := range inputs {
 			inputsCtx[k] = v
 		}
-		runsOn := workflows.ResolveRunsOn(jp.RunsOn, map[string]any{"matrix": jp.Matrix, "inputs": inputsCtx})
+		runsOn := workflows.ResolveRunsOn(jp.RunsOn, map[string]any{"matrix": jp.Matrix, "inputs": inputsCtx, "vars": varsCtx})
 		// A job with zero labels can never be claimed — it would sit in the
 		// queue forever. Fail the seed so the trigger reports an error.
 		if len(runsOn) == 0 {
@@ -363,6 +373,17 @@ func (o *Orchestrator) AdvanceRun(ctx context.Context, runID uuid.UUID) error {
 		byJobKey[j.JobKey] = append(byJobKey[j.JobKey], j)
 	}
 
+	// Project vars feed the `vars` expression context for if-conditions;
+	// they are configuration, not secrets, so they load unconditionally.
+	varRows, err := o.Store.VarsForProject(ctx, project.ID)
+	if err != nil {
+		return err
+	}
+	vars := make(map[string]any, len(varRows))
+	for _, v := range varRows {
+		vars[v.Name] = v.Value
+	}
+
 	for _, job := range jobs {
 		if job.Status != "waiting" {
 			continue
@@ -372,6 +393,7 @@ func (o *Orchestrator) AdvanceRun(ctx context.Context, runID uuid.UUID) error {
 			continue
 		}
 		ctxMap := JobContext(job, run, project, byJobKey)
+		ctxMap["vars"] = vars
 		ctxMap["__job_status"] = status
 		ok, evalErr := expressions.EvaluateCondition(job.IfCondition, ctxMap)
 		if evalErr != nil {

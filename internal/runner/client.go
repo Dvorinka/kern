@@ -433,14 +433,15 @@ func (c *client) saveCache(ctx context.Context, jobID, key, path string) error {
 		"/api/v1/runners/jobs/"+url.PathEscape(jobID)+"/cache/"+url.PathEscape(key), fh2bytes(fh), nil)
 }
 
-func (c *client) jobSecrets(ctx context.Context, jobID string) (map[string]string, bool, error) {
+func (c *client) jobSecrets(ctx context.Context, jobID string) (map[string]string, map[string]string, bool, error) {
 	var out struct {
 		Secrets map[string]string `json:"secrets"`
+		Vars    map[string]string `json:"vars"`
 		Blocked bool              `json:"blocked"`
 	}
 	path := "/api/v1/runners/jobs/" + url.PathEscape(jobID) + "/secrets"
 	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
-	return out.Secrets, out.Blocked, nil
+	return out.Secrets, out.Vars, out.Blocked, nil
 }
