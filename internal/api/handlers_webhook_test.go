@@ -476,6 +476,153 @@ func TestParsePRTargetTrigger(t *testing.T) {
 	}
 }
 
+func relPlan(trigger map[string]any) *workflows.Plan {
+	return &workflows.Plan{
+		Events:   []string{"release"},
+		Triggers: map[string]any{"release": trigger},
+	}
+}
+
+func TestReleaseMatchesPlan(t *testing.T) {
+	cases := []struct {
+		name   string
+		plan   *workflows.Plan
+		action string
+		target string
+		want   bool
+		whyRe  string
+	}{
+		{"published default", relPlan(map[string]any{}), "published", "main", true, ""},
+		{"created skipped by default", relPlan(map[string]any{}), "created", "main", false, "not in types filter"},
+		{"types hit", relPlan(map[string]any{"types": []any{"prereleased"}}), "prereleased", "main", true, ""},
+		{"types miss", relPlan(map[string]any{"types": []any{"prereleased"}}), "published", "main", false, "not in types filter"},
+		{"branches hit", relPlan(map[string]any{"branches": []any{"release/**"}}), "published", "release/1.0", true, ""},
+		{"branches miss", relPlan(map[string]any{"branches": []any{"main"}}), "published", "release/1.0", false, "not in branches filter"},
+		{"branches-ignore hit", relPlan(map[string]any{"branches-ignore": []any{"canary"}}), "published", "canary", false, "is ignored"},
+		{"unsupported key", relPlan(map[string]any{"paths": []any{"x"}}), "published", "main", false, "unsupported release filter paths"},
+		{"not subscribed", &workflows.Plan{Events: []string{"push"}, Triggers: map[string]any{}}, "published", "main", false, ""},
+	}
+	for _, tc := range cases {
+		got, why := releaseMatchesPlan(tc.plan, tc.action, tc.target)
+		if got != tc.want {
+			t.Errorf("%s: got %v want %v (why %q)", tc.name, got, tc.want, why)
+			continue
+		}
+		if tc.whyRe != "" && !strings.Contains(why, tc.whyRe) {
+			t.Errorf("%s: why %q missing %q", tc.name, why, tc.whyRe)
+		}
+	}
+}
+
+func TestParseReleaseTrigger(t *testing.T) {
+	body := []byte(`{
+		"action": "published",
+		"release": {
+			"tag_name": "v1.2.3", "name": "Release 1.2.3", "body": "notes",
+			"draft": false, "prerelease": false,
+			"html_url": "https://github.com/o/r/releases/tag/v1.2.3",
+			"target_commitish": "main",
+			"author": {"login": "tdv"}
+		},
+		"sender": {"login": "octo"},
+		"repository": {"full_name": "o/r", "clone_url": "https://github.com/o/r.git", "default_branch": "main"}
+	}`)
+	tr, status, _ := parseReleaseTrigger(body)
+	if tr == nil {
+		t.Fatalf("release rejected: %s", status)
+	}
+	if tr.event != "release" || tr.trust != "trusted" || tr.repoName != "o/r" {
+		t.Fatalf("trigger = %#v", tr)
+	}
+	if tr.ref != "refs/tags/v1.2.3" || tr.sha != "" {
+		t.Fatalf("ref/sha = %q %q — sha defers to resolveReleaseSHA", tr.ref, tr.sha)
+	}
+	if tr.tagName != "v1.2.3" || tr.tagFallback != "main" {
+		t.Fatalf("tag fields = %q %q", tr.tagName, tr.tagFallback)
+	}
+	if tr.actor != "octo" || tr.message != "Release 1.2.3" {
+		t.Fatalf("actor/message = %q %q", tr.actor, tr.message)
+	}
+	if tr.extra["release_tag"] != "v1.2.3" || tr.extra["action"] != "published" {
+		t.Fatalf("extras = %#v", tr.extra)
+	}
+}
+
+func TestParseReleaseTriggerNoTag(t *testing.T) {
+	body := []byte(`{"action":"published","release":{"name":"x"},"repository":{"full_name":"o/r"}}`)
+	tr, status, _ := parseReleaseTrigger(body)
+	if tr != nil || status != "ignored" {
+		t.Fatalf("tagless release should be ignored, got %v %q", tr, status)
+	}
+}
+
+func rdPlan(trigger map[string]any) *workflows.Plan {
+	return &workflows.Plan{
+		Events:   []string{"repository_dispatch"},
+		Triggers: map[string]any{"repository_dispatch": trigger},
+	}
+}
+
+func TestRepoDispatchMatchesPlan(t *testing.T) {
+	cases := []struct {
+		name      string
+		plan      *workflows.Plan
+		eventType string
+		want      bool
+		whyRe     string
+	}{
+		{"types hit", rdPlan(map[string]any{"types": []any{"deploy-prod"}}), "deploy-prod", true, ""},
+		{"types miss", rdPlan(map[string]any{"types": []any{"deploy-prod"}}), "deploy-dev", false, "not in types filter"},
+		{"no types", rdPlan(map[string]any{}), "deploy-prod", false, "no types filter"},
+		{"not subscribed", &workflows.Plan{Events: []string{"push"}, Triggers: map[string]any{}}, "deploy-prod", false, ""},
+		{"unsupported key", rdPlan(map[string]any{"types": []any{"x"}, "branches": []any{"main"}}), "x", false, "unsupported repository_dispatch filter branches"},
+	}
+	for _, tc := range cases {
+		got, why := repoDispatchMatchesPlan(tc.plan, tc.eventType)
+		if got != tc.want {
+			t.Errorf("%s: got %v want %v (why %q)", tc.name, got, tc.want, why)
+			continue
+		}
+		if tc.whyRe != "" && !strings.Contains(why, tc.whyRe) {
+			t.Errorf("%s: why %q missing %q", tc.name, why, tc.whyRe)
+		}
+	}
+}
+
+func TestParseRepoDispatchTrigger(t *testing.T) {
+	body := []byte(`{
+		"action": "repository_dispatch",
+		"repository_dispatch": {
+			"event_type": "deploy-prod",
+			"client_payload": {"service": "api", "region": "eu"}
+		},
+		"sender": {"login": "octo"},
+		"repository": {"full_name": "o/r", "clone_url": "https://github.com/o/r.git", "default_branch": "main"}
+	}`)
+	tr, status, _ := parseRepoDispatchTrigger(body)
+	if tr == nil {
+		t.Fatalf("repository_dispatch rejected: %s", status)
+	}
+	if tr.event != "repository_dispatch" || tr.trust != "trusted" || tr.repoName != "o/r" {
+		t.Fatalf("trigger = %#v", tr)
+	}
+	if tr.defaultBranch != "main" || tr.sha != "" || tr.ref != "" {
+		t.Fatalf("default-head fields = %q %q %q", tr.defaultBranch, tr.sha, tr.ref)
+	}
+	cp, ok := tr.extra["rd_payload"].(map[string]any)
+	if !ok || cp["service"] != "api" {
+		t.Fatalf("client_payload extra = %#v", tr.extra["rd_payload"])
+	}
+}
+
+func TestParseRepoDispatchTriggerMissingType(t *testing.T) {
+	body := []byte(`{"action":"repository_dispatch","repository_dispatch":{},"repository":{"full_name":"o/r","default_branch":"main"}}`)
+	tr, status, _ := parseRepoDispatchTrigger(body)
+	if tr != nil || status != "ignored" {
+		t.Fatalf("typeless dispatch should be ignored, got %v %q", tr, status)
+	}
+}
+
 func TestForkGateHold(t *testing.T) {
 	cases := []struct {
 		gate        string

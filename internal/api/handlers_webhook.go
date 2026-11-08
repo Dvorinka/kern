@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -43,7 +44,11 @@ type ghTrigger struct {
 	pushBefore string
 	pushAfter  string
 	pushDiff   func(ctx context.Context) ([]string, error)
-	matches    func(ctx context.Context, plan *workflows.Plan) (bool, string)
+	// tagName pins a release trigger to the tagged commit; tagFallback is the
+	// release's target_commitish, tried when the tag ref does not resolve.
+	tagName     string
+	tagFallback string
+	matches     func(ctx context.Context, plan *workflows.Plan) (bool, string)
 }
 
 // processGithubDelivery acts on a persisted webhook delivery. push and
@@ -96,6 +101,10 @@ func (s *Server) actOnGithubEvent(c *gin.Context, delivery, event string, body [
 		t, status, detail = parsePRTrigger(body, event)
 	case "workflow_run":
 		t, status, detail = parseWorkflowRunTrigger(body)
+	case "release":
+		t, status, detail = parseReleaseTrigger(body)
+	case "repository_dispatch":
+		t, status, detail = parseRepoDispatchTrigger(body)
 	default:
 		return "ignored", "event type " + event + " is recorded but not acted on"
 	}
@@ -118,6 +127,13 @@ func (s *Server) actOnGithubEvent(c *gin.Context, delivery, event string, body [
 		// pull_request_target runs in the default-branch context: the workflow
 		// file and the checkout both come from the base repo's default head.
 		if err := s.resolvePRTargetSHA(c, t); err != nil {
+			return "failed", err.Error()
+		}
+	}
+	if t.tagName != "" {
+		// release runs the workflow version at the tagged commit, like a tag
+		// push — the tag must resolve to a sha before anything compiles.
+		if err := s.resolveReleaseSHA(c, t); err != nil {
 			return "failed", err.Error()
 		}
 	}
@@ -451,6 +467,204 @@ func workflowRunMatchesPlan(plan *workflows.Plan, action, name, path, headBranch
 		return false, "head branch " + headBranch + " is ignored"
 	}
 	return true, ""
+}
+
+// releasePayload is the webhook body for release deliveries.
+type releasePayload struct {
+	Action  string `json:"action"`
+	Release struct {
+		TagName         string `json:"tag_name"`
+		Name            string `json:"name"`
+		Body            string `json:"body"`
+		Draft           bool   `json:"draft"`
+		Prerelease      bool   `json:"prerelease"`
+		HTMLURL         string `json:"html_url"`
+		TargetCommitish string `json:"target_commitish"`
+		Author          struct {
+			Login string `json:"login"`
+		} `json:"author"`
+	} `json:"release"`
+	Sender struct {
+		Login string `json:"login"`
+	} `json:"sender"`
+	Repository struct {
+		FullName      string `json:"full_name"`
+		CloneURL      string `json:"clone_url"`
+		DefaultBranch string `json:"default_branch"`
+	} `json:"repository"`
+}
+
+// parseReleaseTrigger normalises a release delivery. GitHub runs release
+// workflows at the tagged commit — ref is the tag, sha resolves later via
+// resolveReleaseSHA — with secrets, the same trust model as a trusted push.
+func parseReleaseTrigger(body []byte) (*ghTrigger, string, string) {
+	var p releasePayload
+	if err := json.Unmarshal(body, &p); err != nil {
+		return nil, "failed", "payload is not a release event: " + err.Error()
+	}
+	rel := p.Release
+	if rel.TagName == "" {
+		return nil, "ignored", "release payload has no tag_name"
+	}
+	actor := p.Sender.Login
+	if actor == "" {
+		actor = rel.Author.Login
+	}
+	message := rel.Name
+	if message == "" {
+		message = rel.TagName
+	}
+	return &ghTrigger{
+		event: "release", repoName: p.Repository.FullName, cloneURL: p.Repository.CloneURL,
+		sha: "", ref: "refs/tags/" + rel.TagName, message: message, actor: actor, trust: "trusted",
+		tagName: rel.TagName, tagFallback: rel.TargetCommitish,
+		extra: map[string]any{
+			"action":      p.Action,
+			"release_tag": rel.TagName, "release_name": rel.Name, "release_body": rel.Body,
+			"release_draft": rel.Draft, "release_prerelease": rel.Prerelease,
+			"release_url": rel.HTMLURL, "release_author": rel.Author.Login,
+			"target_commitish": rel.TargetCommitish,
+		},
+		matches: func(_ context.Context, plan *workflows.Plan) (bool, string) {
+			return releaseMatchesPlan(plan, p.Action, rel.TargetCommitish)
+		},
+	}, "", ""
+}
+
+// releaseMatchesPlan applies on:release semantics. types: lists release
+// actions (published, prereleased, released, created, edited, deleted,
+// unpublished); with no filter GitHub fires only on published. branches
+// filters match the release's target_commitish — a commit-ish that does not
+// name a matching branch simply does not match.
+func releaseMatchesPlan(plan *workflows.Plan, action, targetCommitish string) (bool, string) {
+	subscribed := false
+	for _, e := range plan.Events {
+		if e == "release" {
+			subscribed = true
+		}
+	}
+	if !subscribed {
+		return false, ""
+	}
+	cfg, _ := plan.Triggers["release"].(map[string]any)
+	for key, v := range cfg {
+		switch key {
+		case "types", "branches", "branches-ignore":
+		default:
+			if !emptyFilter(v) {
+				return false, "unsupported release filter " + key
+			}
+		}
+	}
+	types := filterList(cfg["types"])
+	if len(types) == 0 {
+		types = []string{"published"}
+	}
+	if !contains(types, action) {
+		return false, "action " + action + " not in types filter"
+	}
+	if patterns := filterList(cfg["branches"]); len(patterns) > 0 && !matchPatterns(patterns, targetCommitish) {
+		return false, "target " + targetCommitish + " not in branches filter"
+	}
+	if patterns := filterList(cfg["branches-ignore"]); len(patterns) > 0 && matchPatterns(patterns, targetCommitish) {
+		return false, "target " + targetCommitish + " is ignored"
+	}
+	return true, ""
+}
+
+// repoDispatchPayload is the webhook body for repository_dispatch deliveries.
+type repoDispatchPayload struct {
+	Action             string `json:"action"`
+	RepositoryDispatch struct {
+		EventType     string         `json:"event_type"`
+		ClientPayload map[string]any `json:"client_payload"`
+	} `json:"repository_dispatch"`
+	Sender struct {
+		Login string `json:"login"`
+	} `json:"sender"`
+	Repository struct {
+		FullName      string `json:"full_name"`
+		CloneURL      string `json:"clone_url"`
+		DefaultBranch string `json:"default_branch"`
+	} `json:"repository"`
+}
+
+// parseRepoDispatchTrigger normalises a repository_dispatch delivery. Like
+// workflow_dispatch via the API, it runs on the default branch head with
+// secrets — defaultBranch defers sha/ref to resolvePRTargetSHA.
+func parseRepoDispatchTrigger(body []byte) (*ghTrigger, string, string) {
+	var p repoDispatchPayload
+	if err := json.Unmarshal(body, &p); err != nil {
+		return nil, "failed", "payload is not a repository_dispatch event: " + err.Error()
+	}
+	rd := p.RepositoryDispatch
+	if rd.EventType == "" {
+		return nil, "ignored", "repository_dispatch payload has no event_type"
+	}
+	if p.Repository.DefaultBranch == "" {
+		return nil, "ignored", "repository_dispatch payload has no default branch"
+	}
+	return &ghTrigger{
+		event: "repository_dispatch", repoName: p.Repository.FullName, cloneURL: p.Repository.CloneURL,
+		sha: "", ref: "", message: rd.EventType, actor: p.Sender.Login, trust: "trusted",
+		defaultBranch: p.Repository.DefaultBranch,
+		extra: map[string]any{
+			"rd_event_type": rd.EventType, "rd_payload": rd.ClientPayload,
+		},
+		matches: func(_ context.Context, plan *workflows.Plan) (bool, string) {
+			return repoDispatchMatchesPlan(plan, rd.EventType)
+		},
+	}, "", ""
+}
+
+// repoDispatchMatchesPlan applies on:repository_dispatch semantics: types:
+// lists the client-chosen event_type strings and is required — GitHub never
+// fires a repository_dispatch workflow that does not name its types.
+func repoDispatchMatchesPlan(plan *workflows.Plan, eventType string) (bool, string) {
+	subscribed := false
+	for _, e := range plan.Events {
+		if e == "repository_dispatch" {
+			subscribed = true
+		}
+	}
+	if !subscribed {
+		return false, ""
+	}
+	cfg, _ := plan.Triggers["repository_dispatch"].(map[string]any)
+	for key, v := range cfg {
+		if key != "types" && !emptyFilter(v) {
+			return false, "unsupported repository_dispatch filter " + key
+		}
+	}
+	types := filterList(cfg["types"])
+	if len(types) == 0 {
+		return false, "repository_dispatch trigger has no types filter"
+	}
+	if !contains(types, eventType) {
+		return false, "event_type " + eventType + " not in types filter"
+	}
+	return true, ""
+}
+
+// resolveReleaseSHA pins a release trigger to the tagged commit, falling back
+// to the release's target_commitish (a branch name or sha) when the tag ref
+// does not resolve.
+func (s *Server) resolveReleaseSHA(c *gin.Context, t *ghTrigger) error {
+	ctx := c.Request.Context()
+	gh, err := s.githubClient(ctx, t.repoName)
+	if err == nil {
+		if sha, herr := gh.HeadSHA(ctx, t.repoName, url.PathEscape(t.tagName)); herr == nil && sha != "" {
+			t.sha = sha
+		} else if t.tagFallback != "" {
+			if sha, ferr := gh.HeadSHA(ctx, t.repoName, url.PathEscape(t.tagFallback)); ferr == nil && sha != "" {
+				t.sha = sha
+			}
+		}
+	}
+	if t.sha == "" {
+		return fmt.Errorf("cannot resolve release tag %q to a commit", t.tagName)
+	}
+	return nil
 }
 
 // pushChangedFiles resolves the paths a push changed via the compare API. A

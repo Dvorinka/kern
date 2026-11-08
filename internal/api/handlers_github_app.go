@@ -44,7 +44,7 @@ func (s *Server) githubAppManifest(c *gin.Context) {
 			},
 			// pull_request_target is not a subscribable App event. The webhook
 			// handler synthesizes it from pull_request deliveries.
-			"default_events": []string{"push", "pull_request", "check_run", "check_suite", "workflow_run"},
+			"default_events": []string{"push", "pull_request", "check_run", "check_suite", "workflow_run", "release", "repository_dispatch"},
 		},
 	})
 }
