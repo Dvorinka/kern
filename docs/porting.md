@@ -24,7 +24,7 @@ Ordered by how many repos they touch.
 | `release` / `repository_dispatch` events | Nothing_Modes fdroid (`release`), oru-mail release-next, any repo dispatching builds | Both now mint runs — `release` runs the workflow at the tagged commit (`types:` actions, absent = `published`; `branches` filters match `target_commitish`), `repository_dispatch` requires `types:` event-type strings and runs on the default head. Both need the GitHub App subscribed to the event — tick it in the app's GitHub settings for pre-existing apps. |
 | `vars` context empty | anything reading `${{ vars.* }}` | `vars` is stubbed to `{}` in the run context. Repo variables need a table + secret-free config surface, or document "use plain env". |
 | `runs-on: ${{ inputs.runner }}` | Invico + Relay ployz-build | Dispatch inputs aren't knowable at compile time — label stays literal (lint warns). Needs runs-on resolution deferred to schedule time with the dispatch inputs in context. |
-| Secrets/vars migration | all | Every repo's GitHub secrets must be re-created per project (`kern secrets set`). Inventory per repo before porting. |
+| Secrets/vars migration | all | Every repo's GitHub secrets must be re-created per project (`PUT /api/v1/secrets/:name?project=<id>` or the dashboard). The `secrets` expression context is live — `${{ secrets.X }}` resolves in env/if/run/with — so migration is purely a data-copy step. Cal's `ANDROID_KEYSTORE_*` trio is already populated. `vars` still needs a store; use plain `env` until then. |
 
 ## Per-repo verdicts
 

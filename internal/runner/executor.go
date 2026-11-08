@@ -105,6 +105,9 @@ type executor struct {
 	// eventPayload is the github.event expression context, built once at
 	// container start and shared with the GITHUB_EVENT_PATH file.
 	eventPayload map[string]any
+	// jobEnvResolved caches claim.Job.Env after expression interpolation;
+	// nil until the first expression context is built (post-prepare).
+	jobEnvResolved map[string]string
 
 	cancelled    atomic.Bool
 	stepResults  map[string]*stepOutcome

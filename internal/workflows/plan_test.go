@@ -282,3 +282,38 @@ jobs:
 		}
 	}
 }
+
+func TestCompileRunsOnMatrixArrayExpands(t *testing.T) {
+	src := `on: push
+jobs:
+  j:
+    runs-on: ${{ matrix.ro }}
+    strategy:
+      matrix:
+        ro:
+          - [self-hosted, macos, x64]
+          - [self-hosted, linux, x64]
+    steps:
+      - run: echo hi
+`
+	res, err := Compile(src, testCompiler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Valid {
+		t.Fatalf("diagnostics: %+v", res.Diagnostics)
+	}
+	if len(res.Plan.Jobs) != 2 {
+		t.Fatalf("want 2 matrix jobs, got %d", len(res.Plan.Jobs))
+	}
+	for _, j := range res.Plan.Jobs {
+		if len(j.RunsOn) != 3 {
+			t.Fatalf("runs-on should expand to 3 labels, got %v", j.RunsOn)
+		}
+		for _, l := range j.RunsOn {
+			if l == "Array" || strings.Contains(l, "${{") {
+				t.Fatalf("bad label %q in %v", l, j.RunsOn)
+			}
+		}
+	}
+}

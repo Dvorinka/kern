@@ -351,9 +351,20 @@ func compileJob(wf Workflow, id string, job *Job, matrix map[string]any, c Compi
 	// runs-on accepts expressions (GitHub evaluates them against matrix and
 	// other contexts). Only matrix is knowable at compile time; a label that
 	// still cannot be resolved stays literal and must exist on a runner.
+	// A whole-value expression that evaluates to a list expands into labels —
+	// GitHub treats `runs-on: ${{ matrix.ro }}` with ro: [a, b] as labels a+b;
+	// stringifying it would produce the literal "Array" and match nothing.
 	runsOn := make([]string, 0, len(job.RunsOn))
 	for _, label := range job.RunsOn {
 		if strings.Contains(label, "${{") {
+			if elems, ok := evalWholeExpr(label, ctx); ok {
+				for _, el := range elems {
+					if el = strings.TrimSpace(el); el != "" {
+						runsOn = append(runsOn, el)
+					}
+				}
+				continue
+			}
 			if resolved, err := expressions.Interpolate(label, ctx); err == nil && strings.TrimSpace(resolved) != "" {
 				label = resolved
 			}
