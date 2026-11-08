@@ -5,6 +5,15 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 
 ## [Unreleased]
 
+## [v0.6.1] - 2026-11-08
+
+### Fixed
+- Docker action steps (`uses: docker://`, `runs.using: docker`) now receive
+  multi-line env values (service-account JSON, PEM keys, heredoc exports)
+  via `-e` args instead of silently dropping them (#146, #147).
+- Env layering precedence: a later layer resolving a key to a file-safe
+  value no longer loses to a stale `-e` entry from an earlier layer (#147).
+
 ## [v0.6.0] - 2026-11-08
 
 ### Added
