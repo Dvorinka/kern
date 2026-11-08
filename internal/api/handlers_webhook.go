@@ -1,12 +1,14 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -36,7 +38,12 @@ type ghTrigger struct {
 	defaultBranch string
 	baseSHA       string
 	extra         map[string]any
-	matches       func(*workflows.Plan) (bool, string)
+	// pushBefore/pushAfter bound the push diff for paths filters; pushDiff
+	// resolves the changed-file list lazily, once per delivery.
+	pushBefore string
+	pushAfter  string
+	pushDiff   func(ctx context.Context) ([]string, error)
+	matches    func(ctx context.Context, plan *workflows.Plan) (bool, string)
 }
 
 // processGithubDelivery acts on a persisted webhook delivery. push and
@@ -95,6 +102,18 @@ func (s *Server) actOnGithubEvent(c *gin.Context, delivery, event string, body [
 	if t == nil {
 		return status, detail
 	}
+	if event == "push" {
+		// One compare-API fetch serves every project/workflow in the delivery.
+		var once sync.Once
+		var files []string
+		var derr error
+		t.pushDiff = func(ctx context.Context) ([]string, error) {
+			once.Do(func() {
+				files, derr = s.pushChangedFiles(ctx, t.repoName, t.pushBefore, t.pushAfter)
+			})
+			return files, derr
+		}
+	}
 	if t.defaultBranch != "" {
 		// pull_request_target runs in the default-branch context: the workflow
 		// file and the checkout both come from the base repo's default head.
@@ -142,7 +161,7 @@ func (s *Server) actOnGithubEvent(c *gin.Context, delivery, event string, body [
 				skipped = append(skipped, wf.Name+" ("+err.Error()+")")
 				continue
 			}
-			triggered, why := t.matches(plan)
+			triggered, why := t.matches(c.Request.Context(), plan)
 			if !triggered {
 				if why != "" {
 					skipped = append(skipped, wf.Name+" ("+why+")")
@@ -221,12 +240,16 @@ func parsePushTrigger(body []byte) (*ghTrigger, string, string) {
 	if actor == "" {
 		actor = p.Sender.Login
 	}
-	return &ghTrigger{
+	tr := &ghTrigger{
 		event: "push", repoName: p.Repository.FullName, cloneURL: p.Repository.CloneURL,
 		sha: p.After, ref: p.Ref, message: p.HeadCommit.Message, actor: actor, trust: "trusted",
-		extra:   map[string]any{"before": p.Before},
-		matches: func(plan *workflows.Plan) (bool, string) { return pushMatchesPlan(plan, p.Ref) },
-	}, "", ""
+		pushBefore: p.Before, pushAfter: p.After,
+		extra: map[string]any{"before": p.Before},
+	}
+	tr.matches = func(ctx context.Context, plan *workflows.Plan) (bool, string) {
+		return pushMatchesPlan(ctx, plan, p.Ref, tr.pushDiff)
+	}
+	return tr, "", ""
 }
 
 // prPayload is the shared webhook body for pull_request and
@@ -290,7 +313,7 @@ func parsePRTrigger(body []byte, event string) (*ghTrigger, string, string) {
 				"action": p.Action, "base_ref": pr.Base.Ref, "base_sha": pr.Base.SHA,
 				"head_repo": pr.Head.Repo.FullName, "base_clone_url": p.Repository.CloneURL,
 			},
-			matches: func(plan *workflows.Plan) (bool, string) {
+			matches: func(_ context.Context, plan *workflows.Plan) (bool, string) {
 				return pullRequestMatchesPlan(plan, event, p.Action, pr.Base.Ref)
 			},
 		}, "", ""
@@ -313,7 +336,7 @@ func parsePRTrigger(body []byte, event string) (*ghTrigger, string, string) {
 			"action": p.Action, "base_ref": pr.Base.Ref, "base_sha": pr.Base.SHA,
 			"head_repo": pr.Head.Repo.FullName, "base_clone_url": p.Repository.CloneURL,
 		},
-		matches: func(plan *workflows.Plan) (bool, string) {
+		matches: func(_ context.Context, plan *workflows.Plan) (bool, string) {
 			return pullRequestMatchesPlan(plan, event, p.Action, pr.Base.Ref)
 		},
 	}, "", ""
@@ -380,7 +403,7 @@ func parseWorkflowRunTrigger(body []byte) (*ghTrigger, string, string) {
 			"wr_head_branch": wr.HeadBranch, "wr_head_sha": wr.HeadSHA,
 			"wr_number": wr.RunNumber, "wr_attempt": wr.RunAttempt, "wr_url": wr.HTMLURL,
 		},
-		matches: func(plan *workflows.Plan) (bool, string) {
+		matches: func(_ context.Context, plan *workflows.Plan) (bool, string) {
 			return workflowRunMatchesPlan(plan, p.Action, wr.Name, wr.Path, wr.HeadBranch)
 		},
 	}, "", ""
@@ -428,6 +451,22 @@ func workflowRunMatchesPlan(plan *workflows.Plan, action, name, path, headBranch
 		return false, "head branch " + headBranch + " is ignored"
 	}
 	return true, ""
+}
+
+// pushChangedFiles resolves the paths a push changed via the compare API. A
+// push with no diff base — ref creation (before is all zeros) or an empty
+// range — errors, and callers treat that as a declared skip, never a blind
+// fire.
+func (s *Server) pushChangedFiles(ctx context.Context, repo, before, after string) ([]string, error) {
+	if before == "" || after == "" || before == after ||
+		before == "0000000000000000000000000000000000000000" {
+		return nil, fmt.Errorf("push has no comparable diff base")
+	}
+	gh, err := s.githubClient(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	return gh.CompareFiles(ctx, repo, before, after)
 }
 
 // resolvePRTargetSHA pins a pull_request_target trigger to the base repo's
@@ -569,9 +608,11 @@ func (s *Server) workflowAtSHA(c *gin.Context, fullName string, projectID uuid.U
 // on ref. GitHub semantics: branches/branches-ignore apply to branch pushes
 // only, tags/tags-ignore to tag pushes only — defining just one family means
 // pushes to the other ref type never run; defining neither runs on both.
-// paths/paths-ignore remain a declared gap (they need the push diff) and keep
-// the workflow skipped rather than firing wrongly.
-func pushMatchesPlan(plan *workflows.Plan, ref string) (bool, string) {
+// paths/paths-ignore evaluate the push diff on branch pushes only — GitHub
+// does not evaluate them for tag pushes. diff resolves the changed-file list;
+// a nil diff or a failed lookup skips rather than firing blindly.
+func pushMatchesPlan(ctx context.Context, plan *workflows.Plan, ref string,
+	diff func(context.Context) ([]string, error)) (bool, string) {
 	subscribed := false
 	for _, e := range plan.Events {
 		if e == "push" {
@@ -584,7 +625,7 @@ func pushMatchesPlan(plan *workflows.Plan, ref string) (bool, string) {
 	cfg, _ := plan.Triggers["push"].(map[string]any)
 	for key, v := range cfg {
 		switch key {
-		case "branches", "branches-ignore", "tags", "tags-ignore":
+		case "branches", "branches-ignore", "tags", "tags-ignore", "paths", "paths-ignore":
 		default:
 			if !emptyFilter(v) {
 				return false, "unsupported push filter " + key
@@ -598,29 +639,69 @@ func pushMatchesPlan(plan *workflows.Plan, ref string) (bool, string) {
 		if pushHasRefFilter(cfg) {
 			return false, "push to " + ref + " is neither a branch nor a tag"
 		}
-		return true, ""
+	} else {
+		var incKey, ignKey, otherFamily string
+		if family == "tags" {
+			incKey, ignKey, otherFamily = "tags", "tags-ignore", "branches"
+		} else {
+			incKey, ignKey, otherFamily = "branches", "branches-ignore", "tags"
+		}
+		own := filterList(cfg[incKey])
+		ownIgnore := filterList(cfg[ignKey])
+		if len(own) == 0 && len(ownIgnore) == 0 {
+			// The other family's filters, when present, still gate this push out.
+			if len(filterList(cfg[otherFamily]))+len(filterList(cfg[otherFamily+"-ignore"])) > 0 {
+				return false, family + " push skipped: workflow defines only " + otherFamily + " filters"
+			}
+		} else {
+			if len(own) > 0 && !matchPatterns(own, name) {
+				return false, family + " " + name + " not in " + incKey + " filter"
+			}
+			if len(ownIgnore) > 0 && matchPatterns(ownIgnore, name) {
+				return false, family + " " + name + " is ignored"
+			}
+		}
+		if family == "tags" {
+			// GitHub does not evaluate path filters for tag pushes.
+			return true, ""
+		}
 	}
 
-	var incKey, ignKey, otherFamily string
-	if family == "tags" {
-		incKey, ignKey, otherFamily = "tags", "tags-ignore", "branches"
-	} else {
-		incKey, ignKey, otherFamily = "branches", "branches-ignore", "tags"
-	}
-	own := filterList(cfg[incKey])
-	ownIgnore := filterList(cfg[ignKey])
-	if len(own) == 0 && len(ownIgnore) == 0 {
-		// The other family's filters, when present, still gate this push out.
-		if len(filterList(cfg[otherFamily]))+len(filterList(cfg[otherFamily+"-ignore"])) > 0 {
-			return false, family + " push skipped: workflow defines only " + otherFamily + " filters"
-		}
+	paths := filterList(cfg["paths"])
+	ignore := filterList(cfg["paths-ignore"])
+	if len(paths) == 0 && len(ignore) == 0 {
 		return true, ""
 	}
-	if len(own) > 0 && !matchPatterns(own, name) {
-		return false, family + " " + name + " not in " + incKey + " filter"
+	if diff == nil {
+		return false, "paths filter present but no diff resolver"
 	}
-	if len(ownIgnore) > 0 && matchPatterns(ownIgnore, name) {
-		return false, family + " " + name + " is ignored"
+	files, err := diff(ctx)
+	if err != nil {
+		return false, "push diff unavailable: " + err.Error()
+	}
+	return pushPathsMatch(paths, ignore, files)
+}
+
+// pushPathsMatch applies paths/paths-ignore to the push diff: paths runs the
+// workflow when at least one changed file is included by the ordered pattern
+// list; paths-ignore skips it when any changed file is included.
+func pushPathsMatch(paths, ignore, files []string) (bool, string) {
+	if len(paths) > 0 {
+		hit := false
+		for _, f := range files {
+			if pathPatternsInclude(paths, f) {
+				hit = true
+				break
+			}
+		}
+		if !hit {
+			return false, "no changed file matches paths filter"
+		}
+	}
+	for _, f := range files {
+		if pathPatternsInclude(ignore, f) {
+			return false, "changed file " + f + " matches paths-ignore"
+		}
 	}
 	return true, ""
 }
@@ -677,10 +758,20 @@ func filterList(v any) []string {
 // matchPatterns applies GitHub's ordered pattern semantics: later matches win,
 // a leading '!' negates the match.
 func matchPatterns(patterns []string, name string) bool {
+	return matchPatternsFn(patterns, name, globMatch)
+}
+
+// pathPatternsInclude is matchPatterns for path filters — same '!' ordering,
+// different glob rules ('*' does not cross '/').
+func pathPatternsInclude(patterns []string, name string) bool {
+	return matchPatternsFn(patterns, name, pathGlobMatch)
+}
+
+func matchPatternsFn(patterns []string, name string, match func(string, string) bool) bool {
 	matched := false
 	for _, p := range patterns {
 		neg := strings.HasPrefix(p, "!")
-		if globMatch(strings.TrimPrefix(p, "!"), name) {
+		if match(strings.TrimPrefix(p, "!"), name) {
 			matched = !neg
 		}
 	}
@@ -694,6 +785,43 @@ func globMatch(pattern, name string) bool {
 	re = strings.ReplaceAll(re, `\*`, ".*")
 	re = strings.ReplaceAll(re, `\?`, ".")
 	ok, _ := regexp.MatchString("^"+re+"$", name)
+	return ok
+}
+
+// pathGlobMatch implements GitHub's path-filter glob: the whole repo-relative
+// path must match, '*' and '?' never cross '/', '**' does, '**/' matches zero
+// or more directories, and '?' makes the preceding character optional.
+// jarvis: ceiling — no [] classes or backslash escapes; upgrade if needed.
+func pathGlobMatch(pattern, name string) bool {
+	var b strings.Builder
+	b.WriteByte('^')
+	rs := []rune(pattern)
+	for i := 0; i < len(rs); i++ {
+		switch rs[i] {
+		case '*':
+			if i+1 < len(rs) && rs[i+1] == '*' {
+				i++
+				if i+1 < len(rs) && rs[i+1] == '/' {
+					b.WriteString("(?:.*/)?")
+					i++
+				} else {
+					b.WriteString(".*")
+				}
+			} else {
+				b.WriteString("[^/]*")
+			}
+		case '?':
+			if b.Len() > 1 {
+				b.WriteByte('?')
+			} else {
+				b.WriteString(`\?`)
+			}
+		default:
+			b.WriteString(regexp.QuoteMeta(string(rs[i])))
+		}
+	}
+	b.WriteByte('$')
+	ok, _ := regexp.MatchString(b.String(), name)
 	return ok
 }
 
