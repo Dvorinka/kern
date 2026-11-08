@@ -1,16 +1,27 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 320" role="img" aria-label="KERN logo">
   <title>KERN — hub fan</title>
-  <!-- Dark rounded box, white mark inside; check punched through in box colour. -->
+  <!-- Dark rounded box, original fan shape inside; three fill patterns on the
+       output nodes: solid, dot grid (carries the check), diagonal stripes. -->
+  <defs>
+    <pattern id="pd" width="9" height="9" patternUnits="userSpaceOnUse">
+      <rect width="9" height="9" fill="#0F131A"/>
+      <circle cx="4.5" cy="4.5" r="2.1" fill="#fff"/>
+    </pattern>
+    <pattern id="ps" width="9" height="9" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="9" height="9" fill="#0F131A"/>
+      <rect width="3.2" height="9" fill="#fff"/>
+    </pattern>
+  </defs>
   <rect x="8" y="8" width="304" height="304" rx="56" fill="#0F131A" stroke="#262C33" stroke-width="2"/>
-  <g transform="translate(64 64) scale(0.75)">
+  <g transform="translate(32 32)">
     <path d="M66 86 L92 108" stroke="#fff" stroke-width="16" fill="none" stroke-linecap="round"/>
     <path d="M134 116 C 158 106 170 92 178 70 M136 128 H174 M134 140 C 158 150 170 164 178 186"
           stroke="#fff" stroke-width="16" fill="none" stroke-linecap="round"/>
     <circle cx="52" cy="72" r="21" fill="#fff"/>
     <circle cx="112" cy="128" r="26" fill="#fff"/>
     <circle cx="194" cy="52" r="21" fill="#fff"/>
-    <circle cx="198" cy="128" r="21" fill="#fff"/>
-    <circle cx="194" cy="204" r="21" fill="#fff"/>
+    <circle cx="198" cy="128" r="21" fill="url(#pd)"/>
+    <circle cx="194" cy="204" r="21" fill="url(#ps)"/>
     <path d="M187 129 L194 136 L205 118" stroke="#0F131A" stroke-width="8"
           fill="none" stroke-linecap="round" stroke-linejoin="round"/>
   </g>
