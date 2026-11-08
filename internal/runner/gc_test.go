@@ -44,6 +44,55 @@ func TestSweepWorkspaces(t *testing.T) {
 	}
 }
 
+func TestSweepBoundedCache(t *testing.T) {
+	root := t.TempDir()
+	cache := filepath.Join(root, "_cache")
+	old := time.Now().Add(-48 * time.Hour)
+	write := func(name string, size int, mtime time.Time) string {
+		p := filepath.Join(cache, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, make([]byte, size), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(p, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	oldBig := write("old.bin", 600, old)
+	newBig := write("new.bin", 600, time.Now())
+
+	// Cap of 700 bytes against 1200 total: the oldest file goes, the fresh
+	// one stays even though it alone nearly fills the cap.
+	a := &Agent{cfg: Config{WorkRoot: root, CacheMaxBytes: 700}, log: zap.NewNop()}
+	a.sweepBoundedCache()
+	if _, err := os.Stat(oldBig); !os.IsNotExist(err) {
+		t.Error("oldest cache file should be evicted")
+	}
+	if _, err := os.Stat(newBig); err != nil {
+		t.Error("fresh cache file should be kept")
+	}
+
+	// A job in flight freezes eviction entirely.
+	write("old2.bin", 600, old)
+	a.active.Store(1)
+	a.sweepBoundedCache()
+	a.active.Store(0)
+	if _, err := os.Stat(filepath.Join(cache, "old2.bin")); err != nil {
+		t.Error("cache bound must not run while a job is active")
+	}
+
+	// Zero cap disables the bound.
+	write("old3.bin", 600, old)
+	a.cfg.CacheMaxBytes = 0
+	a.sweepBoundedCache()
+	if _, err := os.Stat(filepath.Join(cache, "old2.bin")); err != nil {
+		t.Error("cache bound disabled must evict nothing")
+	}
+}
+
 func TestDiskUnderPressure(t *testing.T) {
 	cases := []struct {
 		free, total int64

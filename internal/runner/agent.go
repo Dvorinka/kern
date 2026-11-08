@@ -70,6 +70,11 @@ type Config struct {
 	// control plane only lets it claim trusted trust tiers. Empty means
 	// docker.
 	Executor string
+	// CacheMaxBytes caps the persistent _cache tree (language caches,
+	// _toolcache, _actions). When the tree exceeds it, the oldest files are
+	// evicted until it fits (KERN_RUNNER_CACHE_MAX_BYTES, default 8 GiB).
+	// Zero disables the bound; eviction never runs while a job is active.
+	CacheMaxBytes int64
 }
 
 type Agent struct {
