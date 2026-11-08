@@ -363,6 +363,13 @@ func (s *Server) internalError(c *gin.Context, err error) {
 		fail(c, http.StatusNotFound, "not_found", "resource not found")
 		return
 	}
+	// A canceled or timed-out request context means the caller went away —
+	// routine for runner long-polls and heartbeat clients on a 5s budget.
+	// Nothing to report to and nothing broken; log at debug, not error.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		s.Log.Debug("request context ended", zap.String("path", c.FullPath()), zap.Error(err))
+		return
+	}
 	s.Log.Error("request failed", zap.String("path", c.FullPath()), zap.Error(err))
 	fail(c, http.StatusInternalServerError, "internal", "internal server error")
 }
