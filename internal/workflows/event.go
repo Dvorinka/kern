@@ -62,6 +62,27 @@ func EventPayload(event, ref, sha, actor, commitMessage, repoFullName, repoURL, 
 				"sha": srcString(source, "base_sha"),
 			},
 		}
+	case "release":
+		payload["action"] = srcString(source, "action")
+		rel := map[string]any{
+			"tag_name":   srcString(source, "release_tag"),
+			"name":       srcString(source, "release_name"),
+			"body":       srcString(source, "release_body"),
+			"draft":      source["release_draft"],
+			"prerelease": source["release_prerelease"],
+			"html_url":   srcString(source, "release_url"),
+		}
+		if author := srcString(source, "release_author"); author != "" {
+			rel["author"] = map[string]any{"login": author}
+		}
+		payload["release"] = rel
+	case "repository_dispatch":
+		payload["action"] = "repository_dispatch"
+		rd := map[string]any{"event_type": srcString(source, "rd_event_type")}
+		if cp, ok := source["rd_payload"]; ok {
+			rd["client_payload"] = cp
+		}
+		payload["repository_dispatch"] = rd
 	}
 	return payload
 }
