@@ -2348,6 +2348,14 @@ dl.rkv dd {
 .fm-dot {
 	fill: var(--mapdot);
 }
+.fm-landpath {
+	fill: var(--mapdot);
+}
+.fm-grat {
+	fill: none;
+	stroke: var(--line2);
+	stroke-width: 0.6;
+}
 .fm-hub {
 	fill: var(--ink);
 }
@@ -2360,7 +2368,6 @@ dl.rkv dd {
 .fm-arc {
 	fill: none;
 	stroke: var(--ink);
-	stroke-width: 2;
 	stroke-linecap: round;
 }
 .fm-arc-idle {
