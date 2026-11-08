@@ -1,9 +1,10 @@
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { ApiError, api } from "../lib/api";
 import { PageHeader, Spinner } from "../components/ui";
 import { StatusPill, StatusSq } from "../components/status";
-import { duration, refName, shortSha } from "../lib/format";
+import { duration, relTime, refName, shortSha } from "../lib/format";
 
 interface PublicStep {
 	number: number;
@@ -80,9 +81,39 @@ export function PublicRunPage() {
 	);
 }
 
+// useNow ticks once a second while the run is live so the elapsed readout
+// moves; terminal runs render a static duration instead.
+function useNow(active: boolean) {
+	const [now, setNow] = useState(() => Date.now());
+	useEffect(() => {
+		if (!active) return;
+		const t = setInterval(() => setNow(Date.now()), 1000);
+		return () => clearInterval(t);
+	}, [active]);
+	return now;
+}
+
+function runElapsed(run: PublicPayload["run"], now: number) {
+	if (!run.started_at) return "—";
+	const end = run.completed_at ? new Date(run.completed_at).getTime() : now;
+	const ms = Math.max(0, end - new Date(run.started_at).getTime());
+	const s = Math.floor(ms / 1000);
+	return s >= 3600
+		? `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`
+		: s >= 60
+			? `${Math.floor(s / 60)}m ${s % 60}s`
+			: `${s}s`;
+}
+
 function PublicBody({ data }: { data: PublicPayload }) {
 	const { run, jobs } = data;
+	const live = run.status === "in_progress" || run.status === "queued";
+	const now = useNow(live);
 	const title = run.commit_message || `${run.workflow_name} #${run.run_number}`;
+	const ok = jobs.filter((j) => j.conclusion === "success").length;
+	const failed = jobs.filter((j) => j.conclusion === "failure" || j.conclusion === "cancelled").length;
+	const running = jobs.filter((j) => j.status === "in_progress" || j.status === "queued").length;
+
 	return (
 		<>
 			<PageHeader mark="build"
@@ -95,6 +126,7 @@ function PublicBody({ data }: { data: PublicPayload }) {
 						<span className="font-mono">{refName(run.ref)}</span>
 						<span className="font-mono">{shortSha(run.sha)}</span>
 						<span>{run.event}{run.actor ? ` by ${run.actor}` : ""}</span>
+						<span className="text-[var(--faint)]">{run.project_slug}</span>
 					</div>
 				}
 				actions={
@@ -106,6 +138,21 @@ function PublicBody({ data }: { data: PublicPayload }) {
 					</>
 				}
 			/>
+			<div className="mb-4 flex flex-wrap items-center gap-x-5 gap-y-1.5 rounded-xl border border-[var(--line)] bg-[var(--raise)] px-4 py-2.5 text-xs text-[var(--dim)]">
+				<span>
+					<b className="font-medium text-[var(--ink)]">{runElapsed(run, now)}</b>
+					{live ? " elapsed" : " total"}
+				</span>
+				<span>
+					<b className="font-medium text-[var(--ink)]">{jobs.length}</b> jobs
+				</span>
+				{ok > 0 && <span className="text-[var(--ok)]">{ok} succeeded</span>}
+				{failed > 0 && <span className="text-[var(--err)]">{failed} failed</span>}
+				{running > 0 && <span className="text-[var(--live)]">{running} running</span>}
+				<span className="ml-auto text-[var(--faint)]">
+					{run.started_at ? `started ${relTime(run.started_at)}` : "queued"}
+				</span>
+			</div>
 			<div className="panel">
 				<div className="phead">
 					<span className="pt">Jobs</span>
