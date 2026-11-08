@@ -27,7 +27,7 @@ never silently ignored.
 
 | Feature | Status | Notes |
 | --- | --- | --- |
-| `runs-on` labels | done | label subset match against runner labels; `matrix.*` expressions in labels are interpolated per combination — other contexts (`inputs.*`, `vars.*`) stay literal and warn. macOS runners advertise `macos`, `macos-<arch>`, `self-hosted`, `kern`, `<goos>-<arch>` — use `runs-on: macos` (or `[self-hosted, macos]`) for Xcode/iOS jobs |
+| `runs-on` labels | done | label subset match against runner labels; `matrix.*` expressions in labels are interpolated per combination — other contexts (`inputs.*`, `vars.*`) stay literal and warn. macOS runners advertise `macos`, `macos-<arch>`, `self-hosted`, `kern`, `<goos>-<arch>` — use `runs-on: macos` (or `[self-hosted, macos]`) for Xcode/iOS jobs. Windows host-executor runners advertise `windows`, `windows-latest`, `windows-<arch>`, `x64` — host execution only (no containers, no services, no docker socket); versioned `windows-YYYY` labels are opt-in via `KERN_RUNNER_LABELS` |
 | `needs` DAG | done | cycle detection at compile; gating in orchestrator |
 | `strategy.matrix` incl. `include`/`exclude` | done | 256-combination cap |
 | `strategy.fail-fast` | done | cancels pending matrix siblings on failure |
