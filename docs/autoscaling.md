@@ -41,16 +41,23 @@ and (a) is unavailable (bare-metal Proxmox shop, no Kubernetes).
   without fleet changes; least-loaded placement spreads work automatically.
 - Scale-up stays a human or script decision; scale-down is `drain` + stop.
 
-## macOS VM on-demand power
+## VM on-demand power (any provider)
 
-The macOS runner (VM 904 on the Proxmox host) is powered by a host-side
-scaler, `deployments/macos-vm-scaler.sh`, installed as a systemd timer on
-the Proxmox host. It starts the VM when queued jobs need the `macos` label
-(`KERN_MAC_TRIGGER_LABEL`, default `macos`) and shuts it down after the
-runner is offline/idle past `KERN_MAC_IDLE_MINUTES` (default 15). Boot
-latency is roughly two minutes — queue wait on a cold VM is expected.
-`KERN_MAC_WARM_CRON` can pre-warm the VM on a schedule. See
-`docs/production.md` for the launchd runner layout on the guest.
+`deployments/vm-scaler.sh` is a provider-agnostic engine: one env-file per
+scalable group in `/etc/kern-scaler.d/*.conf` (see
+`deployments/kern-scaler.conf.example`). Each tick it counts queued jobs
+whose `runs-on` labels intersect the group's `KERN_VM_LABELS`, keeps the
+host up while `KERN_VM_RUNNER` has in-progress jobs, starts it on pending
+work, and stops it after `KERN_VM_IDLE_MINUTES` idle — then force-stops via
+`KERN_VM_KILL_CMD` if the graceful `KERN_VM_STOP_CMD` stalls. Start/stop/
+status are plain shell commands, so Proxmox (`qm`, `pct`), libvirt, cloud
+CLIs or ssh all fit; `KERN_VM_WARM_CRON` pre-warms on a schedule.
+
+The original single-VM script `deployments/macos-vm-scaler.sh` is kept for
+the deployed Nab9 timer; new groups should use `vm-scaler.sh`. The macOS
+runner (VM 904) runs launchd + host executor inside the guest; see
+`docs/production.md` for the guest layout. Boot latency is roughly two
+minutes — queue wait on a cold VM is expected.
 
 ## Decision
 

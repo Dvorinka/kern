@@ -1,0 +1,47 @@
+# vm-scaler group config — copy to /etc/kern-scaler.d/<name>.conf
+# One file per scalable runner host. All values are bash-sourced, so quote
+# commands containing spaces.
+
+# Log/state id — also the prefix for idle/warm stamp files.
+KERN_VM_ID="macos-904"
+
+# Comma-separated runs-on labels. A queued job demands this host when its
+# runs-on array overlaps ANY of these (e.g. "macos" or "linux-build,fast").
+KERN_VM_LABELS="macos"
+
+# Runner row name used for the busy check (in-progress jobs keep the host
+# up). Empty string disables the check — only use that when the group has
+# no persistent runner registration.
+KERN_VM_RUNNER="macos-904"
+
+# Minutes of no pending + no active work before shutdown.
+KERN_VM_IDLE_MINUTES=15
+
+# Seconds to wait after STOP_CMD before KILL_CMD fires (if still up).
+KERN_VM_STOP_GRACE_SECONDS=300
+
+# Provider commands — the engine only cares about the contract:
+#   STATE_CMD prints a state word; anything matching UP_RE counts as up.
+#   START_CMD brings the host up, STOP_CMD asks it down (graceful),
+#   KILL_CMD force-stops (optional).
+#
+# Proxmox/QEMU guest (macOS VM 904 on Nab9):
+KERN_VM_STATE_CMD='qm status 904 | awk "{print \$2}"'
+KERN_VM_UP_RE='running|prelaunch|paused'
+KERN_VM_START_CMD='qm start 904'
+KERN_VM_STOP_CMD='ssh -i /root/.ssh/kern-mac-scaler -o BatchMode=yes -o ConnectTimeout=5 tdvorak-dev@10.0.0.53 "sudo -n /sbin/shutdown -h now" || qm shutdown 904 --timeout 90'
+KERN_VM_KILL_CMD='qm stop 904'
+
+# Proxmox unprivileged container (Linux CI runner):
+#   pct status prints "status: running" — UP_RE matches "running".
+# KERN_VM_STATE_CMD='pct status 901 | awk "{print \$2}"'
+# KERN_VM_START_CMD='pct start 901'
+# KERN_VM_STOP_CMD='pct shutdown 901 --timeout 90'
+# KERN_VM_KILL_CMD='pct stop 901'
+
+# Optional daily pre-warm at HH:MM (empty = off). Boots the host once even
+# with an empty queue so the first morning job skips boot latency.
+KERN_VM_WARM_CRON=""
+
+# Optional per-group DB override; defaults to $KERN_SCALER_DB_EXEC.
+# KERN_VM_DB='pct exec 908 -- docker exec -i deployments-postgres-1 psql -U kern -d kern -Atc'
