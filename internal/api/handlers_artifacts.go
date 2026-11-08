@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+
+	"github.com/dvorinka/kern/internal/store"
 )
 
 var artifactNameRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
@@ -32,12 +35,13 @@ func (s *Server) uploadArtifact(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
-	if msg := s.checkArtifactQuota(c, job.RunID, name, size); msg != "" {
+	a, err := s.Store.CreateArtifactIfQuota(c.Request.Context(), job.RunID, job.ID,
+		name, key, size, sha, s.artifactQuotaBytes(c, job.RunID))
+	if errors.Is(err, store.ErrArtifactQuota) {
 		_ = s.Blobs.Delete(key)
-		fail(c, http.StatusRequestEntityTooLarge, "quota_exceeded", msg)
+		fail(c, http.StatusRequestEntityTooLarge, "quota_exceeded", "artifact quota exceeded")
 		return
 	}
-	a, err := s.Store.CreateArtifact(c.Request.Context(), job.RunID, job.ID, name, key, size, sha)
 	if err != nil {
 		s.internalError(c, err)
 		return
@@ -45,37 +49,23 @@ func (s *Server) uploadArtifact(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"artifact": gin.H{"id": a.ID, "name": a.Name, "size": a.SizeBytes}})
 }
 
-// checkArtifactQuota enforces the project's artifact_quota_mb setting. An
-// overwrite of an existing same-name artifact replaces its bytes rather than
-// adding to the total. Returns "" when the upload fits or no quota is set.
-func (s *Server) checkArtifactQuota(c *gin.Context, runID uuid.UUID, name string, size int64) string {
+// artifactQuotaBytes resolves the project's artifact_quota_mb setting to
+// bytes. Any lookup failure yields 0 (unlimited) — quota enforcement must
+// never fail an upload it cannot evaluate.
+func (s *Server) artifactQuotaBytes(c *gin.Context, runID uuid.UUID) int64 {
 	run, err := s.Store.Run(c.Request.Context(), runID)
 	if err != nil {
-		return ""
+		return 0
 	}
 	raw, err := s.Store.ProjectSettings(c.Request.Context(), run.ProjectID)
 	if err != nil {
-		return ""
+		return 0
 	}
 	mb, err := strconv.ParseInt(settingsValue(raw, "artifact_quota_mb", "0"), 10, 64)
 	if err != nil || mb <= 0 {
-		return ""
+		return 0
 	}
-	quota := mb << 20
-	existing := int64(0)
-	if prev, err := s.Store.ArtifactByName(c.Request.Context(), runID, name); err == nil {
-		existing = prev.SizeBytes
-	}
-	total, err := s.Store.ArtifactBytesForProject(c.Request.Context(), run.ProjectID)
-	if err != nil {
-		return ""
-	}
-	projected := total - existing + size
-	if projected <= quota {
-		return ""
-	}
-	return fmt.Sprintf("artifact quota exceeded: %d MB limit, upload would use %d MB",
-		mb, projected>>20)
+	return mb << 20
 }
 
 // downloadArtifact streams an artifact back to a runner for actions/download-artifact.

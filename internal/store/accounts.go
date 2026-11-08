@@ -14,6 +14,10 @@ import (
 
 var ErrNotFound = errors.New("not found")
 
+// ErrArtifactQuota rejects an artifact insert that would push the project's
+// live artifact bytes over its quota. quotaBytes <= 0 means unlimited.
+var ErrArtifactQuota = errors.New("artifact quota exceeded")
+
 // ErrConflict marks a state guard violation (e.g. demoting the last owner).
 var ErrConflict = errors.New("conflict")
 
