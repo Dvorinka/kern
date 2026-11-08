@@ -2364,6 +2364,16 @@ dl.rkv dd {
 	stroke: var(--line2);
 	stroke-width: 0.6;
 }
+.fm-borders {
+	fill: none;
+	stroke: var(--ink);
+	stroke-width: 1;
+	stroke-opacity: 0.28;
+	vector-effect: non-scaling-stroke;
+}
+.fm-dots-inv .fm-dot {
+	fill: var(--paper);
+}
 /* geo picker — same world, fixed-height reticle for the runner location editor */
 .geopick {
 	height: 200px;
