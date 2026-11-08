@@ -204,6 +204,7 @@ func (s *Server) buildRouter() *gin.Engine {
 		admin.POST("/enroll-tokens", s.createEnrollToken)
 		admin.POST("/runners", s.jitRunner)
 		admin.POST("/runners/:id/drain", s.drainRunner)
+		admin.POST("/runners/:id/auto-update", s.autoUpdateRunner)
 		admin.PATCH("/runners/:id", s.patchRunner)
 		admin.PATCH("/runners/:id/geo", s.patchRunnerGeo)
 		admin.DELETE("/runners/:id", s.deleteRunner)

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState, type FormEvent } from "react";
-import { Cpu, Image as ImageIcon, LocateFixed, Pause, Pencil, Plus, Trash2 } from "lucide-react";
+import { Cpu, Image as ImageIcon, LocateFixed, Pause, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import type { Runner } from "../lib/types";
 import { Button, Card, EmptyState, Input, RunnerIcon, Spinner } from "../components/ui";
@@ -27,6 +27,11 @@ export function RunnersPage() {
 	const setHeal = useMutation({
 		mutationFn: (v: string) => api.put("/settings", { self_heal: v }),
 		onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
+	});
+	const setUpdate = useMutation({
+		mutationFn: (v: { id: string; on: boolean }) =>
+			api.post(`/runners/${v.id}/auto-update`, { enabled: v.on }),
+		onSuccess: () => qc.invalidateQueries({ queryKey: ["runners"] }),
 	});
 	const drain = useMutation({
 		mutationFn: (id: string) => api.post(`/runners/${id}/drain`, { draining: true }),
@@ -206,6 +211,16 @@ export function RunnersPage() {
 												<Pencil size={12} />
 											</button>
 											<button
+												className={r.auto_update ? "pill solid" : "pill"}
+												title={r.auto_update
+													? "Self-update on — accepts signed runner image offers"
+													: "Self-update off — stays on the current image"}
+												disabled={setUpdate.isPending}
+												onClick={() => setUpdate.mutate({ id: r.id, on: !r.auto_update })}
+											>
+												<RefreshCw size={12} />
+											</button>
+											<button
 												className="pill"
 												title="Drain (finish current work, take no new jobs)"
 												disabled={r.draining || drain.isPending}
@@ -263,6 +278,9 @@ function EnrollCard({ onDone }: { onDone: () => void }) {
 	const joinCmd = minted
 		? `kern-runner join --control ${window.location.origin} --name ${minted.name} --token ${minted.token}`
 		: "";
+	const dockerCmd = minted
+		? `docker run -d --name kern-runner --restart always -e KERN_CONTROL_URL=${window.location.origin} -e KERN_RUNNER_JOIN_TOKEN=${minted.token} -e KERN_RUNNER_UPDATE=1 -e KERN_RUNNER_CONCURRENCY=1 -e KERN_WORK_ROOT=/opt/kern/work -e HOME=/root -v /var/run/docker.sock:/var/run/docker.sock -v /opt/kern/work:/opt/kern/work kern-runner:local`
+		: "";
 
 	return (
 		<Card className="mb-4 p-4">
@@ -271,9 +289,15 @@ function EnrollCard({ onDone }: { onDone: () => void }) {
 					<div className="mb-2 text-xs text-[var(--ok)]">
 						Enroll token minted — run this on the runner host before it expires:
 					</div>
-					<div className="flex items-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--bg)] px-3 py-2">
+					<div className="mb-2 text-xs text-[var(--faint)]">Binary install:</div>
+					<div className="mb-3 flex items-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--bg)] px-3 py-2">
 						<code className="min-w-0 flex-1 truncate font-mono text-xs">{joinCmd}</code>
 						<CopyButton text={joinCmd} />
+					</div>
+					<div className="mb-2 text-xs text-[var(--faint)]">One container — registers, claims, self-updates:</div>
+					<div className="flex items-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--bg)] px-3 py-2">
+						<code className="min-w-0 flex-1 truncate font-mono text-xs">{dockerCmd}</code>
+						<CopyButton text={dockerCmd} />
 						<Button size="sm" variant="ghost" onClick={onDone}>
 							Done
 						</Button>

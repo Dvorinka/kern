@@ -207,6 +207,7 @@ export interface Runner {
 	version: string;
 	status: "online" | "offline" | "draining";
 	draining: boolean;
+	auto_update: boolean;
 	last_heartbeat_at: string | null;
 	cpu_percent: number | null;
 	mem_used_bytes: number | null;

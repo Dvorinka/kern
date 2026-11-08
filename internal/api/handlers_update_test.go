@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -70,5 +71,24 @@ func TestAssetBytesKeepsPrimaryError(t *testing.T) {
 	}, "")
 	if err == nil || !strings.Contains(err.Error(), "asset api fallback") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestAutoUpdateEnabled(t *testing.T) {
+	on, _ := json.Marshal(map[string]string{"auto_update": "on"})
+	off, _ := json.Marshal(map[string]string{})
+	if !autoUpdateEnabled(on) {
+		t.Fatal("setting on should enable")
+	}
+	if autoUpdateEnabled(off) {
+		t.Fatal("missing setting defaults off")
+	}
+	t.Setenv("KERN_AUTO_UPDATE", "on")
+	if !autoUpdateEnabled(off) {
+		t.Fatal("env on should override missing setting")
+	}
+	t.Setenv("KERN_AUTO_UPDATE", "off")
+	if autoUpdateEnabled(on) {
+		t.Fatal("env off should override setting on")
 	}
 }
