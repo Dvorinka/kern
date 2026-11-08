@@ -8,7 +8,7 @@ Distributed, self-hosted CI/CD platform that executes existing GitHub Actions
 workflow YAML on your own infrastructure. GitHub stays the source-code
 provider; KERN owns the control plane, scheduler, execution engine and storage.
 
-Status: **v0.4.2, dogfooded in production.** The full loop runs live —
+Status: **v0.5.0, dogfooded in production.** The full loop runs live —
 GitHub App webhooks → compiled run → ephemeral container on a registered
 runner → commit status/check-run posted back — including composite,
 JavaScript and Docker actions, reusable workflows, service containers and

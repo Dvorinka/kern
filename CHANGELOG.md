@@ -5,17 +5,37 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 
 ## [Unreleased]
 
+## [v0.5.0] - 2026-11-08
+
 ### Added
 - Runner icons: emoji, text, image URL/path per runner, editable by admins,
   rendered across runner lists and run views (#93).
 - Project icon auto-discovery: `GET /projects/{project}/icons` ranks likely
   image candidates from repo source (local checkout or GitHub contents API)
   and `GET /projects/{project}/icon` serves the chosen file (#93).
+- Per-user UI theme persisted server-side: `GET /auth/me` returns `prefs`,
+  `PUT /auth/me/prefs` stores up to 8 KiB of JSON, applied after login with
+  localStorage kept as first-paint fallback (#97).
+- Interactive runner geo editor: click-to-pin world map (same projection as
+  the fleet map, wheel zoom + drag pan), debounced Nominatim reverse
+  geocoding for city/country, manual coordinates, and egress-IP Auto
+  resolution via `PATCH /runners/{id}/geo` (#98).
+- Stale-runner cleanup: runners offline for over 7 days surface in a
+  dismissible banner with one-click remove (#98).
+- Public run page (`/ci/{id}`) stats strip: live-ticking elapsed time, job
+  tallies, project slug (#99).
+- Provider-agnostic VM scaler (`deployments/vm-scaler.sh`): one env-file
+  per scalable group, label-overlap queue detection, idle shutdown,
+  stop→kill escalation, optional warm cron — works with Proxmox, libvirt,
+  cloud CLIs or ssh, not just macOS (#100).
 
 ### Fixed
 - Content Security Policy: theme bootstrap moved out of inline script,
   `form-action` allows the GitHub App manifest flow, Cloudflare Insights
-  beacon handled explicitly — GitHub connect and repo icons unblocked (#92).
+  beacon handled explicitly, Nominatim reverse geocoding allowed — GitHub
+  connect, repo icons and the geo picker unblocked (#92, #98).
+- Heartbeat `context canceled` client-disconnect noise no longer logged as
+  request failures (#91).
 
 ### Changed
 - Fleet map: real Natural Earth land geometry under the dot matrix, zoom to
@@ -27,6 +47,10 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
   runs-per-day tooltip adds totals, failures, cancellations and per-project
   breakdown; activity grid gains month labels and a cancelled state;
   time-by-project donut is interactive (#95).
+- Brand mark unified: header `FanMark`, `logo.svg` and `favicon.svg` now
+  share the login-page hub-fan artwork (#101).
+- README refreshed to v0.4.2 status with dashboard screenshots; CHANGELOG
+  backfilled through v0.4.2 (#96).
 
 ## [v0.4.2] - 2026-11-08
 
