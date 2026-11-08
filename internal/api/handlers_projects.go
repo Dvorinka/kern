@@ -154,6 +154,7 @@ func (s *Server) syncProject(c *gin.Context) {
 		}
 		out = append(out, synced{Path: rel, Name: res.Name, Valid: res.Valid, Diagnostics: res.Diagnostics})
 	}
+	s.autoDiscoverIcon(c.Request.Context(), p, sha)
 	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "project.sync", p.Slug)
 	c.JSON(http.StatusOK, gin.H{"sha": sha, "workflows": out})
 }
@@ -213,6 +214,7 @@ func (s *Server) syncProjectGitHub(c *gin.Context, user store.User, p store.Proj
 		}
 		out = append(out, synced{Path: f.Path, Name: res.Name, Valid: res.Valid, Diagnostics: res.Diagnostics})
 	}
+	s.autoDiscoverIcon(ctx, p, sha)
 	s.Store.Audit(ctx, user.OrgID, &user.ID, "project.sync", p.Slug)
 	c.JSON(http.StatusOK, gin.H{"sha": sha, "workflows": out})
 }

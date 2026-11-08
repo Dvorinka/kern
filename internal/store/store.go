@@ -248,7 +248,10 @@ type Runner struct {
 	GeoUpdatedAt    *time.Time `json:"geo_updated_at"`
 	// Executor is the job execution substrate: "docker" (container, default)
 	// or "host" (local processes — trusted trust tiers only).
-	Executor  string    `json:"executor"`
+	Executor string `json:"executor"`
+	// Icon is an operator-set glyph: an emoji or an image URL/path. Empty
+	// renders the default marker.
+	Icon      string    `json:"icon"`
 	CreatedAt time.Time `json:"created_at"`
 }
 

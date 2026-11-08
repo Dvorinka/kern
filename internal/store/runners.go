@@ -74,7 +74,7 @@ func (s *Store) InsertRunner(ctx context.Context, p RegisterRunnerParams) (Runne
 const runnerCols = `id, org_id, name, hostname, os, arch, cpus, memory_bytes, disk_bytes, labels,
 	version, status, draining, ephemeral, last_heartbeat_at, cpu_percent,
 	mem_used_bytes, disk_free_bytes, metrics_at, geo_lat, geo_lng, geo_city,
-	geo_country, geo_source, geo_ip, geo_updated_at, executor, created_at`
+	geo_country, geo_source, geo_ip, geo_updated_at, executor, created_at, icon`
 
 func scanRunner(row pgx.Row) (Runner, error) {
 	var r Runner
@@ -82,7 +82,8 @@ func scanRunner(row pgx.Row) (Runner, error) {
 		&r.MemoryBytes, &r.DiskBytes, &r.Labels, &r.Version, &r.Status, &r.Draining,
 		&r.Ephemeral, &r.LastHeartbeatAt, &r.CPUPercent, &r.MemUsedBytes,
 		&r.DiskFreeBytes, &r.MetricsAt, &r.GeoLat, &r.GeoLng, &r.GeoCity,
-		&r.GeoCountry, &r.GeoSource, &r.GeoIP, &r.GeoUpdatedAt, &r.Executor, &r.CreatedAt)
+		&r.GeoCountry, &r.GeoSource, &r.GeoIP, &r.GeoUpdatedAt, &r.Executor, &r.CreatedAt,
+		&r.Icon)
 	return r, err
 }
 
@@ -135,6 +136,20 @@ func (s *Store) SetRunnerDraining(ctx context.Context, orgID, id uuid.UUID, drai
 		UPDATE runners SET draining = $3,
 			status = CASE WHEN $3 THEN 'draining' ELSE 'online' END
 		WHERE org_id = $1 AND id = $2`, orgID, id, draining)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetRunnerIcon writes the operator-chosen runner glyph; "" restores the
+// default marker.
+func (s *Store) SetRunnerIcon(ctx context.Context, orgID, id uuid.UUID, icon string) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE runners SET icon = $3 WHERE org_id = $1 AND id = $2`, orgID, id, icon)
 	if err != nil {
 		return err
 	}

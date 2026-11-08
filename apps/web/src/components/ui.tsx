@@ -156,6 +156,23 @@ export function KV({ k, v, mono }: { k: string; v: ReactNode; mono?: boolean }) 
 	);
 }
 
+// RunnerIcon — the operator-set runner glyph. An http(s) URL, protocol-
+// relative URL or root-relative path renders as an image; anything else
+// (emoji, short label) renders as a text glyph.
+export function RunnerIcon({
+	icon,
+	className = "rricon",
+}: {
+	icon?: string | null;
+	className?: string;
+}) {
+	if (!icon) return null;
+	if (/^(https?:)?\/\//.test(icon) || icon.startsWith("/")) {
+		return <img className={cn(className, "rrimg")} src={icon} alt="" />;
+	}
+	return <span className={className}>{icon}</span>;
+}
+
 // ProjectIcon — the project-chosen image from the repo, falling back to the
 // pattern tile. GitHub repos load via raw.githubusercontent.com; local
 // checkouts via the /icon endpoint.
