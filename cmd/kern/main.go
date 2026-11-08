@@ -80,6 +80,7 @@ Environments:
 Advisory:
   split --pattern GLOB --shards N [--root DIR]   suggest strategy.split and file buckets
   lint [dir ...]               offline compile of .github/workflows — will KERN run it?
+  hooks install [--dry-run] [--force]             pre-push hook that runs kern lint
 
 Globals: --server, --token, --project override config and KERN_SERVER,
 KERN_TOKEN, KERN_PROJECT env vars. --json prints raw JSON.
@@ -208,6 +209,8 @@ func dispatch(c *cli, args []string) int {
 		err = c.cmdSplit(rest)
 	case "lint":
 		err = c.cmdLint(rest)
+	case "hooks":
+		err = c.cmdHooks(rest)
 	default:
 		err = fmt.Errorf("unknown command %q — see kern help", name)
 	}
