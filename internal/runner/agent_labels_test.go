@@ -54,3 +54,32 @@ func TestLabelsHostExecutorNoDocker(t *testing.T) {
 		t.Error("host executor advertised the docker label")
 	}
 }
+
+// kern-docker is the host-executor capability label for docker-in-job work:
+// advertised only when the executor is host AND the daemon answers.
+func TestLabelsKernDocker(t *testing.T) {
+	up := func() bool { return true }
+	down := func() bool { return false }
+
+	host := &Agent{cfg: Config{Executor: "host"}, dockerFn: up}
+	if !hasLabel(host.labelsFor("linux", "amd64"), "kern-docker") {
+		t.Error("host executor with daemon missing kern-docker")
+	}
+	if hasLabel(host.labelsFor("linux", "amd64"), "docker") {
+		t.Error("host executor leaked the container-execution docker label")
+	}
+
+	hostNoDaemon := &Agent{cfg: Config{Executor: "host"}, dockerFn: down}
+	if hasLabel(hostNoDaemon.labelsFor("linux", "amd64"), "kern-docker") {
+		t.Error("host executor without daemon advertised kern-docker")
+	}
+
+	dkr := &Agent{cfg: Config{Executor: "docker"}, dockerFn: up}
+	ls := dkr.labelsFor("linux", "amd64")
+	if hasLabel(ls, "kern-docker") {
+		t.Error("docker executor advertised kern-docker")
+	}
+	if !hasLabel(ls, "docker") {
+		t.Error("docker executor with daemon missing docker label")
+	}
+}

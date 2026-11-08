@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -148,6 +149,7 @@ func (o *Orchestrator) StartRun(ctx context.Context, p store.CreateRunParams) (s
 			Inputs:          jp.Inputs,
 			Services:        serviceSeeds(jp.Services),
 			Permissions:     jp.Permissions,
+			NeedsDocker:     jobNeedsDocker(jp.Steps),
 		}
 		for _, sp := range jp.Steps {
 			seed.Steps = append(seed.Steps, store.StepSeed{Key: sp.ID, Name: sp.Name, Spec: sp})
@@ -535,6 +537,26 @@ func serviceSeeds(plans []workflows.ServicePlan) []store.ServiceSeed {
 		})
 	}
 	return out
+}
+
+// dockerCmdRe spots a docker invocation in a run script — word-bounded so
+// `docker`, `docker-compose` and `docker compose` all hit while prose like
+// "dockers" does not. A false positive only prefers a host runner; harmless.
+var dockerCmdRe = regexp.MustCompile(`\bdocker\b`)
+
+// jobNeedsDocker reports whether any step shells out to the docker CLI or
+// uses an official docker/* action. Such jobs need a reachable daemon —
+// the claim query prefers kern-docker-capable (host-executor) runners.
+func jobNeedsDocker(steps []workflows.StepPlan) bool {
+	for _, st := range steps {
+		if strings.HasPrefix(st.Uses, "docker/") {
+			return true
+		}
+		if dockerCmdRe.MatchString(st.Run) {
+			return true
+		}
+	}
+	return false
 }
 
 // NeedsWithAliases exposes the alias expansion to the claim endpoint.

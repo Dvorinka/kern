@@ -56,6 +56,21 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 			  -- tiers (untrusted code) may never land on them. Same boundary
 			  -- as secrets eligibility.
 			  AND (me_f.executor <> 'host' OR r.trust_level NOT IN ('fork', 'pull_request'))
+			  -- Docker-in-job work prefers runners advertising kern-docker
+			  -- (host executors with a working daemon). It is a preference,
+			  -- not a gate: untrusted runs can't use host executors anyway,
+			  -- and with no capable runner online anyone may try — the job
+			  -- fails on the missing daemon exactly as it would today.
+			  AND (
+				NOT j.needs_docker
+				OR 'kern-docker' = ANY(me_f.labels)
+				OR r.trust_level IN ('fork', 'pull_request')
+				OR NOT EXISTS (
+					SELECT 1 FROM fleet h
+					WHERE 'kern-docker' = ANY(h.labels)
+					  AND j.runs_on <@ (h.labels || ARRAY['self-hosted', 'kern'])
+				)
+			  )
 			  -- Least-loaded placement: yield to any eligible runner carrying
 			  -- fewer in-progress jobs than this one.
 			  AND NOT EXISTS (

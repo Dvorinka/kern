@@ -36,7 +36,10 @@ type JobSeed struct {
 	// SplitN and SplitAuto are consumed before insert. They are not columns.
 	SplitN    int
 	SplitAuto bool
-	Steps     []StepSeed
+	// NeedsDocker marks jobs whose steps invoke the docker CLI or docker/*
+	// actions; the claim query prefers kern-docker-capable runners for them.
+	NeedsDocker bool
+	Steps       []StepSeed
 }
 
 // ServiceSeed is a service container spec persisted with the job.
@@ -154,12 +157,12 @@ func (s *Store) createRunOnce(ctx context.Context, p CreateRunParams, jobs []Job
 			INSERT INTO jobs
 				(run_id, job_key, key, name, status, needs, runs_on, image, matrix, env,
 				 if_condition, timeout_seconds, continue_on_error, fail_fast, priority, outputs_spec,
-				 environment, environment_url, inputs, services, permissions)
-			VALUES ($1, $2, $3, $4, 'waiting', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+				 environment, environment_url, inputs, services, permissions, needs_docker)
+			VALUES ($1, $2, $3, $4, 'waiting', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
 			RETURNING id`,
 			id, j.JobKey, j.Key, j.Name, j.Needs, j.RunsOn, j.Image, matrix, env,
 			j.IfCondition, j.TimeoutSeconds, j.ContinueOnError, j.FailFast, j.Priority, outputsSpec,
-			j.Environment, j.EnvironmentURL, inputs, services, permissions).Scan(&jobID)
+			j.Environment, j.EnvironmentURL, inputs, services, permissions, j.NeedsDocker).Scan(&jobID)
 		if err != nil {
 			return Run{}, fmt.Errorf("insert job %s: %w", j.Key, err)
 		}
