@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -187,20 +188,32 @@ func (e *executor) dockerActionRun(ctx context.Context, step StepSpec, image, en
 		"-v", cacheDir(e.cfg.WorkRoot) + ":" + containerCacheDir,
 		"-w", containerWorkspace,
 		"--env-file", e.stepEnvPath(step),
-		"-e", "HOME=" + containerActionHome,
-		"-e", "GITHUB_WORKSPACE=" + containerWorkspace,
-		"-e", "GITHUB_ACTION_PATH=" + env["GITHUB_ACTION_PATH"],
-		"-e", "GITHUB_ENV=" + containerCmdDir + "/GITHUB_ENV",
-		"-e", "GITHUB_PATH=" + containerCmdDir + "/PATH_LINES",
-		"-e", "GITHUB_OUTPUT=" + containerCmdDir + "/GITHUB_OUTPUT",
-		"-e", "GITHUB_STEP_SUMMARY=" + containerCmdDir + "/STEP_SUMMARY",
-		"-e", "GITHUB_STATE=" + containerCmdDir + "/GITHUB_STATE",
-		"-e", "RUNNER_TOOL_CACHE=" + containerCacheDir + "/_toolcache",
+		// Multi-line env values cannot ride the env file; mirror the
+		// docker exec path and pass them as -e args.
+	}
+	extraKeys := make([]string, 0, len(e.stepEnvExtra))
+	for k := range e.stepEnvExtra {
+		extraKeys = append(extraKeys, k)
+	}
+	sort.Strings(extraKeys)
+	for _, k := range extraKeys {
+		dargs = append(dargs, "-e", k+"="+e.stepEnvExtra[k])
+	}
+	dargs = append(dargs,
+		"-e", "HOME="+containerActionHome,
+		"-e", "GITHUB_WORKSPACE="+containerWorkspace,
+		"-e", "GITHUB_ACTION_PATH="+env["GITHUB_ACTION_PATH"],
+		"-e", "GITHUB_ENV="+containerCmdDir+"/GITHUB_ENV",
+		"-e", "GITHUB_PATH="+containerCmdDir+"/PATH_LINES",
+		"-e", "GITHUB_OUTPUT="+containerCmdDir+"/GITHUB_OUTPUT",
+		"-e", "GITHUB_STEP_SUMMARY="+containerCmdDir+"/STEP_SUMMARY",
+		"-e", "GITHUB_STATE="+containerCmdDir+"/GITHUB_STATE",
+		"-e", "RUNNER_TOOL_CACHE="+containerCacheDir+"/_toolcache",
 		"-e", "RUNNER_TEMP=/tmp",
 		"-e", "GIT_CONFIG_COUNT=1",
 		"-e", "GIT_CONFIG_KEY_0=safe.directory",
 		"-e", "GIT_CONFIG_VALUE_0=*",
-	}
+	)
 	// Fork-trust jobs confine sibling action containers to the job's
 	// internal network and force the proxy env — otherwise they would sit
 	// on the default bridge with unrestricted egress.
