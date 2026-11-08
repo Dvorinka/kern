@@ -96,6 +96,11 @@ type Agent struct {
 	retire       atomic.Bool
 	lastActivity atomic.Int64
 	cancel       context.CancelFunc
+	// dockerFn stubs the daemon probe in tests; dockerOK caches the result —
+	// `docker version` is an exec, and labels() is built per registration.
+	dockerFn   func() bool
+	dockerOnce sync.Once
+	dockerOKV  bool
 }
 
 func New(cfg Config, log *zap.Logger) *Agent {
@@ -191,8 +196,14 @@ func (a *Agent) labelsFor(goos, arch string) []string {
 	}
 	// The docker label advertises container execution; a host-mode runner
 	// must never carry it even if a daemon happens to be installed.
-	if a.executor() == "docker" && dockerAvailable() {
+	if a.executor() == "docker" && a.dockerOK() {
 		base = append(base, "docker")
+	}
+	// kern-docker is the inverse capability: a usable docker CLI+daemon
+	// inside host-executed jobs (image builds). Host executors only — the
+	// docker label already means container execution, not CLI access.
+	if a.executor() == "host" && a.dockerOK() {
+		base = append(base, "kern-docker")
 	}
 	seen := map[string]bool{}
 	out := make([]string, 0, len(base)+len(a.cfg.Labels))
@@ -534,6 +545,17 @@ func sleepCtx(ctx context.Context, d time.Duration) {
 
 func dockerAvailable() bool {
 	return exec.Command("docker", "version", "--format", "{{.Server.Version}}").Run() == nil
+}
+
+// dockerOK reports whether a docker daemon answers on this host, probed once.
+func (a *Agent) dockerOK() bool {
+	a.dockerOnce.Do(func() {
+		a.dockerOKV = dockerAvailable()
+		if a.dockerFn != nil {
+			a.dockerOKV = a.dockerFn()
+		}
+	})
+	return a.dockerOKV
 }
 
 func totalMemory() int64 {
