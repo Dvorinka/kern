@@ -109,7 +109,7 @@ export function ProjectsPage() {
 								<div className="pt2">
 									<ProjTile p={p} iconPath={icons[p.slug]} />
 									<div className="min-w-0">
-										<b>{p.name}</b>
+										<b className="truncate">{p.name}</b>
 										<small>{p.repo_full_name || p.local_path || p.repo_url || p.slug}</small>
 									</div>
 									{s?.last && <StatusSq status={s.last.conclusion === "failure" ? "failed" : s.last.status} className="ml-auto" />}
@@ -124,7 +124,7 @@ export function ProjectsPage() {
 											>
 												{s.last.commit_message?.split("\n")[0] || s.last.workflow_name}
 											</Link>
-											<span className="flex-none text-[var(--faint)]">
+											<span className="min-w-0 truncate text-[var(--faint)]">
 												{refName(s.last.ref)} · {shortSha(s.last.sha)} · {relTime(s.last.created_at)}
 											</span>
 										</>
@@ -133,7 +133,7 @@ export function ProjectsPage() {
 									)}
 								</div>
 								<div className="prow">
-									{s?.hist.map((r) => (
+									{s?.hist.slice(0, 12).map((r) => (
 										<i
 											key={r.id}
 											className={`pdot ${r.conclusion === "failure" ? "f" : r.status === "in_progress" || r.status === "queued" ? "l" : ""}`}
@@ -144,6 +144,14 @@ export function ProjectsPage() {
 											}}
 										/>
 									))}
+									{s && s.hist.length > 12 && (
+										<span
+											className="pdot-more"
+											title={`${s.hist.length - 12} older runs`}
+										>
+											+{s.hist.length - 12}
+										</span>
+									)}
 									<span className="prate">
 											{rate != null ? `${rate}% ok` : ""}{s?.total ? ` · ${s.total} runs` : ""}
 									</span>

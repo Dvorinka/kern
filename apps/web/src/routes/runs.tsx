@@ -5,7 +5,7 @@ import { RotateCcw, X } from "lucide-react";
 import { api } from "../lib/api";
 import type { Job, OverviewResponse, Run, Runner } from "../lib/types";
 import { PageHeader, Spinner, cn } from "../components/ui";
-import { StatusSq } from "../components/status";
+import { StatusPill, StatusSq } from "../components/status";
 import { Fingerprint, jobHue, useRunDetails } from "../components/fingerprint";
 import { bytes, duration, projectColor, refName, relTime, shortSha } from "../lib/format";
 
@@ -315,6 +315,14 @@ function RunRow({
 		mutationFn: () => api.post(`/runs/${r.id}/cancel`),
 		onSuccess: () => qc.invalidateQueries({ queryKey: ["runs"] }),
 	});
+	const [prev, setPrev] = useState(false);
+	const [copied, setCopied] = useState(false);
+	const copyLink = () => {
+		void navigator.clipboard?.writeText(`${location.origin}/runs/${r.id}`);
+		setCopied(true);
+		setTimeout(() => setCopied(false), 1200);
+	};
+	const title = r.commit_message?.split("\n")[0] || `${r.workflow_name} #${r.run_number}`;
 	return (
 		<div
 			className="runrow cursor-pointer"
@@ -325,6 +333,8 @@ function RunRow({
 			onKeyDown={(e) => {
 				if (e.key === "Enter") onOpen();
 			}}
+			onMouseEnter={() => setPrev(true)}
+			onMouseLeave={() => setPrev(false)}
 		>
 			<StatusSq status={r.status} conclusion={r.conclusion} />
 			<div className="min-w-0">
@@ -390,6 +400,61 @@ function RunRow({
 					</button>
 				)}
 			</span>
+			{prev && (
+				<div className="runprev" onClick={(e) => e.stopPropagation()}>
+					<div className="rp-head">
+						<StatusPill status={r.status} conclusion={r.conclusion} />
+						<span className="rp-title">{title}</span>
+					</div>
+					<div className="rp-grid">
+						<span className="k">workflow</span>
+						<span className="v">
+							{r.workflow_name} #{r.run_number}
+						</span>
+						<span className="k">project</span>
+						<span className="v">{r.project_name || r.project_slug}</span>
+						<span className="k">branch</span>
+						<span className="v">{refName(r.ref)}</span>
+						<span className="k">commit</span>
+						<span className="v font-mono">{shortSha(r.sha)}</span>
+						<span className="k">trigger</span>
+						<span className="v">
+							{r.event} · {r.actor}
+						</span>
+						<span className="k">queued</span>
+						<span className="v">{relTime(r.created_at)}</span>
+						<span className="k">took</span>
+						<span className="v">{duration(r.started_at, r.completed_at) || "—"}</span>
+						{jobs && (
+							<>
+								<span className="k">jobs</span>
+								<span className="v">
+									{jobs.length}
+									{jobs.some((j) => j.status === "queued" || j.status === "waiting") &&
+										` · ${jobs.filter((j) => j.status === "queued" || j.status === "waiting").length} waiting`}
+								</span>
+							</>
+						)}
+					</div>
+					<Fingerprint run={r} jobs={jobs} />
+					<div className="rp-acts">
+						<button className="rpact" onClick={onOpen}>
+							Open run
+						</button>
+						<button className="rpact" onClick={() => rerun.mutate()} disabled={rerun.isPending}>
+							Re-run
+						</button>
+						{live && (
+							<button className="rpact err" onClick={() => cancel.mutate()} disabled={cancel.isPending}>
+								Cancel
+							</button>
+						)}
+						<button className="rpact ghost" onClick={copyLink}>
+							{copied ? "Copied" : "Copy link"}
+						</button>
+					</div>
+				</div>
+			)}
 		</div>
 	);
 }
