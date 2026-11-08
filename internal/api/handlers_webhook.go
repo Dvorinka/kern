@@ -453,9 +453,11 @@ func (s *Server) workflowAtSHA(c *gin.Context, fullName string, projectID uuid.U
 }
 
 // pushMatchesPlan reports whether a compiled workflow plan subscribes to a push
-// on ref. It honours branches/branches-ignore filters; any other non-empty
-// filter (tags, paths, types…) is a declared gap and the workflow does not
-// trigger, with the reason returned for the delivery record.
+// on ref. GitHub semantics: branches/branches-ignore apply to branch pushes
+// only, tags/tags-ignore to tag pushes only — defining just one family means
+// pushes to the other ref type never run; defining neither runs on both.
+// paths/paths-ignore remain a declared gap (they need the push diff) and keep
+// the workflow skipped rather than firing wrongly.
 func pushMatchesPlan(plan *workflows.Plan, ref string) (bool, string) {
 	subscribed := false
 	for _, e := range plan.Events {
@@ -469,21 +471,68 @@ func pushMatchesPlan(plan *workflows.Plan, ref string) (bool, string) {
 	cfg, _ := plan.Triggers["push"].(map[string]any)
 	for key, v := range cfg {
 		switch key {
-		case "branches", "branches-ignore":
+		case "branches", "branches-ignore", "tags", "tags-ignore":
 		default:
 			if !emptyFilter(v) {
 				return false, "unsupported push filter " + key
 			}
 		}
 	}
-	branch := strings.TrimPrefix(ref, "refs/heads/")
-	if patterns := filterList(cfg["branches"]); len(patterns) > 0 && !matchPatterns(patterns, branch) {
-		return false, "branch " + branch + " not in branches filter"
+
+	family, name := pushRefKind(ref)
+	if family == "" {
+		// Neither a branch nor a tag push: only an unfiltered workflow runs.
+		if pushHasRefFilter(cfg) {
+			return false, "push to " + ref + " is neither a branch nor a tag"
+		}
+		return true, ""
 	}
-	if patterns := filterList(cfg["branches-ignore"]); len(patterns) > 0 && matchPatterns(patterns, branch) {
-		return false, "branch " + branch + " is ignored"
+
+	var incKey, ignKey, otherFamily string
+	if family == "tags" {
+		incKey, ignKey, otherFamily = "tags", "tags-ignore", "branches"
+	} else {
+		incKey, ignKey, otherFamily = "branches", "branches-ignore", "tags"
+	}
+	own := filterList(cfg[incKey])
+	ownIgnore := filterList(cfg[ignKey])
+	if len(own) == 0 && len(ownIgnore) == 0 {
+		// The other family's filters, when present, still gate this push out.
+		if len(filterList(cfg[otherFamily]))+len(filterList(cfg[otherFamily+"-ignore"])) > 0 {
+			return false, family + " push skipped: workflow defines only " + otherFamily + " filters"
+		}
+		return true, ""
+	}
+	if len(own) > 0 && !matchPatterns(own, name) {
+		return false, family + " " + name + " not in " + incKey + " filter"
+	}
+	if len(ownIgnore) > 0 && matchPatterns(ownIgnore, name) {
+		return false, family + " " + name + " is ignored"
 	}
 	return true, ""
+}
+
+// pushRefKind splits a git ref into the push-filter family it belongs to
+// ("branches" or "tags") and its short name. Anything else returns "".
+func pushRefKind(ref string) (family, name string) {
+	if strings.HasPrefix(ref, "refs/tags/") {
+		return "tags", strings.TrimPrefix(ref, "refs/tags/")
+	}
+	if strings.HasPrefix(ref, "refs/heads/") {
+		return "branches", strings.TrimPrefix(ref, "refs/heads/")
+	}
+	return "", ref
+}
+
+// pushHasRefFilter reports whether the push trigger config declares any
+// branch/tag name filter.
+func pushHasRefFilter(cfg map[string]any) bool {
+	for _, key := range []string{"branches", "branches-ignore", "tags", "tags-ignore"} {
+		if len(filterList(cfg[key])) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func emptyFilter(v any) bool {

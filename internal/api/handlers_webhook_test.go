@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/dvorinka/kern/internal/workflows"
@@ -11,6 +12,81 @@ func prPlan(events []string, trigger map[string]any) *workflows.Plan {
 	return &workflows.Plan{
 		Events:   events,
 		Triggers: map[string]any{"pull_request": trigger},
+	}
+}
+
+func pushPlan(events []string, trigger map[string]any) *workflows.Plan {
+	return &workflows.Plan{
+		Events:   events,
+		Triggers: map[string]any{"push": trigger},
+	}
+}
+
+func TestPushMatchesPlan(t *testing.T) {
+	cases := []struct {
+		name  string
+		plan  *workflows.Plan
+		ref   string
+		want  bool
+		whyRe string
+	}{
+		// No filters: branches and tags both trigger, like GitHub.
+		{"unfiltered branch", pushPlan([]string{"push"}, nil), "refs/heads/main", true, ""},
+		{"unfiltered tag", pushPlan([]string{"push"}, nil), "refs/tags/v1.2.3", true, ""},
+		{"unfiltered sequence form", &workflows.Plan{Events: []string{"push", "pull_request"}}, "refs/tags/v1", true, ""},
+		{"not subscribed", pushPlan([]string{"pull_request"}, nil), "refs/heads/main", false, ""},
+
+		// Branch family.
+		{"branches hit", pushPlan([]string{"push"}, map[string]any{"branches": []any{"main"}}), "refs/heads/main", true, ""},
+		{"branches miss", pushPlan([]string{"push"}, map[string]any{"branches": []any{"main"}}), "refs/heads/dev", false, "not in branches filter"},
+		{"branches glob", pushPlan([]string{"push"}, map[string]any{"branches": []any{"release/**"}}), "refs/heads/release/1.0", true, ""},
+		{"branches-ignore miss", pushPlan([]string{"push"}, map[string]any{"branches-ignore": []any{"dev"}}), "refs/heads/dev", false, "is ignored"},
+		{"branches-ignore pass", pushPlan([]string{"push"}, map[string]any{"branches-ignore": []any{"dev"}}), "refs/heads/main", true, ""},
+
+		// Tag family.
+		{"tags hit", pushPlan([]string{"push"}, map[string]any{"tags": []any{"v*"}}), "refs/tags/v1.2.3", true, ""},
+		{"tags semver miss", pushPlan([]string{"push"}, map[string]any{"tags": []any{"v*.*.*"}}), "refs/tags/v1", false, "not in tags filter"},
+		{"tags miss", pushPlan([]string{"push"}, map[string]any{"tags": []any{"v*"}}), "refs/tags/beta", false, "not in tags filter"},
+		{"tags-ignore hit", pushPlan([]string{"push"}, map[string]any{"tags-ignore": []any{"draft-*"}}), "refs/tags/draft-1", false, "is ignored"},
+		{"tags-ignore pass", pushPlan([]string{"push"}, map[string]any{"tags-ignore": []any{"draft-*"}}), "refs/tags/v1.0.0", true, ""},
+		{"tags negation", pushPlan([]string{"push"}, map[string]any{"tags": []any{"v*", "!v1.0.0"}}), "refs/tags/v1.0.0", false, "not in tags filter"},
+		{"tags negation pass", pushPlan([]string{"push"}, map[string]any{"tags": []any{"v*", "!v1.0.0"}}), "refs/tags/v2.0.0", true, ""},
+
+		// Ref-type scoping: a family defined for one ref type gates out the other.
+		{"branches-only skips tag", pushPlan([]string{"push"}, map[string]any{"branches": []any{"main"}}), "refs/tags/v1.0.0", false, "only branches filters"},
+		{"branches-ignore-only skips tag", pushPlan([]string{"push"}, map[string]any{"branches-ignore": []any{"dev"}}), "refs/tags/v1.0.0", false, "only branches filters"},
+		{"tags-only skips branch", pushPlan([]string{"push"}, map[string]any{"tags": []any{"v*"}}), "refs/heads/main", false, "only tags filters"},
+		{"tags-ignore-only skips branch", pushPlan([]string{"push"}, map[string]any{"tags-ignore": []any{"v*"}}), "refs/heads/main", false, "only tags filters"},
+
+		// Both families: each ref type evaluates its own.
+		{"both families tag hit", pushPlan([]string{"push"}, map[string]any{"branches": []any{"main"}, "tags": []any{"v*"}}), "refs/tags/v1.0.0", true, ""},
+		{"both families tag miss", pushPlan([]string{"push"}, map[string]any{"branches": []any{"main"}, "tags": []any{"v*"}}), "refs/tags/beta", false, "not in tags filter"},
+		{"both families branch hit", pushPlan([]string{"push"}, map[string]any{"branches": []any{"main"}, "tags": []any{"v*"}}), "refs/heads/main", true, ""},
+		{"both families branch miss", pushPlan([]string{"push"}, map[string]any{"branches": []any{"main"}, "tags": []any{"v*"}}), "refs/heads/dev", false, "not in branches filter"},
+		{"branches plus tags-ignore", pushPlan([]string{"push"}, map[string]any{"branches": []any{"main"}, "tags-ignore": []any{"v*"}}), "refs/tags/v1", false, "is ignored"},
+		{"branches plus tags-ignore pass", pushPlan([]string{"push"}, map[string]any{"branches": []any{"main"}, "tags-ignore": []any{"v*"}}), "refs/tags/rc1", true, ""},
+
+		// Empty lists count as undefined.
+		{"empty tags falls back to branches gate", pushPlan([]string{"push"}, map[string]any{"branches": []any{"main"}, "tags": []any{}}), "refs/tags/v1", false, "only branches filters"},
+
+		// Non-branch/tag refs only run unfiltered workflows.
+		{"odd ref unfiltered", pushPlan([]string{"push"}, nil), "refs/pull/1/head", true, ""},
+		{"odd ref filtered", pushPlan([]string{"push"}, map[string]any{"branches": []any{"main"}}), "refs/pull/1/head", false, "neither a branch nor a tag"},
+
+		// Declared gaps still skip safely.
+		{"paths still unsupported", pushPlan([]string{"push"}, map[string]any{"paths": []any{"src/**"}}), "refs/heads/main", false, "unsupported push filter paths"},
+		{"paths on tag also unsupported", pushPlan([]string{"push"}, map[string]any{"tags": []any{"v*"}, "paths": []any{"src/**"}}), "refs/tags/v1", false, "unsupported push filter paths"},
+		{"types under push unsupported", pushPlan([]string{"push"}, map[string]any{"types": []any{"x"}}), "refs/heads/main", false, "unsupported push filter types"},
+	}
+	for _, tc := range cases {
+		got, why := pushMatchesPlan(tc.plan, tc.ref)
+		if got != tc.want {
+			t.Errorf("%s: got %v want %v (why %q)", tc.name, got, tc.want, why)
+			continue
+		}
+		if tc.whyRe != "" && !strings.Contains(why, tc.whyRe) {
+			t.Errorf("%s: why %q missing %q", tc.name, why, tc.whyRe)
+		}
 	}
 }
 

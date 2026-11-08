@@ -11,7 +11,7 @@ never silently ignored.
 
 | Feature | Status | Notes |
 | --- | --- | --- |
-| `on: push` | done | parsed, modelled |
+| `on: push` | done | parsed, modelled; branch and tag pushes both trigger |
 | `on: pull_request` | done | live via webhook: runs the head SHA (`refs/pull/N/head`) — GitHub tests `refs/pull/N/merge` instead, a documented divergence; fork heads get trust `fork` (no secrets, own cache scope), same-repo PRs `pull_request` unless the project sets `pr_trust=trusted`, which promotes them to `trusted` (privileged executor + secrets, GitHub parity); `types`/`branches` filters honoured |
 | `on: workflow_dispatch` | done | `POST /projects/:p/workflows/:id/runs` |
 | `on: pull_request_target` | done | runs the base repo's default-branch head (workflow file and checkout both trusted); `github.head_ref`/`head_sha` expose the PR head branch for job-level `if:` filters; secrets allowed, so keep job code on the default branch. GitHub Apps never receive this event name; a `pull_request` delivery starts these workflows too |
@@ -19,7 +19,7 @@ never silently ignored.
 | `on: release`, `repository_dispatch`, `workflow_run` | partial | parsed and modelled; no provider events yet |
 | `on: schedule` | done | 5-field cron in UTC; the scheduler mints a run per due instant, deduped; missed windows are not caught up (same as GitHub) |
 | `on: workflow_call` / reusable workflows | partial | `jobs.<id>.uses` expands at compile: `./.github/workflows/x.yml` (local checkout or contents API at the run SHA) and `owner/repo/...@ref`. Called jobs get prefixed ids (`caller_called`); a synthetic boundary job carries the caller's `needs`/`if`/outputs so `needs.<caller>` and `needs.<caller>.outputs` resolve. Declared `on.workflow_call` inputs/outputs honoured; resolved contents are pinned on the workflow version for deterministic recompile. `secrets: inherit` honoured — called jobs run in the caller's project so the per-job secrets endpoint already delivers the inherited set; explicit `secrets:` maps stay diagnostic. Not implemented (explicit diagnostics): `strategy`/`concurrency` on callers; a failed called job shows the caller as `skipped`, not `failed` |
-| Trigger filters (`branches`, `paths`, `tags`, `types`…) | partial | parsed; unknown filters emit a warning and are ignored |
+| Trigger filters (`branches`, `paths`, `tags`, `types`…) | partial | `branches`/`branches-ignore` apply to branch pushes and `tags`/`tags-ignore` to tag pushes with GitHub's ref-type scoping (a single defined family gates out the other ref type; neither defined runs on both); `paths`/`paths-ignore` and unknown filters remain declared skips |
 
 ## Jobs
 
@@ -75,7 +75,7 @@ never silently ignored.
 
 | Feature | Status | Notes |
 | --- | --- | --- |
-| Inbound `push` webhooks | done | HMAC-verified deliveries persisted + processed; matching projects trigger runs compiled at the pushed SHA; `branches`/`branches-ignore` honoured, other filters are declared skips |
+| Inbound `push` webhooks | done | HMAC-verified deliveries persisted + processed; matching projects trigger runs compiled at the pushed SHA; `branches`/`branches-ignore`/`tags`/`tags-ignore` honoured per GitHub ref-type scoping, `paths`/`paths-ignore` and other filters are declared skips |
 | Inbound `pull_request` webhooks | done | head-SHA runs compiled at the head SHA on the base repo; checkout comes from the head repo so forks work; default action set + `types`/`branches` filters honoured |
 | Inbound `pull_request_target` webhooks | done | not a separate App subscription. The permissions form has no such checkbox, and `X-GitHub-Event` stays `pull_request`. That delivery also starts `pull_request_target` workflows: workflow and checkout both pinned to the base repo's default-branch head (contents API, falling back to the PR base SHA); `github.head_ref`/`head_sha` carry the PR head branch; same `types`/`branches` filters as `pull_request`. A delivery that already names `pull_request_target` is handled once |
 | Webhook delivery retention | done | `webhook_deliveries` rows older than `KERN_WEBHOOK_RETENTION` (default 30d) are pruned hourly |
