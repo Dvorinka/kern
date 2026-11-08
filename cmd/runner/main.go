@@ -303,7 +303,10 @@ func agentConfig(o options) runner.Config {
 	}
 	cfg.Executor = os.Getenv("KERN_RUNNER_EXECUTOR")
 	if cfg.Executor == "" {
-		if runtime.GOOS == "darwin" {
+		// Host executors are the only substrate on platforms without a
+		// compatible container runtime: darwin has no docker image contract
+		// and windows job containers would need LCOW.
+		if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
 			cfg.Executor = "host"
 		} else {
 			cfg.Executor = "docker"
