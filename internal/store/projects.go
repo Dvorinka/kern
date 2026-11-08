@@ -59,7 +59,7 @@ func (s *Store) Projects(ctx context.Context, orgID uuid.UUID) ([]Project, error
 // Webhook deliveries are instance-level, so the match is not org-scoped.
 func (s *Store) ProjectsByRepoFullName(ctx context.Context, fullName string) ([]Project, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT `+projectColumns+` FROM projects WHERE repo_full_name = $1`, fullName)
+		`SELECT `+projectColumns+` FROM projects WHERE LOWER(repo_full_name) = LOWER($1)`, fullName)
 	if err != nil {
 		return nil, err
 	}

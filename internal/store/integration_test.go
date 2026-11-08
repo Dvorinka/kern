@@ -724,3 +724,31 @@ func TestCancelOrphanedJobs(t *testing.T) {
 		t.Fatalf("job = %s/%s, want cancelled/cancelled", j.Status, j.Conclusion)
 	}
 }
+
+func TestProjectsByRepoFullNameCaseInsensitive(t *testing.T) {
+	s, ctx := testStore(t)
+	org, err := s.FirstOrg(ctx)
+	if err != nil {
+		t.Fatalf("org: %v", err)
+	}
+	if _, err := s.CreateProject(ctx, org.ID, "case-"+uuid.NewString()[:8], "case", "", "Dvorinka/Cal", "", "main"); err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	// GitHub canonical names and stored casing can drift (webhook payload
+	// uses the canonical name); the match must not be case-sensitive.
+	for _, name := range []string{"dvorinka/cal", "DVORINKA/CAL", "Dvorinka/Cal"} {
+		projects, err := s.ProjectsByRepoFullName(ctx, name)
+		if err != nil {
+			t.Fatalf("lookup %q: %v", name, err)
+		}
+		found := false
+		for _, p := range projects {
+			if p.RepoFullName == "Dvorinka/Cal" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("lookup %q did not match Dvorinka/Cal", name)
+		}
+	}
+}
