@@ -231,6 +231,65 @@ Recommendation if revisited: gVisor first for the sandboxed tiers
 requirement justifies the orchestration. Neither changes the trust-tier
 matrix above; they would deepen the sandbox column.
 
+## Live verification — 2026-11-08 (dev fleet, Docker Desktop)
+
+Executed against a real runner (`dev-verify`, work root on `$HOME`,
+`KERN_JOB_CPUS=2` for the 4-CPU Docker VM) and the local API on :8180,
+project `egress-demo` (`/home/tdvorak/kern-egress-demo`,
+`container: golang:1.26`). Trust tier driven through the first-class
+`triggerRun` `trust_level` parameter — same code path the webhook takes
+after classification.
+
+### Fork-tier egress — verified
+
+Run `107bbebe-1e10-4d25-b47c-1d2dbe4630dd` (`trust_level=fork`,
+`event=push`):
+
+| Probe | Result |
+| --- | --- |
+| `curl https://github.com` | HTTP 200 — allowed |
+| `curl http://github.com` | HTTP 301 — allowed |
+| `curl https://example.com` | connect failure through proxy (HTTP 000) — denied |
+| `curl http://example.com` | HTTP 403 — denied |
+| `curl --noproxy '*' https://example.com` | DNS resolution failure — no route |
+
+`docker network inspect kern-ego-34d95881-…` during the run:
+`Internal: true`; job container `kern-job-34d95881-…-1` and proxy
+`kern-egro-34d95881-…` attached; proxy additionally on the default bridge
+(dual-homed as designed). Job env carried `HTTP(S)_PROXY` →
+`http://kern-egress:3128` and `NO_PROXY` for localhost.
+
+Controls on the same workflow/image:
+
+- `trusted` run `e450bb6e-766c-4207-8d8a-252382a23f94`:
+  `example.com` HTTPS 200, HTTP 200, direct `--noproxy` REACHED —
+  privileged host-network path, as documented.
+- `pull_request` run `1f03467c-b2ec-44ad-b912-1d43b534fe80` (same-repo,
+  `pr_trust` off): identical full-egress results — matches the documented
+  "member branch = GitHub trust posture" decision.
+
+Note: an earlier probe iteration (`eed67694`) reported a false allow —
+`curl` exits 0 on HTTP 403 without `-f`. Verdicts above print
+`%{http_code}` explicitly.
+
+### Ephemeral / JIT runners — verified
+
+All against the dev control plane; runner rows confirmed via
+`GET /api/v1/runners` and `audit_events`.
+
+| Runner | Mode | Evidence |
+| --- | --- | --- |
+| `ephemeral-a` (`KERN_RUNNER_EPHEMERAL_IDLE=45s`, no jobs) | join-token | registered 00:15:03 → `ephemeral idle timeout` 00:15:49 → `runner deregistered; exiting` 00:15:53; `runner.deregister` audit; row count 0 |
+| `ephemeral-b` (`IDLE=60s`, one 35s job) | join-token | job claimed 00:16:56, ended 00:17:31 → deregister 00:18:32 (~61s after last activity) → exit; row deleted |
+| `ephemeral-c` (`IDLE=30s`, active-job overlap) | join-token | job claimed 00:19:38, ran to 00:20:12; the 30s idle deadline (~00:20:08) fell **inside** the active window — zero deregister attempts; deregister fired 00:20:43, exit 00:20:51 |
+| `jit-live-verify` | JIT (`POST /api/v1/runners` → `KERN_RUNNER_TOKEN`) | `runner.jit` audit 23:21:36 → token-auth `runner ready` 00:21:38 (no re-registration) → idle deregister 00:22:18 → row deleted |
+
+The active-job gate is client-side (`active.Load() != 0` skips the idle
+check in `ephemeralLoop`) with the control plane refusing deregistration
+while jobs remain — the overlap run demonstrates the observable contract:
+an ephemeral runner past its idle deadline with a running job does not
+deregister.
+
 ## What is NOT claimed
 
 - No microVM or user-space-kernel isolation today — sandboxed jobs share
