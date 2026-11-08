@@ -39,7 +39,10 @@ type Config struct {
 	NotifyRetention  time.Duration
 	AllowedOrigins   []string
 	DefaultImage     string
-	WebDir           string
+	// Arm64Image substitutes DefaultImage for jobs claimed by arm64 runners
+	// (KERN_ARM64_IMAGE). Empty disables substitution.
+	Arm64Image string
+	WebDir     string
 	// ReleaseRepo is the "owner/name" slug checked for newer releases on the
 	// settings page. Empty disables nothing — the endpoint just falls back.
 	ReleaseRepo string
@@ -106,6 +109,7 @@ func Load() (*Config, error) {
 		NotifyRetention:  duration("KERN_NOTIFY_RETENTION", 30*24*time.Hour),
 		AllowedOrigins:   splitList(env("KERN_ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:8081")),
 		DefaultImage:     env("KERN_DEFAULT_IMAGE", "ubuntu:24.04"),
+		Arm64Image:       env("KERN_ARM64_IMAGE", ""),
 		WebDir:           env("KERN_WEB_DIR", ""),
 		ReleaseRepo:      env("KERN_RELEASE_REPO", "Dvorinka/kern"),
 		GeoIPURL:         env("KERN_GEOIP_URL", "https://ipwho.is/{ip}"),
