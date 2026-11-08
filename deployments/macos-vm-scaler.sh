@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 # macos-vm-scaler — DEPRECATED single-group scaler, kept for the deployed
-# Nab9 timer. New deployments should use deployments/vm-scaler.sh, which
+# the Proxmox host timer. New deployments should use deployments/vm-scaler.sh, which
 # generalizes this to any number of provider-defined groups.
 #
 # power a Proxmox macOS VM on demand for KERN `runs-on: macos`
-# work. Runs on the Proxmox host (Nab9) from a systemd timer, e.g. every minute.
+# work. Runs on the Proxmox host (the Proxmox host) from a systemd timer, e.g. every minute.
 #
 #   KERN_MAC_VMID=904            Proxmox VM id
 #   KERN_MAC_TRIGGER_LABEL=macos runs-on label that demands the VM
-#   KERN_MAC_RUNNER_NAME=macos-904  runner row used for the idle check
+#   KERN_MAC_RUNNER_NAME=macos-vm  runner row used for the idle check
 #   KERN_MAC_IDLE_MINUTES=15     idle time before shutdown
 #   KERN_MAC_WARM_CRON=HH:MM     optional daily pre-warm (empty = off)
 #   KERN_MAC_SSH_KEY=/root/.ssh/kern-mac-scaler
 #   KERN_MAC_GUEST_USER=tdvorak-dev
-#   KERN_MAC_GUEST_IP=10.0.0.53 guest SSH endpoint for poweroff
-#   KERN_MAC_DB_EXEC="pct exec 908 -- docker exec -i deployments-postgres-1 psql -U kern -d kern -Atc"
+#   KERN_MAC_GUEST_IP=10.0.0.x guest SSH endpoint for poweroff
+#   KERN_MAC_DB_EXEC="pct exec <ctid> -- docker exec -i deployments-postgres-1 psql -U kern -d kern -Atc"
 #
 # Idle means: no queued jobs matching the trigger label AND no in-progress
 # job on the macOS runner. Boot latency is ~2 minutes; queue wait on a cold
@@ -23,10 +23,10 @@ set -euo pipefail
 
 VMID=${KERN_MAC_VMID:-904}
 LABEL=${KERN_MAC_TRIGGER_LABEL:-macos}
-RUNNER=${KERN_MAC_RUNNER_NAME:-macos-904}
+RUNNER=${KERN_MAC_RUNNER_NAME:-macos-vm}
 IDLE_MIN=${KERN_MAC_IDLE_MINUTES:-15}
 STATE=${KERN_MAC_STATE:-/var/lib/kern-mac-scaler.idle-since}
-DB=${KERN_MAC_DB_EXEC:-pct exec 908 -- docker exec -i deployments-postgres-1 psql -U kern -d kern -Atc}
+DB=${KERN_MAC_DB_EXEC:-pct exec <ctid> -- docker exec -i deployments-postgres-1 psql -U kern -d kern -Atc}
 
 sql() { $DB "$1"; }
 
@@ -97,7 +97,7 @@ if [ $((now - since)) -ge $((IDLE_MIN * 60)) ]; then
   # path. qm shutdown/stop remain as fallback for a wedged guest.
   ssh -i "${KERN_MAC_SSH_KEY:-/root/.ssh/kern-mac-scaler}" \
       -o BatchMode=yes -o ConnectTimeout=5 \
-      "${KERN_MAC_GUEST_USER:-tdvorak-dev}@${KERN_MAC_GUEST_IP:-10.0.0.53}" \
+      "${KERN_MAC_GUEST_USER:-tdvorak-dev}@${KERN_MAC_GUEST_IP:-10.0.0.x}" \
       'sudo -n /sbin/shutdown -h now' || qm shutdown "$VMID" --timeout 90 || true
   # Force-stop if still up after 5m.
   ( sleep 300; [ "$(vm_status)" = "running" ] && qm stop "$VMID" ) &

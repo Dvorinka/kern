@@ -1,0 +1,21 @@
+name: Feature request
+description: Propose an improvement or new capability
+labels: [enhancement]
+body:
+  - type: textarea
+    attributes:
+      label: Problem
+      description: What are you trying to do that KERN doesn't support well today?
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Proposed shape
+      description: How you'd expect it to work — CLI surface, workflow YAML semantics, UI.
+  - type: checkboxes
+    attributes:
+      label: Scope
+      options:
+        - label: This affects workflow compatibility with GitHub Actions
+        - label: This affects the public /api/v1 contract
+        - label: I'm willing to send a PR

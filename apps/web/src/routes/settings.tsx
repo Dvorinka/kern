@@ -378,7 +378,7 @@ function WakeOnDemandCard() {
 					When on, a host-side scaler may power runner hosts up for queued work and back
 					down when idle. When off, no host is ever started. Per-runner{" "}
 					<span className="font-mono">wake_on_demand</span> toggles on the runners page opt
-					individual hosts out — currently only macos-904 (VM904 on Nab9) is scaler-backed.
+					individual hosts out — see deployments/vm-scaler.sh for scaler-backed hosts.
 				</span>
 				<select
 					className="fsel"

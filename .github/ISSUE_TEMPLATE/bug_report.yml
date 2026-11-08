@@ -1,0 +1,26 @@
+name: Bug report
+description: Something in KERN misbehaved
+labels: [bug]
+body:
+  - type: textarea
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, what actually happened.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Environment
+      description: |
+        - KERN version (`kern --version` or /api/v1/meta)
+        - Runner OS/arch and executor (docker or host)
+        - Deployment style (compose, binary, container)
+      placeholder: |
+        v0.5.4, linux/amd64 docker runner, compose deploy
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Logs / evidence
+      description: Relevant api or kern-runner log lines, workflow YAML snippet, job/run ids.
+      render: shell
