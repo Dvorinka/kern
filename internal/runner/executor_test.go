@@ -256,3 +256,64 @@ func TestPersistGitPushAuth(t *testing.T) {
 		t.Fatal("extraheader persisted without a token")
 	}
 }
+
+func TestRunnerContextSecretsVarsAndEnvResolution(t *testing.T) {
+	cfg := Config{WorkRoot: t.TempDir()}
+	claim := &Claim{}
+	claim.Job.Image = "ubuntu:24.04"
+	claim.Job.ID = "test-job-1"
+	claim.Job.Env = map[string]string{
+		"KEYSTORE_BASE64": "${{ secrets.ANDROID_KEYSTORE_BASE64 }}",
+		"GREETING":        "hello ${{ matrix.name }}",
+		"PLAIN":           "static",
+	}
+	claim.Job.Matrix = map[string]any{"name": "world"}
+	secretsMap := map[string]string{"ANDROID_KEYSTORE_BASE64": "c2VjcmV0MTIz"}
+	e, err := newJobExecutor(cfg, &client{}, claim, secretsMap, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := e.runnerContext()
+
+	sec, ok := ctx["secrets"].(map[string]any)
+	if !ok {
+		t.Fatalf("secrets context missing or wrong type: %T", ctx["secrets"])
+	}
+	if sec["ANDROID_KEYSTORE_BASE64"] != "c2VjcmV0MTIz" {
+		t.Errorf("secrets context: %v", sec)
+	}
+	if vars, ok := ctx["vars"].(map[string]any); !ok || len(vars) != 0 {
+		t.Errorf("vars context should be an empty map, got %v", ctx["vars"])
+	}
+	env, ok := ctx["env"].(map[string]any)
+	if !ok {
+		t.Fatalf("env context missing: %T", ctx["env"])
+	}
+	if env["KEYSTORE_BASE64"] != "c2VjcmV0MTIz" {
+		t.Errorf("env.KEYSTORE_BASE64 = %v, want resolved secret", env["KEYSTORE_BASE64"])
+	}
+	if env["GREETING"] != "hello world" {
+		t.Errorf("env.GREETING = %v, want matrix interpolation", env["GREETING"])
+	}
+	if env["PLAIN"] != "static" {
+		t.Errorf("env.PLAIN = %v", env["PLAIN"])
+	}
+}
+
+func TestRunnerContextSecretsEmptyWhenWithheld(t *testing.T) {
+	cfg := Config{WorkRoot: t.TempDir()}
+	claim := &Claim{}
+	claim.Job.Image = "ubuntu:24.04"
+	claim.Job.ID = "test-job-1"
+	claim.Job.Env = map[string]string{"TOKEN": "${{ secrets.GITHUB_TOKEN }}"}
+	// nil secretMap models an untrusted run: secrets withheld.
+	e, err := newJobExecutor(cfg, &client{}, claim, nil, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := e.runnerContext()
+	env := ctx["env"].(map[string]any)
+	if env["TOKEN"] != "" {
+		t.Errorf("withheld secret should resolve empty, got %v", env["TOKEN"])
+	}
+}

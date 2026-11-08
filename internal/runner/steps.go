@@ -141,6 +141,13 @@ func (e *executor) cmdDir() string { return filepath.Join(e.workRoot(), "cmd") }
 // runStepUnit runs a whole step unit: the script body (empty for uses steps,
 // which also clears the file-command targets) then the action dispatch.
 func (e *executor) runStepUnit(ctx context.Context, step StepSpec) (string, int, error) {
+	// Step env values may carry expressions; resolve once here so the env
+	// file, shell steps and action dispatches all see the same values.
+	// Already-resolved values contain no ${{ and pass through untouched, so
+	// the self-heal retry path is idempotent.
+	if len(step.Env) > 0 {
+		step.Env = e.interpolateEnv(step.Env)
+	}
 	outcome, code, stepErr := e.runStepBody(ctx, step)
 	if stepErr != nil {
 		e.logStep(step, "KERN: "+stepErr.Error())
@@ -420,6 +427,9 @@ func (e *executor) renderScript(step StepSpec) (string, string, error) {
 // writeStepEnv builds the per-step --env-file with job env, secrets, step env and
 // persisted state. It returns the host path used by docker exec.
 func (e *executor) writeStepEnv(step StepSpec) string {
+	// Job env reaches the process env through the env file; hand the builder
+	// the expression-resolved values, not the raw ${{ }} templates.
+	e.enc.jobEnv = e.resolvedJobEnv(e.baseContext())
 	path := e.stepEnvPath(step)
 	content, extra := e.enc.render(step)
 	e.stepEnvExtra = extra
@@ -453,6 +463,21 @@ func (e *executor) evaluateOutputs(string) map[string]string {
 // runnerContext builds the expression context available to step conditions and outputs.
 // needs.* is not resolvable on the runner; the control plane evaluates job conditions.
 func (e *executor) runnerContext() map[string]any {
+	ctx := e.baseContext()
+	// Job env values may carry expressions (env: FOO: ${{ secrets.X }});
+	// resolve them once against the non-env contexts and expose the result
+	// both as process env (envBuilder) and as the env expression context.
+	env := map[string]any{}
+	for k, v := range e.resolvedJobEnv(ctx) {
+		env[k] = v
+	}
+	ctx["env"] = env
+	return ctx
+}
+
+// baseContext is runnerContext minus the env key: the context job-level env
+// values are allowed to see (no env self-reference, no step outputs yet).
+func (e *executor) baseContext() map[string]any {
 	steps := map[string]any{}
 	for id, r := range e.stepResults {
 		outs := map[string]any{}
@@ -466,10 +491,6 @@ func (e *executor) runnerContext() map[string]any {
 	matrix := map[string]any{}
 	for k, v := range e.claim.Job.Matrix {
 		matrix[k] = v
-	}
-	env := map[string]any{}
-	for k, v := range e.claim.Job.Env {
-		env[k] = v
 	}
 	github := map[string]any{
 		"event_name": e.claim.Run.Event, "ref": e.claim.Run.Ref, "sha": e.claim.Run.SHA,
@@ -487,13 +508,55 @@ func (e *executor) runnerContext() map[string]any {
 	for k, v := range e.claim.Job.Inputs {
 		inputs[k] = v
 	}
-	return map[string]any{
-		"github": github, "matrix": matrix, "env": env, "steps": steps, "needs": needs,
-		"inputs": inputs,
+	secretCtx := map[string]any{}
+	for k, v := range e.secrets {
+		secretCtx[k] = v
+	}
+	ctx := map[string]any{
+		"github": github, "matrix": matrix, "steps": steps, "needs": needs,
+		"inputs": inputs, "secrets": secretCtx, "vars": map[string]any{},
 		"runner": e.runnerCtxMap(), "job": map[string]any{},
 		"__job_status": e.jobStatusSoFar(),
 		"__workspace":  filepath.Join(e.workRoot(), "workspace"),
 	}
+	return ctx
+}
+
+// interpolateEnv resolves ${{ }} expressions in a step env map. Values that
+// fail to interpolate keep their literal text — a bad expression should not
+// silently drop the variable.
+func (e *executor) interpolateEnv(env map[string]string) map[string]string {
+	ctx := e.runnerContext()
+	out := make(map[string]string, len(env))
+	for k, v := range env {
+		if strings.Contains(v, "${{") {
+			if r, err := expressions.Interpolate(v, ctx); err == nil {
+				v = r
+			}
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// resolvedJobEnv interpolates claim.Job.Env values once per job. Job-level
+// env is defined before any step runs, so the context deliberately excludes
+// env/steps — matching GitHub, where job env cannot see step outputs.
+func (e *executor) resolvedJobEnv(ctx map[string]any) map[string]string {
+	if e.jobEnvResolved != nil {
+		return e.jobEnvResolved
+	}
+	out := map[string]string{}
+	for k, v := range e.claim.Job.Env {
+		if strings.Contains(v, "${{") {
+			if r, err := expressions.Interpolate(v, ctx); err == nil {
+				v = r
+			}
+		}
+		out[k] = v
+	}
+	e.jobEnvResolved = out
+	return out
 }
 
 // runnerContext fills GitHub's `runner` context with the values job

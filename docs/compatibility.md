@@ -27,7 +27,7 @@ never silently ignored.
 
 | Feature | Status | Notes |
 | --- | --- | --- |
-| `runs-on` labels | done | label subset match against runner labels; `matrix.*` expressions in labels are interpolated per combination — other contexts (`inputs.*`, `vars.*`) stay literal and warn. macOS runners advertise `macos`, `macos-<arch>`, `self-hosted`, `kern`, `<goos>-<arch>` — use `runs-on: macos` (or `[self-hosted, macos]`) for Xcode/iOS jobs |
+| `runs-on` labels | done | label subset match against runner labels; `matrix.*` expressions in labels are interpolated per combination — a whole-value expression evaluating to a list expands into labels (`runs-on: ${{ matrix.ro }}` with `ro: [a, b]` = labels a+b). Other contexts (`inputs.*`, `vars.*`) stay literal and warn. macOS runners advertise `macos`, `macos-<arch>`, `self-hosted`, `kern`, `<goos>-<arch>` — use `runs-on: macos` (or `[self-hosted, macos]`) for Xcode/iOS jobs |
 | `needs` DAG | done | cycle detection at compile; gating in orchestrator |
 | `strategy.matrix` incl. `include`/`exclude` | done | 256-combination cap |
 | `strategy.fail-fast` | done | cancels pending matrix siblings on failure |
@@ -93,6 +93,7 @@ never silently ignored.
 | --- | --- | --- |
 | AES-256-GCM at rest | done | org + project scoped rows |
 | Masking in logs | done | server-side at ingestion |
+| `secrets` expression context | done | `${{ secrets.NAME }}` resolves in `env`, `if`, `run`, `with` from the project + org secret store (environment secrets outrank project, project outranks org). Job/workflow `env:` values are interpolated; step `env:` too. Withheld on untrusted runs — resolves empty, matching GitHub's fork behaviour. Note: secrets also enter the step environment under their own names (KERN convenience, broader than GitHub's reference-only model) |
 | Fork / pull_request runs receive no secrets | done | `{blocked: true}` contract; same gate withholds the per-run `GITHUB_TOKEN` |
 | Per-run `GITHUB_TOKEN` | done | trusted-tier runs receive a ~1h repository-scoped GitHub App installation token minted at claim time, narrowed by `permissions:` (see Jobs table). Requires `KERN_GITHUB_APP_*` configured; mint failures degrade to no token with a runner-log warning, never a fabricated one |
 | Fork-tier egress allowlist | done | `fork` runs execute on a per-job `--internal` docker network with HTTP/S egress only through a sibling allowlist proxy (`kern-runner egress-proxy` in a scratch image the runner builds itself). Allowlist = GitHub + major registries; `KERN_EGRESS_ALLOWLIST` replaces it, `KERN_RUNNER_EGRESS=off` disables. Non-HTTP protocols have no route at all. `pull_request` keeps full egress |
