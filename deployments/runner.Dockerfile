@@ -22,13 +22,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
        | tar xz -C /usr/local/bin --strip-components=1 docker/docker \
     && mkdir -p /usr/libexec/docker/cli-plugins \
     && dl() { repo="$1"; tag="$2"; asset="$3"; dest="$4"; \
-         curl -fsSL "https://github.com/${repo}/releases/download/${tag}/${asset}" -o "$dest" \
+         curl -fsSL --retry 8 --retry-all-errors --retry-delay 4 -C - \
+           "https://github.com/${repo}/releases/download/${tag}/${asset}" -o "$dest" \
          || { aid=$(curl -fsSL "https://api.github.com/repos/${repo}/releases/tags/${tag}" \
                | awk -v want="\"name\": \"${asset}\"" \
                  '/"id":/ { match($0, /[0-9]+/); last=substr($0, RSTART, RLENGTH) } \
                   index($0, want) { print last; exit }'); \
               test -n "$aid" \
-              && curl -fsSL -H 'Accept: application/octet-stream' \
+              && curl -fsSL --retry 8 --retry-all-errors --retry-delay 4 -C - \
+                 -H 'Accept: application/octet-stream' \
                  "https://api.github.com/repos/${repo}/releases/assets/${aid}" -o "$dest"; }; } \
     && dl docker/compose "${DOCKER_COMPOSE}" docker-compose-linux-x86_64 \
          /usr/libexec/docker/cli-plugins/docker-compose \
