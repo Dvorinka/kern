@@ -62,5 +62,44 @@ gate for revisiting is `kern_job_queue_wait_seconds` p95 on `/metrics` —
 once it shows real pain, (a) is the documented path where Kubernetes exists,
 and (b) only where it does not and owner sign-off is explicit.
 
+## Measured revisit — 2026-11-08
+
+The p95 gate has now been measured on production (CT908, `84fc9e4`,
+`docs/kpi-baseline.md`):
+
+- `kern_job_queue_wait_seconds` p95 ≈ **930s**, average ≈ 236s over 481
+  jobs/24h — but bimodal: 51% of jobs claim in <1s. Pain is burst-shaped.
+- `kern_claim_query_seconds` ≈ 0.6ms average — claiming is not the cost.
+- `kern_scheduler_tick_duration_seconds` ≈ 17ms — the scheduler is not
+  the cost.
+- Runner logs show the actual constraint: CT902's load gate pauses claims
+  at `loadavg1 ≈ 12–13` vs gate 12 — **host CPU saturation during bursts**,
+  not queue machinery.
+
+Reading: real queue pain exists, but its cause is finite runner CPU on a
+hand-managed fleet — adding runners relieves it directly, and no scaler
+code is needed to justify that. Kubernetes does not exist in this
+deployment (Proxmox CTs), so (a) remains inapplicable infrastructure-wise;
+(b) stays disproportionate for a problem solved by "run one more CT". The
+macOS VM scaler above is the same pattern applied to one specialty host.
+
+What changed since the original decision: the JIT/ephemeral path is now
+verified live (`docs/security-isolation.md`). `POST /api/v1/runners` mints
+a self-deregistering runner credential — a future scaler can grow the
+fleet by minting ephemeral runners on spare docker hosts and letting them
+expire, with no k8s and no persistent fleet bookkeeping. That makes (c)
+strictly cheaper to extend than when this doc was written, and it is the
+natural substrate if queue p95 stays >15min *after* the fleet image is
+rebuilt (see the stale-runner caveat in `docs/kpi-baseline.md` — the CI
+fleet currently runs a runner image predating GC/ephemeral/egress, so
+scale-out today would replicate missing features).
+
+Decision stands: **(c)**, with the JIT mint as the documented scale-out
+primitive. Revisit (b) only if p95 stays above ~15min sustained *and*
+host-level autoscaling is wanted on bare metal; revisit (a) only if a
+Kubernetes cluster appears.
+
 Recorded decision: (c) adopted 2026-11; (a) documented as the K8s upgrade
 path; (b) deferred pending queue-wait p95 evidence and owner sign-off.
+Re-measured 2026-11-08 against production — (c) confirmed, JIT mint noted
+as the scale-out primitive.
