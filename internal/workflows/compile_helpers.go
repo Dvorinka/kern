@@ -37,7 +37,13 @@ func evalWholeExpr(label string, ctx map[string]any) ([]string, bool) {
 			arr[i] = s
 		}
 	default:
-		return nil, false
+		// Filter results (x.*) are list values too; anything else falls
+		// through to plain interpolation.
+		elems, ok := expressions.ListElements(v)
+		if !ok {
+			return nil, false
+		}
+		arr = elems
 	}
 	out := make([]string, 0, len(arr))
 	for _, el := range arr {

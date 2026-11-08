@@ -5,6 +5,7 @@ package orchestrator
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -63,6 +64,46 @@ func TestDispatchInputsResolveRunsOn(t *testing.T) {
 	}
 	if inputs["runner"] != "hp-win11" {
 		t.Fatalf("inputs[runner] = %q, want hp-win11", inputs["runner"])
+	}
+}
+
+// A runs-on expression that resolves to an empty label list produces a job
+// no runner can ever claim — the seed must fail instead of queueing it.
+func TestZeroLabelJobFailsSeed(t *testing.T) {
+	s, ctx := testStore(t)
+	var reported []string
+	o := newOrch(s, &reported)
+
+	org, err := s.FirstOrg(ctx)
+	if err != nil {
+		t.Fatalf("org: %v", err)
+	}
+	p, err := s.CreateProject(ctx, org.ID, "it-"+uuid.NewString()[:8], "it", "", "it/repo", "", "main")
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	wf, err := s.UpsertWorkflow(ctx, p.ID, ".github/workflows/it.yml", "IT")
+	if err != nil {
+		t.Fatalf("workflow: %v", err)
+	}
+	v, err := s.PutWorkflowVersion(ctx, wf.ID, "deadbeef", `name: IT
+on: push
+jobs:
+  build:
+    runs-on: ${{ matrix.ro }}
+    strategy:
+      matrix:
+        ro: [[], []]
+    steps:
+      - run: echo hi
+`, map[string]any{}, true, nil, nil)
+	if err != nil {
+		t.Fatalf("version: %v", err)
+	}
+	if _, err := o.StartRun(ctx, params(p.ID, wf.ID, v.ID, "refs/heads/main")); err == nil {
+		t.Fatal("start run should fail on a zero-label job")
+	} else if !strings.Contains(err.Error(), "runs-on") {
+		t.Fatalf("error should name runs-on, got %v", err)
 	}
 }
 

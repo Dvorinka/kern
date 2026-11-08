@@ -144,12 +144,18 @@ func (o *Orchestrator) StartRun(ctx context.Context, p store.CreateRunParams) (s
 		for k, v := range inputs {
 			inputsCtx[k] = v
 		}
+		runsOn := workflows.ResolveRunsOn(jp.RunsOn, map[string]any{"matrix": jp.Matrix, "inputs": inputsCtx})
+		// A job with zero labels can never be claimed — it would sit in the
+		// queue forever. Fail the seed so the trigger reports an error.
+		if len(runsOn) == 0 {
+			return store.Run{}, fmt.Errorf("job %q resolved to zero runs-on labels", jp.Key)
+		}
 		seed := store.JobSeed{
 			Key:             jp.Key,
 			JobKey:          jp.JobID,
 			Name:            jp.Name,
 			Needs:           jp.Needs,
-			RunsOn:          workflows.ResolveRunsOn(jp.RunsOn, map[string]any{"matrix": jp.Matrix, "inputs": inputsCtx}),
+			RunsOn:          runsOn,
 			Image:           jp.Image,
 			Matrix:          jp.Matrix,
 			Env:             jp.Env,

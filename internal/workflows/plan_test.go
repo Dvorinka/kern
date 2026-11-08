@@ -317,3 +317,40 @@ jobs:
 		}
 	}
 }
+
+// A .* filter result is a list too: it must expand into labels, not the
+// literal string "Array" that Stringify would render.
+func TestCompileRunsOnStarFilterExpands(t *testing.T) {
+	src := `on: push
+jobs:
+  j:
+    runs-on: ${{ matrix.ro.* }}
+    strategy:
+      matrix:
+        ro:
+          - [self-hosted, linux]
+          - [self-hosted, macos]
+    steps:
+      - run: echo hi
+`
+	res, err := Compile(src, testCompiler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Valid {
+		t.Fatalf("diagnostics: %+v", res.Diagnostics)
+	}
+	if len(res.Plan.Jobs) != 2 {
+		t.Fatalf("want 2 matrix jobs, got %d", len(res.Plan.Jobs))
+	}
+	for _, j := range res.Plan.Jobs {
+		if len(j.RunsOn) != 2 {
+			t.Fatalf("star filter should expand to 2 labels, got %v", j.RunsOn)
+		}
+		for _, l := range j.RunsOn {
+			if l == "Array" || strings.Contains(l, "${{") {
+				t.Fatalf("bad label %q in %v", l, j.RunsOn)
+			}
+		}
+	}
+}
