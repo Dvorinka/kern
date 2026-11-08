@@ -74,7 +74,7 @@ Client config:
 {
   "mcpServers": {
     "kern": {
-      "url": "https://kern.tdvorak.dev/api/v1/mcp",
+      "url": "https://kern.example.com/api/v1/mcp",
       "headers": { "Authorization": "Bearer <token>" }
     }
   }

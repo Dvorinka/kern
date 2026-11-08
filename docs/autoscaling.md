@@ -54,8 +54,8 @@ status are plain shell commands, so Proxmox (`qm`, `pct`), libvirt, cloud
 CLIs or ssh all fit; `KERN_VM_WARM_CRON` pre-warms on a schedule.
 
 The original single-VM script `deployments/macos-vm-scaler.sh` is kept for
-the deployed Nab9 timer; new groups should use `vm-scaler.sh`. The macOS
-runner (VM 904) runs launchd + host executor inside the guest; see
+the deployed the Proxmox host timer; new groups should use `vm-scaler.sh`. The macOS
+runner (VM) runs launchd + host executor inside the guest; see
 `docs/production.md` for the guest layout. Boot latency is roughly two
 minutes — queue wait on a cold VM is expected.
 
@@ -69,7 +69,7 @@ never suppressed):
 - `runners.wake_on_demand` per runner (`kern runners wake <name> on|off`,
   `PATCH /runners/:id`, the bolt pill on the runners page) — opts a single
   host out; default `on`. Applies to the runner row named by
-  `KERN_VM_RUNNER` — currently `macos-904` is the only scaler-backed host.
+  `KERN_VM_RUNNER` — currently `macos-vm` is the only scaler-backed host.
 
 ## Decision
 
@@ -83,7 +83,7 @@ and (b) only where it does not and owner sign-off is explicit.
 
 ## Measured revisit — 2026-11-08
 
-The p95 gate has now been measured on production (CT908, `84fc9e4`,
+The p95 gate has now been measured on production (host, `84fc9e4`,
 `docs/kpi-baseline.md`):
 
 - `kern_job_queue_wait_seconds` p95 ≈ **930s**, average ≈ 236s over 481

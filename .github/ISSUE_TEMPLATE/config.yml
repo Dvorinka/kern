@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Feature matrix
+    url: https://github.com/Dvorinka/kern/blob/master/docs/compatibility.md
+    about: What GitHub Actions YAML KERN supports today — check before filing a compat bug.
+  - name: Security
+    url: https://github.com/Dvorinka/kern/security/policy
+    about: Report vulnerabilities privately per SECURITY.md — never in a public issue.

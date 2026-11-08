@@ -4,18 +4,28 @@
 
 # KERN
 
-Distributed, self-hosted CI/CD platform that executes existing GitHub Actions
-workflow YAML on your own infrastructure. GitHub stays the source-code
-provider; KERN owns the control plane, scheduler, execution engine and storage.
+Distributed, self-hosted CI/CD that runs GitHub Actions workflow YAML on your
+own infrastructure. GitHub stays your source-code host; KERN owns the control
+plane, scheduler, execution engine, and storage — no cloud account, no
+per-minute billing, no code leaving your machines.
 
-Status: **v0.5.0, dogfooded in production.** The full loop runs live —
-GitHub App webhooks → compiled run → ephemeral container on a registered
-runner → commit status/check-run posted back — including composite,
-JavaScript and Docker actions, reusable workflows, service containers and
-environment approvals. Native macOS runners are proven end to end
-(launchd agent on a Proxmox VM, autoscaled on queued `runs-on: macos`
-work). The honest feature matrix is `docs/compatibility.md`; remaining
-production gaps are tracked in `docs/production.md`.
+## Why KERN
+
+- **Your workflows, unchanged** — KERN compiles standard
+  `.github/workflows/*.yml`: `needs` DAGs, matrices, `if`/expressions,
+  `concurrency`, `environment` approvals, reusable workflows, service
+  containers, and the popular actions (`checkout`, `cache`, artifacts).
+- **Your machines** — the runner agent enrolls with a one-time token and
+  polls outbound-only. Any Docker host becomes capacity: bare metal, VMs,
+  containers, macOS and Windows hosts via the host executor.
+- **One Go binary + Postgres** — no message queue, no Kubernetes required.
+  Compose file included; the API also serves the dashboard.
+- **Full control plane** — web dashboard, `kern` CLI, REST API, Prometheus
+  metrics, audit log, AES-256-GCM secrets, environment approvals,
+  self-healing retries, signed auto-updates.
+
+Status: **v0.5.x, running production workloads.** The honest GitHub Actions
+feature matrix is [docs/compatibility.md](docs/compatibility.md).
 
 ## Screenshots
 
@@ -23,59 +33,13 @@ production gaps are tracked in `docs/production.md`.
 | --- | --- |
 | ![Overview](docs/screenshots/overview.png) | ![Runs](docs/screenshots/runs.png) |
 
-| Projects | Usage |
-| --- | --- |
-| ![Projects](docs/screenshots/projects.png) | ![Usage](docs/screenshots/usage.png) |
-
 | Runners | Run detail |
 | --- | --- |
 | ![Runners](docs/screenshots/runners.png) | ![Run detail](docs/screenshots/run-detail.png) |
 
-## Components
-
-| Path | What it is |
-| --- | --- |
-| `cmd/api` | Control plane: HTTP API, auth, scheduler, orchestrator, log ingestion, webhooks |
-| `cmd/runner` | Runner agent: enrolls, long-polls for jobs, executes steps in ephemeral containers |
-| `cmd/kern` | `kern` CLI: full control-plane client — auth, projects, runs, runners, artifacts, cache, `exec` offload, `split` |
-| `cmd/migrate` | Standalone migration runner (migrations also run at api boot) |
-| `internal/` | Platform packages (see `docs/architecture.md`) |
-| `apps/web` | Dashboard — React 19 + Vite + TS strict + Tailwind: overview, projects, runs (DAG + live logs), runners, secrets, artifacts, cache, environments, usage, audit, settings |
-| `migrations/` | Versioned PostgreSQL schema (goose) |
-| `deployments/` | Docker Compose + Dockerfiles + auto-update sidecar script |
-
-## Feature highlights
-
-- **Workflow engine** — parses GitHub Actions YAML into a static plan;
-  `needs` DAG, matrices with include/exclude/fail-fast, `strategy.split`
-  fan-out, `if`/expressions, `concurrency` groups, `timeout-minutes`,
-  `continue-on-error`.
-- **Action runtimes** — `run` steps, local + remote composite actions,
-  `node*` JavaScript actions (pinned Node, hash-verified), `docker://` and
-  Dockerfile actions, action lifecycle hooks (`pre`/`post`), and native
-  `actions/checkout`, `actions/cache`, upload/download-artifact.
-- **Reusable workflows** — `jobs.<id>.uses` compile-time expansion with
-  inputs/outputs and a boundary job; service containers on a per-job
-  network with health waits.
-- **GitHub App integration** — push/pull_request/pull_request_target
-  webhooks, commit statuses + check runs as the App, manifest-based
-  "Connect GitHub" flow, fork trust levels and a fork approval gate.
-- **Runner fleet** — one-time enrollment tokens, heartbeats with live
-  cpu/mem/disk, least-loaded placement, per-job container hardening
-  (uid 1000, dropped caps, read-only root, resource limits), persistent
-  tool caches with a bounded LRU, image GC, load gates. Docker executor
-  plus a host executor for native jobs; custom runner icons; JIT
-  single-job runners; proven on Linux containers and macOS (launchd,
-  autoscaled VM on demand).
-- **Operations** — AES-256-GCM secrets at rest, server-side log masking,
-  environment approvals, audit log, Prometheus `/metrics`, retention
-  sweeps, signed-release auto-update, `kern exec` remote offload.
-- **Self-healing** — every failed step gets a structured diagnosis;
-  an opt-in `allow_fix` ladder can retry once with an allow-listed fix.
-
 ## Quickstart
 
-Requires Go 1.26+, Docker, PostgreSQL 16, and `just`.
+Requires Go 1.26+, Docker, PostgreSQL 16, and [`just`](https://github.com/casey/just).
 
 ```sh
 # 1. Postgres (any reachable instance)
@@ -83,52 +47,77 @@ docker run -d --name kern-pg -p 5432:5432 \
   -e POSTGRES_USER=kern -e POSTGRES_PASSWORD=kern -e POSTGRES_DB=kern \
   postgres:16-alpine
 
-# 2. Control plane (migrations + bootstrap admin run at boot)
+# 2. Control plane — migrations + bootstrap admin run at boot
 just dev          # http://localhost:8080, admin@kern.local / kern-admin-password
 
-# 3. Runner agent (any machine with Docker; outbound-only)
-just runner       # registers, heartbeats, long-polls for jobs
+# 3. Runner agent on any machine with Docker
+just runner       # enrolls, heartbeats, claims jobs
 
-# 4. Dashboard (optional — `just dev` serves the API only)
+# 4. Dashboard (optional)
 cd apps/web && pnpm install && pnpm dev   # http://localhost:5173
-
-# 5. Create a project pointing at a repo checkout, then sync + trigger
-curl -b cookies -c cookies -X POST localhost:8080/api/v1/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"email":"admin@kern.local","password":"kern-admin-password"}'
-curl -b cookies -X POST localhost:8080/api/v1/projects \
-  -H 'Content-Type: application/json' \
-  -d '{"slug":"demo","local_path":"/path/to/repo"}'
-curl -b cookies -X POST localhost:8080/api/v1/projects/demo/sync
-curl -b cookies -X POST \
-  localhost:8080/api/v1/projects/demo/workflows/<workflow-id>/runs -d '{}'
 ```
 
-Environment variables are documented in `.env.example`. Production-style
-deployment: `docker compose -f deployments/docker-compose.yml up -d` with the
-required secrets set — see `docs/deploy.md` for the full checklist including
-the GitHub App, ingress tunnel, and automatic updates.
+Production-style deployment: `docker compose -f deployments/docker-compose.yml up -d`
+— the full checklist (env vars, GitHub App, ingress, auto-update) is in
+[docs/deploy.md](docs/deploy.md).
 
-## Development
+## Components
 
-```sh
-just build    # go build ./...
-just test     # go test ./... -count=1
-just vet      # go vet ./...
-just migrate  # apply migrations only
-cd apps/web && pnpm build && pnpm lint
-```
+| Path | What it is |
+| --- | --- |
+| `cmd/api` | Control plane: HTTP API, auth, scheduler, orchestrator, webhooks |
+| `cmd/runner` | Runner agent: enrolls, claims, executes steps in ephemeral containers |
+| `cmd/kern` | `kern` CLI: auth, projects, runs, runners, secrets, settings, `exec` |
+| `cmd/migrate` | Standalone migrator (also runs at api boot) |
+| `internal/` | Platform packages — see [docs/architecture.md](docs/architecture.md) |
+| `apps/web` | Dashboard: React 19 + Vite + Tailwind |
+| `migrations/` | Versioned PostgreSQL schema (goose) |
+| `deployments/` | Compose file, Dockerfiles, updater + scaler scripts |
+
+## Feature highlights
+
+- **Workflow engine** — static plan compile; `needs` DAG, matrix
+  include/exclude/fail-fast, `strategy.split` fan-out, expressions,
+  `concurrency` groups, timeouts, `continue-on-error`.
+- **Action runtimes** — `run` steps, local + remote composite actions,
+  `node*` JavaScript actions (hash-verified), `docker://` and Dockerfile
+  actions, lifecycle hooks, native `checkout`/`cache`/artifact actions.
+- **Reusable workflows** — `jobs.<id>.uses` expansion with inputs/outputs;
+  service containers on per-job networks with health waits.
+- **GitHub App integration** — push/PR webhooks, commit statuses and check
+  runs as the App, manifest "Connect GitHub" flow, fork trust levels and an
+  approval gate.
+- **Runner fleet** — enrollment tokens, live cpu/mem/disk heartbeats,
+  least-loaded placement, hardened job containers (non-root uid, dropped
+  caps, read-only root, resource limits), persistent tool caches, image GC,
+  host executor for macOS/Windows, JIT ephemeral runners, wake-on-demand
+  scaling hooks.
+- **Operations** — AES-256-GCM secrets, server-side log masking, environment
+  approvals, audit log, `/metrics`, retention sweeps, signed-release
+  auto-update, `kern exec` remote offload.
 
 ## Documentation
 
 | Doc | Contents |
 | --- | --- |
-| `docs/architecture.md` | Processes, request flow, isolation, scheduler, ADRs |
-| `docs/compatibility.md` | Honest GitHub Actions feature matrix |
-| `docs/connect.md` | Bind a repo to the fleet; `runs-on` label matching |
-| `docs/deploy.md` | Production checklist, GitHub App, auto-update |
-| `docs/backups.md` | Backup + restore runbook |
-| `docs/remote-exec.md` | `kern exec` remote execution offload |
-| `docs/production.md` | What remains for enterprise/production readiness |
-| `plan.md` | Milestone ledger |
-| `project.md` | Product specification |
+| [docs/architecture.md](docs/architecture.md) | Processes, request flow, isolation, scheduler, ADRs |
+| [docs/compatibility.md](docs/compatibility.md) | GitHub Actions feature matrix — what works today |
+| [docs/connect.md](docs/connect.md) | Bind a repo to the fleet; `runs-on` label matching |
+| [docs/deploy.md](docs/deploy.md) | Production checklist, GitHub App, auto-update |
+| [docs/autoscaling.md](docs/autoscaling.md) | Runner scaling options + wake-on-demand controls |
+| [docs/backups.md](docs/backups.md) | Backup + restore runbook |
+| [docs/remote-exec.md](docs/remote-exec.md) | `kern exec` remote execution offload |
+| [docs/production.md](docs/production.md) | Remaining gaps for enterprise readiness |
+| [plan.md](plan.md) | Milestone ledger |
+| [project.md](project.md) | Product specification |
+
+## Contributing
+
+Issues and PRs welcome. `just build` / `just test` / `just vet`, and
+`cd apps/web && pnpm lint && pnpm build` before pushing. Store integration
+tests need `KERN_TEST_DATABASE_URL` pointing at a throwaway Postgres
+database whose name contains `kern_test`.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

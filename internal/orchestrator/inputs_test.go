@@ -49,21 +49,21 @@ func TestDispatchInputsResolveRunsOn(t *testing.T) {
 	o := newOrch(s, &reported)
 
 	p := dispatchFixture(t, ctx, s)
-	p.Inputs = map[string]any{"runner": "hp-win11"}
+	p.Inputs = map[string]any{"runner": "windows-runner"}
 	run, err := o.StartRun(ctx, p)
 	if err != nil {
 		t.Fatalf("start run: %v", err)
 	}
 	job := jobByKey(t, ctx, s, run.ID, "build")
-	if len(job.RunsOn) != 1 || job.RunsOn[0] != "hp-win11" {
-		t.Fatalf("runs_on = %v, want [hp-win11]", job.RunsOn)
+	if len(job.RunsOn) != 1 || job.RunsOn[0] != "windows-runner" {
+		t.Fatalf("runs_on = %v, want [windows-runner]", job.RunsOn)
 	}
 	inputs, err := job.InputsMap()
 	if err != nil {
 		t.Fatalf("inputs map: %v", err)
 	}
-	if inputs["runner"] != "hp-win11" {
-		t.Fatalf("inputs[runner] = %q, want hp-win11", inputs["runner"])
+	if inputs["runner"] != "windows-runner" {
+		t.Fatalf("inputs[runner] = %q, want windows-runner", inputs["runner"])
 	}
 }
 

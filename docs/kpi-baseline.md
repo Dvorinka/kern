@@ -1,15 +1,15 @@
 # KPI baseline — 2026-11-08
 
 First measured baseline after the observability work (PR #80/#82) reached
-production. Scraped from CT908 (`https://kern.tdvorak.dev`, commit
+production. Scraped from host (`https://kern.example.com`, commit
 `84fc9e4`) via authenticated `GET /api/v1/metrics`; dev-side figures from
 the local stack on :8180. Re-scrape quarterly and diff against this.
 
-## Production fleet (CT908)
+## Reference production fleet
 
 5 runners online, all `ephemeral=false`, reporting `v0.4.1`:
-`kern-908`, `ci-runner-901`, `ci-runner-902`, `ci-runner-903`,
-`ci-runner-906`.
+`kern-908`, `ci-runner-<n>`, `ci-runner-<n>`, `ci-runner-<n>`,
+`ci-runner-<n>`.
 
 ### Queue wait — `kern_job_queue_wait_seconds` (n=481, trailing 24h)
 
@@ -48,10 +48,10 @@ All `active_jobs` = 0 at scrape; CPU ≈ 9% per runner; reported memory
 
 | Runner | Free | Free % |
 | --- | --- | --- |
-| ci-runner-901 | 19.7GB / 79G | 24% |
-| ci-runner-902 | **2.8GB / 79G** | **3.4%** |
-| ci-runner-903 | 46.1GB / 118G | 36% |
-| ci-runner-906 | 11.6GB / 79G | 14% |
+| ci-runner-<n> | 19.7GB / 79G | 24% |
+| ci-runner-<n> | **2.8GB / 79G** | **3.4%** |
+| ci-runner-<n> | 46.1GB / 118G | 36% |
+| ci-runner-<n> | 11.6GB / 79G | 14% |
 | kern-908 | 16.6GB | — |
 
 ### Cache — `kern_cache_lookups_total`

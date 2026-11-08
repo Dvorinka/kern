@@ -1,5 +1,5 @@
 name: macOS probe
-# Dispatch-only: proves the on-demand macOS runner (VM 904 on Nab9) end to end.
+# Dispatch-only: proves the on-demand macOS runner (VM on the Proxmox host) end to end.
 # Never fires on push/PR.
 on:
   workflow_dispatch:
