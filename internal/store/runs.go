@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -191,7 +192,7 @@ func (s *Store) createRunOnce(ctx context.Context, p CreateRunParams, jobs []Job
 const runSelect = `
 	SELECT r.id, r.project_id, r.workflow_id, r.workflow_version_id, r.run_number, r.event,
 	       r.ref, r.sha, r.commit_message, r.actor, r.status, r.conclusion, r.trust_level,
-	       r.source, r.concurrency_group, r.started_at, r.completed_at, r.created_at,
+	       r.source, r.concurrency_group, r.started_at, r.completed_at, r.created_at, r.cleared_at,
 	       w.name, w.path, p.slug, p.name
 	FROM workflow_runs r
 	JOIN workflows w ON w.id = r.workflow_id
@@ -202,7 +203,7 @@ func scanRun(row pgx.Row) (Run, error) {
 	err := row.Scan(&r.ID, &r.ProjectID, &r.WorkflowID, &r.WorkflowVersionID, &r.RunNumber,
 		&r.Event, &r.Ref, &r.SHA, &r.CommitMessage, &r.Actor, &r.Status, &r.Conclusion,
 		&r.TrustLevel, &r.Source, &r.ConcurrencyGroup, &r.StartedAt, &r.CompletedAt, &r.CreatedAt,
-		&r.WorkflowName, &r.WorkflowPath, &r.ProjectSlug, &r.ProjectName)
+		&r.ClearedAt, &r.WorkflowName, &r.WorkflowPath, &r.ProjectSlug, &r.ProjectName)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Run{}, ErrNotFound
 	}
@@ -215,19 +216,29 @@ func (s *Store) Run(ctx context.Context, id uuid.UUID) (Run, error) {
 
 type RunFilter struct {
 	ProjectID *uuid.UUID
-	Status    string
-	Limit     int
-	Offset    int
+	// Status accepts a comma-separated list (e.g. "queued,in_progress").
+	Status         string
+	Conclusion     string
+	IncludeCleared bool
+	Limit          int
+	Offset         int
 }
 
 func (s *Store) Runs(ctx context.Context, f RunFilter) ([]Run, int, error) {
 	limit, offset := page(f.Limit, f.Offset)
-	status := f.Status
+	var statuses []string
+	for _, st := range strings.Split(f.Status, ",") {
+		if st = strings.TrimSpace(st); st != "" {
+			statuses = append(statuses, st)
+		}
+	}
 	rows, err := s.pool.Query(ctx, runSelect+`
 		WHERE ($1::uuid IS NULL OR r.project_id = $1)
-		  AND ($2 = '' OR r.status = $2)
+		  AND ($2::text[] IS NULL OR r.status = ANY($2))
+		  AND ($3 = '' OR r.conclusion = $3)
+		  AND ($4::bool OR r.cleared_at IS NULL)
 		ORDER BY r.created_at DESC
-		LIMIT $3 OFFSET $4`, f.ProjectID, status, limit, offset)
+		LIMIT $5 OFFSET $6`, f.ProjectID, statuses, f.Conclusion, f.IncludeCleared, limit, offset)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -242,12 +253,61 @@ func (s *Store) Runs(ctx context.Context, f RunFilter) ([]Run, int, error) {
 	}
 	var total int
 	if err := s.pool.QueryRow(ctx, `
-		SELECT count(*) FROM workflow_runs
-		WHERE ($1::uuid IS NULL OR project_id = $1) AND ($2 = '' OR status = $2)`,
-		f.ProjectID, status).Scan(&total); err != nil {
+		SELECT count(*) FROM workflow_runs r
+		WHERE ($1::uuid IS NULL OR r.project_id = $1)
+		  AND ($2::text[] IS NULL OR r.status = ANY($2))
+		  AND ($3 = '' OR r.conclusion = $3)
+		  AND ($4::bool OR r.cleared_at IS NULL)`,
+		f.ProjectID, statuses, f.Conclusion, f.IncludeCleared).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	return out, total, rows.Err()
+}
+
+// RunCounts returns per-tab totals for the runs list, ignoring status and
+// conclusion filters but honouring project scope and the cleared flag.
+func (s *Store) RunCounts(ctx context.Context, projectID *uuid.UUID, includeCleared bool) (map[string]int, error) {
+	var all, running, failed, cancelled int
+	err := s.pool.QueryRow(ctx, `
+		SELECT count(*),
+		       count(*) FILTER (WHERE r.status IN ('queued', 'in_progress')),
+		       count(*) FILTER (WHERE r.conclusion = 'failure'),
+		       count(*) FILTER (WHERE r.status = 'cancelled' OR r.conclusion = 'cancelled')
+		FROM workflow_runs r
+		WHERE ($1::uuid IS NULL OR r.project_id = $1)
+		  AND ($2::bool OR r.cleared_at IS NULL)`,
+		projectID, includeCleared).Scan(&all, &running, &failed, &cancelled)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]int{"all": all, "running": running, "failed": failed, "cancelled": cancelled}, nil
+}
+
+// ClearRun marks a single cancelled run cleared. Returns false when the run
+// is not a clearable cancelled run.
+func (s *Store) ClearRun(ctx context.Context, runID uuid.UUID) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE workflow_runs SET cleared_at = now()
+		WHERE id = $1 AND status = 'cancelled' AND cleared_at IS NULL`, runID)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// ClearCancelledRuns clears every cancelled run in the org (optionally scoped
+// to one project) and returns how many were cleared.
+func (s *Store) ClearCancelledRuns(ctx context.Context, orgID uuid.UUID, projectID *uuid.UUID) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE workflow_runs r SET cleared_at = now()
+		FROM projects p
+		WHERE p.id = r.project_id AND p.org_id = $1
+		  AND r.status = 'cancelled' AND r.cleared_at IS NULL
+		  AND ($2::uuid IS NULL OR r.project_id = $2)`, orgID, projectID)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 func (s *Store) JobsForRun(ctx context.Context, runID uuid.UUID) ([]Job, error) {

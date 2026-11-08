@@ -15,9 +15,11 @@ import (
 func (s *Server) listRuns(c *gin.Context) {
 	user, _ := currentUser(c)
 	filter := store.RunFilter{
-		Status: c.Query("status"),
-		Limit:  parseInt(c.DefaultQuery("limit", "50"), 50),
-		Offset: parseInt(c.DefaultQuery("offset", "0"), 0),
+		Status:         c.Query("status"),
+		Conclusion:     c.Query("conclusion"),
+		IncludeCleared: c.Query("include_cleared") == "1" || c.Query("include_cleared") == "true",
+		Limit:          parseInt(c.DefaultQuery("limit", "50"), 50),
+		Offset:         parseInt(c.DefaultQuery("offset", "0"), 0),
 	}
 	if slug := c.Query("project"); slug != "" {
 		p, err := s.Store.Project(c.Request.Context(), user.OrgID, slug)
@@ -32,7 +34,34 @@ func (s *Server) listRuns(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"runs": runs, "total": total})
+	counts, err := s.Store.RunCounts(c.Request.Context(), filter.ProjectID, filter.IncludeCleared)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"runs": runs, "total": total, "counts": counts})
+}
+
+// clearCancelledRuns hides every cleared-eligible cancelled run from the
+// default lists. Rows and history are kept; pass ?project=<slug> to scope.
+func (s *Server) clearCancelledRuns(c *gin.Context) {
+	user, _ := currentUser(c)
+	var projectID *uuid.UUID
+	if slug := c.Query("project"); slug != "" {
+		p, err := s.Store.Project(c.Request.Context(), user.OrgID, slug)
+		if err != nil {
+			s.internalError(c, err)
+			return
+		}
+		projectID = &p.ID
+	}
+	n, err := s.Store.ClearCancelledRuns(c.Request.Context(), user.OrgID, projectID)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "runs.clear_cancelled", "")
+	c.JSON(http.StatusOK, gin.H{"cleared": n})
 }
 
 func (s *Server) getRun(c *gin.Context) {
@@ -147,6 +176,11 @@ func (s *Server) rerunRun(c *gin.Context) {
 	if err != nil {
 		s.internalError(c, err)
 		return
+	}
+	// Re-triggering a cancelled run retires the cancelled entry from the
+	// default lists; the row and its history stay reachable by id.
+	if orig.Status == "cancelled" || orig.Conclusion == "cancelled" {
+		_, _ = s.Store.ClearRun(c.Request.Context(), orig.ID)
 	}
 	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "run.rerun", orig.ID.String())
 	c.JSON(http.StatusCreated, gin.H{"run": run})

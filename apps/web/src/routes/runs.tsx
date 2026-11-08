@@ -1,9 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useMemo, useState, type ReactNode } from "react";
 import { RotateCcw, X } from "lucide-react";
 import { api } from "../lib/api";
-import type { Job, OverviewResponse, Run, Runner } from "../lib/types";
+import type { Job, OverviewResponse, Project, Run, Runner } from "../lib/types";
 import { PageHeader, RunnerIcon, Spinner, cn } from "../components/ui";
 import { StatusPill, StatusSq } from "../components/status";
 import { Fingerprint, jobHue, useRunDetails } from "../components/fingerprint";
@@ -11,20 +11,20 @@ import { bytes, duration, projectColor, refName, relTime, shortSha } from "../li
 
 type Tab = "" | "running" | "failed" | "cancelled";
 
-const TABS: { key: Tab; label: string; match: (r: Run) => boolean }[] = [
-	{ key: "", label: "All runs", match: () => true },
-	{
-		key: "running",
-		label: "Running",
-		match: (r) => r.status === "in_progress" || r.status === "queued",
-	},
-	{ key: "failed", label: "Failed", match: (r) => r.conclusion === "failure" },
-	{
-		key: "cancelled",
-		label: "Cancelled",
-		match: (r) => r.status === "cancelled" || r.conclusion === "cancelled",
-	},
+const PAGE_SIZE = 60;
+// Job details fan out one request per row; cap it so deep pagination
+// doesn't turn "load older" into hundreds of calls.
+const DETAIL_CAP = 150;
+
+// Tabs map to server-side filters so counts and pagination are real.
+const TABS: { key: Tab; label: string; status?: string; conclusion?: string }[] = [
+	{ key: "", label: "All runs" },
+	{ key: "running", label: "Running", status: "queued,in_progress" },
+	{ key: "failed", label: "Failed", conclusion: "failure" },
+	{ key: "cancelled", label: "Cancelled", status: "cancelled" },
 ];
+
+type RunsResponse = { runs: Run[]; total: number; counts?: Record<string, number> };
 
 export function RunsPage() {
 	const nav = useNavigate();
@@ -33,12 +33,26 @@ export function RunsPage() {
 	const project = params.get("project") ?? "";
 	const day = params.get("day") ?? "";
 	const [branch, setBranch] = useState("");
-	const [older, setOlder] = useState(0);
-	const { data, isLoading } = useQuery({
-		queryKey: ["runs", "all", older],
-		queryFn: () => api.get<{ runs: Run[]; total: number }>(`/runs?limit=60&offset=${older * 60}`),
-		refetchInterval: 4000,
-	});
+	const active = TABS.find((t) => t.key === tab) ?? TABS[0]!;
+	const filterQuery = new URLSearchParams({ limit: String(PAGE_SIZE), offset: "0" });
+	if (active.status) filterQuery.set("status", active.status);
+	if (active.conclusion) filterQuery.set("conclusion", active.conclusion);
+	if (project) filterQuery.set("project", project);
+	const { data, isLoading, fetchNextPage, hasNextPage, isFetchingNextPage } =
+		useInfiniteQuery({
+			queryKey: ["runs", "all", tab, project],
+			queryFn: ({ pageParam }) => {
+				const q = new URLSearchParams(filterQuery);
+				q.set("offset", String(pageParam));
+				return api.get<RunsResponse>(`/runs?${q}`);
+			},
+			initialPageParam: 0,
+			getNextPageParam: (last, pages) => {
+				const loaded = pages.reduce((n, p) => n + p.runs.length, 0);
+				return loaded < last.total ? loaded : undefined;
+			},
+			refetchInterval: 4000,
+		});
 	const { data: overview } = useQuery({
 		queryKey: ["overview"],
 		queryFn: () => api.get<OverviewResponse>("/overview"),
@@ -49,33 +63,60 @@ export function RunsPage() {
 		queryFn: () => api.get<{ runners: Runner[] }>("/runners"),
 		refetchInterval: 8000,
 	});
+	const { data: projectList } = useQuery({
+		queryKey: ["projects"],
+		queryFn: () => api.get<{ projects: Project[] }>("/projects"),
+	});
 
-	const runs = useMemo(() => data?.runs ?? [], [data]);
+	const runs = useMemo(() => {
+		const seen = new Set<string>();
+		const out: Run[] = [];
+		for (const p of data?.pages ?? []) {
+			for (const r of p.runs) {
+				if (!seen.has(r.id)) {
+					seen.add(r.id);
+					out.push(r);
+				}
+			}
+		}
+		return out;
+	}, [data]);
+	const total = data?.pages[0]?.total ?? 0;
+	const counts = data?.pages[0]?.counts;
 	const branches = useMemo(() => [...new Set(runs.map((r) => refName(r.ref)))].sort(), [runs]);
-	const projects = useMemo(() => [...new Set(runs.map((r) => r.project_slug))].sort(), [runs]);
-	const counts = useMemo(() => TABS.map((t) => runs.filter(t.match).length), [runs]);
-	const match = TABS.find((t) => t.key === tab)?.match ?? TABS[0]!.match;
+	const projects = useMemo(
+		() => (projectList?.projects ?? []).map((p) => p.slug).sort(),
+		[projectList],
+	);
 	const dayStart = day ? new Date(day).getTime() : null;
 	const dayEnd = dayStart != null ? dayStart + 86_400_000 : null;
+	// Status/project filters ran server-side; branch and day refine locally.
 	const visible = runs.filter(
 		(r) =>
-			match(r) &&
 			(!branch || refName(r.ref) === branch) &&
-			(!project || r.project_slug === project) &&
 			(dayStart == null ||
 				(Date.parse(r.created_at) >= dayStart && Date.parse(r.created_at) < dayEnd!)),
 	);
-	const details = useRunDetails(visible);
+	const detailRuns = useMemo(() => visible.slice(0, DETAIL_CAP), [visible]);
+	const details = useRunDetails(detailRuns);
+	const jobsByRun = useMemo(() => {
+		const m = new Map<string, Job[]>();
+		detailRuns.forEach((r, i) => {
+			const jobs = details[i]?.data?.jobs;
+			if (jobs) m.set(r.id, jobs);
+		});
+		return m;
+	}, [detailRuns, details]);
 
 	// day groups: runs land under dated headers like a git log
 	const groups = useMemo(() => {
-		const out: { key: string; label: string; runs: { r: Run; i: number }[] }[] = [];
-		visible.forEach((r, i) => {
+		const out: { key: string; label: string; runs: Run[] }[] = [];
+		visible.forEach((r) => {
 			const d = new Date(r.created_at);
 			const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
 			const label = dayLabel(d);
 			if (out[out.length - 1]?.key !== key) out.push({ key, label, runs: [] });
-			out[out.length - 1]!.runs.push({ r, i });
+			out[out.length - 1]!.runs.push(r);
 		});
 		return out;
 	}, [visible]);
@@ -83,12 +124,21 @@ export function RunsPage() {
 	// jobs still parked — surfaces the real queue, not just a count
 	const queuedJobs = useMemo(
 		() =>
-			details
-				.flatMap((d) => d.data?.jobs ?? [])
+			[...jobsByRun.values()]
+				.flat()
 				.filter((j) => j.status === "queued" || j.status === "waiting_approval")
 				.sort((a, b) => Date.parse(a.queued_at) - Date.parse(b.queued_at)),
-		[details],
+		[jobsByRun],
 	);
+
+	const qc = useQueryClient();
+	const clearCancelled = useMutation({
+		mutationFn: () =>
+			api.post<{ cleared: number }>(
+				`/runs/clear-cancelled${project ? `?project=${encodeURIComponent(project)}` : ""}`,
+			),
+		onSuccess: () => qc.invalidateQueries({ queryKey: ["runs"] }),
+	});
 
 	return (
 		<>
@@ -96,16 +146,30 @@ export function RunsPage() {
 			<div className="grid grid-cols-[1fr_300px] items-start gap-[26px] max-lg:grid-cols-1">
 				<div className="min-w-0">
 					<div className="tabs">
-						{TABS.map((t, i) => (
+						{TABS.map((t) => (
 							<button
 								key={t.key || "all"}
 								onClick={() => setParams(t.key ? { tab: t.key } : {})}
 								className={cn(tab === t.key && "on")}
 							>
 								{t.label}
-								<span className="n">{counts[i]}</span>
+								<span className="n">
+									{counts?.[t.key || "all"] ?? "…"}
+								</span>
 							</button>
 						))}
+						{tab === "cancelled" && (counts?.cancelled ?? 0) > 0 && (
+							<button
+								className="lnk ml-auto self-center"
+								disabled={clearCancelled.isPending}
+								onClick={() => clearCancelled.mutate()}
+								title="Hide all cancelled runs from the lists (history is kept)"
+							>
+								{clearCancelled.isPending
+									? "Clearing…"
+									: `Clear ${counts?.cancelled} cancelled`}
+							</button>
+						)}
 					</div>
 					<div className="mb-0.5 mt-3.5 flex flex-wrap items-center gap-2 text-[11px] text-[var(--faint)]">
 						<select className="fsel" value={branch} onChange={(e) => setBranch(e.target.value)}>
@@ -175,13 +239,13 @@ export function RunsPage() {
 											{g.runs.length} run{g.runs.length === 1 ? "" : "s"}
 										</span>
 									</div>
-									{g.runs.map(({ r, i }) => {
+									{g.runs.map((r) => {
 										const live = r.status === "in_progress" || r.status === "queued";
 										return (
 											<RunRow
 												key={r.id}
 												r={r}
-												jobs={details[i]?.data?.jobs}
+												jobs={jobsByRun.get(r.id)}
 												live={live}
 												onOpen={() => nav(`/runs/${r.id}`)}
 											/>
@@ -191,16 +255,15 @@ export function RunsPage() {
 							))}
 							<div className="flex items-baseline gap-3.5 py-[11px] text-[11px] text-[var(--faint)]">
 								<span>
-									{visible.length} of {data?.total ?? visible.length} runs
+									Showing {runs.length} of {total} run{total === 1 ? "" : "s"}
 								</span>
-								{older > 0 && (
-									<button className="lnk" onClick={() => setOlder((o) => o - 1)}>
-										← Newer
-									</button>
-								)}
-								{(data?.total ?? 0) > (older + 1) * 60 && (
-									<button className="lnk ml-auto" onClick={() => setOlder((o) => o + 1)}>
-										Older →
+								{hasNextPage && (
+									<button
+										className="lnk ml-auto"
+										disabled={isFetchingNextPage}
+										onClick={() => fetchNextPage()}
+									>
+										{isFetchingNextPage ? "Loading…" : "Load older runs →"}
 									</button>
 								)}
 							</div>

@@ -196,6 +196,7 @@ func (s *Server) buildRouter() *gin.Engine {
 		write.POST("/runs/:id/cancel", s.cancelRun)
 		admin.POST("/runs/:id/approve", s.approveRun)
 		write.POST("/runs/:id/rerun", s.rerunRun)
+		write.POST("/runs/clear-cancelled", s.clearCancelledRuns)
 		auth.GET("/steps/:stepID/logs", s.stepLogs)
 		auth.GET("/steps/:stepID/logs/stream", s.stepLogStream)
 		auth.GET("/steps/:stepID/summary", s.stepSummary)
