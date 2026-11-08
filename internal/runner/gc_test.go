@@ -110,3 +110,22 @@ func TestDiskUnderPressure(t *testing.T) {
 		}
 	}
 }
+
+func TestJobActive(t *testing.T) {
+	a := &Agent{}
+	if a.jobActive("kern-svc-abc-svc") {
+		t.Fatal("empty activeJobs must report inactive")
+	}
+	id := "123e4567-e89b-42d3-a456-426614174000"
+	a.activeJobs.Store(id, struct{}{})
+	for _, name := range []string{"kern-svc-" + id + "-postgres", "kern-job-" + id + "-1", "kern-svc-" + id} {
+		if !a.jobActive(name) {
+			t.Fatalf("expected active: %s", name)
+		}
+	}
+	for _, name := range []string{"kern-svc-deadbeef-postgres", "kern-runner", "kern-svc-123e4567-e89b-42d3-a456-426614174001-postgres"} {
+		if a.jobActive(name) {
+			t.Fatalf("expected inactive: %s", name)
+		}
+	}
+}

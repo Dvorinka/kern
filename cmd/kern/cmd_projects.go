@@ -151,7 +151,7 @@ func (c *cli) cmdProjects(ctx context.Context, args []string) error {
 
 func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: kern runs list|show|trigger|cancel|approve|rerun|logs")
+		return fmt.Errorf("usage: kern runs list|show|trigger|cancel|approve|rerun|logs|wait")
 	}
 	if err := c.requireAuth(); err != nil {
 		return err
@@ -198,6 +198,13 @@ func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 			return err
 		}
 		return c.showRun(ctx, id)
+	case "wait":
+		opts, pos := parseFlags(rest, "interval", "timeout")
+		id, err := strarg(pos, 0, "run id")
+		if err != nil {
+			return err
+		}
+		return c.waitRun(ctx, id, opts["interval"], opts["timeout"])
 	case "trigger":
 		opts, pos := parseFlags(rest, "event", "ref", "sha", "inputs")
 		var slug, wf string
@@ -324,6 +331,57 @@ func (c *cli) resolveWorkflow(ctx context.Context, slug, want string) (string, e
 		names = append(names, w.Path)
 	}
 	return "", fmt.Errorf("workflow %q is ambiguous: %s", want, strings.Join(names, ", "))
+}
+
+// waitRun polls a run until it reaches a terminal state and prints the
+// outcome plus any failed jobs — the monitoring primitive scripts and
+// agents use to gate on CI completion. --interval (default 5s) and
+// --timeout (default 30m, 0 = forever) tune the poll.
+func (c *cli) waitRun(ctx context.Context, id, intervalStr, timeoutStr string) error {
+	interval := 5 * time.Second
+	if intervalStr != "" {
+		d, err := time.ParseDuration(intervalStr)
+		if err != nil {
+			return fmt.Errorf("--interval: %w", err)
+		}
+		interval = d
+	}
+	var deadline time.Time
+	if timeoutStr != "" && timeoutStr != "0" {
+		d, err := time.ParseDuration(timeoutStr)
+		if err != nil {
+			return fmt.Errorf("--timeout: %w", err)
+		}
+		deadline = time.Now().Add(d)
+	}
+	for {
+		var out runDetail
+		if err := c.api().get(ctx, "/runs/"+id, nil, &out); err != nil {
+			return err
+		}
+		r := out.Run
+		if r.Status == "completed" || r.Status == "failed" || r.Status == "cancelled" {
+			if c.json {
+				printJSON(out)
+				return nil
+			}
+			fmt.Printf("run %s #%d — %s %s (%s)\n", shortID(r.ID), r.RunNumber, r.Status, r.Conclusion, r.Event)
+			for _, j := range out.Jobs {
+				if j.Conclusion == "failure" || j.Conclusion == "cancelled" {
+					fmt.Printf("  %s: %s\n", j.Name, j.Conclusion)
+				}
+			}
+			return nil
+		}
+		if !deadline.IsZero() && time.Now().After(deadline) {
+			return fmt.Errorf("timed out waiting for run %s (still %s)", shortID(r.ID), r.Status)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(interval):
+		}
+	}
 }
 
 func (c *cli) showRun(ctx context.Context, id string) error {

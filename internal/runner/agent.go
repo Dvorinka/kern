@@ -96,6 +96,10 @@ type Agent struct {
 	retire       atomic.Bool
 	lastActivity atomic.Int64
 	cancel       context.CancelFunc
+	// activeJobs holds the IDs of jobs currently executing on this runner —
+	// the orphan sweep uses it to tell live kern-svc-*/kern-job-* containers
+	// from leaks left by crashed or restarted predecessors.
+	activeJobs sync.Map
 	// dockerFn stubs the daemon probe in tests; dockerOK caches the result —
 	// `docker version` is an exec, and labels() is built per registration.
 	dockerFn   func() bool
@@ -428,6 +432,8 @@ func (a *Agent) executeJob(ctx context.Context, claim *Claim) {
 	log := a.log.With(zap.String("job_id", claim.Job.ID), zap.String("job", claim.Job.Name),
 		zap.String("run_id", claim.Run.ID), zap.Int("worker", 0))
 	log.Info("job claimed", zap.String("image", claim.Job.Image))
+	a.activeJobs.Store(claim.Job.ID, struct{}{})
+	defer a.activeJobs.Delete(claim.Job.ID)
 
 	jobCtx := ctx
 	var cancel context.CancelFunc
