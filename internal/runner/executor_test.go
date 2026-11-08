@@ -1,8 +1,10 @@
 package runner
 
 import (
+	"context"
 	"encoding/base64"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -218,5 +220,39 @@ func TestOrphanedContainers(t *testing.T) {
 		if !want[id] {
 			t.Errorf("unexpected id %s in %v", id, got)
 		}
+	}
+}
+
+func TestPersistGitPushAuth(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not in PATH")
+	}
+	ws := t.TempDir()
+	if out, err := exec.Command("git", "-C", ws, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
+	}
+	e := &executor{claim: &Claim{Run: ClaimRun{
+		RepoURL:     "https://github.com/o/r.git",
+		GitHubToken: "ghs_testtoken",
+	}}}
+	e.persistGitPushAuth(context.Background(), ws)
+	want := "AUTHORIZATION: basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:ghs_testtoken"))
+	out, err := exec.Command("git", "-C", ws, "config", "--get", "http.https://github.com/.extraheader").Output()
+	if err != nil {
+		t.Fatalf("read extraheader: %v", err)
+	}
+	if strings.TrimSpace(string(out)) != want {
+		t.Fatalf("extraheader = %q, want %q", strings.TrimSpace(string(out)), want)
+	}
+
+	// No token → nothing persisted.
+	ws2 := t.TempDir()
+	if out, err := exec.Command("git", "-C", ws2, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v %s", err, out)
+	}
+	e2 := &executor{claim: &Claim{Run: ClaimRun{RepoURL: "https://github.com/o/r.git"}}}
+	e2.persistGitPushAuth(context.Background(), ws2)
+	if _, err := exec.Command("git", "-C", ws2, "config", "--get", "http.https://github.com/.extraheader").Output(); err == nil {
+		t.Fatal("extraheader persisted without a token")
 	}
 }
