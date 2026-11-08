@@ -10,9 +10,11 @@ package api
 // `kern login`.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -112,18 +114,58 @@ func mcpTools() []mcpTool {
 				p["required"] = []string{"run_id"}
 				return p
 			}()},
-		{Name: "kern_step_log", Description: "Tail of a step's log.",
+		{Name: "kern_step_log", Description: "Step log bytes. Default: tail of the log; pass offset to page forward instead.",
 			InputSchema: func() map[string]any {
 				p := props(map[string]map[string]any{
 					"job_id": str("job UUID"),
 					"step":   num("step number"),
-					"tail":   num("bytes from the end, default 8192"),
+					"tail":   num("bytes to read, default 8192"),
+					"offset": num("byte offset to read from; omit for the tail"),
 				})
 				p["required"] = []string{"job_id", "step"}
 				return p
 			}()},
 		{Name: "kern_list_runners", Description: "Fleet runners with status, labels and active jobs.",
 			InputSchema: props(map[string]map[string]any{})},
+		{Name: "kern_set_runner_drain", Description: "Drain or undrain a runner (id or name). Draining runners take no new jobs.",
+			InputSchema: func() map[string]any {
+				p := props(map[string]map[string]any{
+					"runner":   str("runner UUID or name"),
+					"draining": map[string]any{"type": "boolean", "description": "true to drain, false to undrain"},
+				})
+				p["required"] = []string{"runner", "draining"}
+				return p
+			}()},
+		{Name: "kern_get_project", Description: "Project detail with its workflows.",
+			InputSchema: func() map[string]any {
+				p := props(map[string]map[string]any{"project": str("project slug")})
+				p["required"] = []string{"project"}
+				return p
+			}()},
+		{Name: "kern_trigger_run", Description: "Start a workflow run (workflow_dispatch by default).",
+			InputSchema: func() map[string]any {
+				p := props(map[string]map[string]any{
+					"project":  str("project slug"),
+					"workflow": str("workflow UUID, path or name"),
+					"event":    str("event name, default workflow_dispatch"),
+					"ref":      str("git ref, default the project's default branch"),
+					"sha":      str("commit SHA, default the workflow version's SHA"),
+					"inputs":   map[string]any{"type": "object", "description": "workflow_dispatch inputs as a JSON object"},
+				})
+				p["required"] = []string{"project", "workflow"}
+				return p
+			}()},
+		{Name: "kern_rerun_run", Description: "Re-run a completed or failed run from its original inputs.",
+			InputSchema: func() map[string]any {
+				p := props(map[string]map[string]any{"run_id": str("run UUID")})
+				p["required"] = []string{"run_id"}
+				return p
+			}()},
+		{Name: "kern_list_secrets", Description: "Secret names and scopes for the org — never values. Optionally filtered by project slug and/or environment name.",
+			InputSchema: props(map[string]map[string]any{
+				"project":     str("project slug"),
+				"environment": str("environment name (requires project)"),
+			})},
 		{Name: "kern_approve_run", Description: "Release a fork-gated run (awaiting_approval -> queued).",
 			InputSchema: func() map[string]any {
 				p := props(map[string]map[string]any{"run_id": str("run UUID")})
@@ -180,15 +222,25 @@ func mcpArgString(params json.RawMessage, key string) (string, bool) {
 
 func mcpArgInt(params json.RawMessage, key string, def int) int {
 	var call struct {
-		Arguments map[string]int `json:"arguments"`
+		Arguments map[string]json.RawMessage `json:"arguments"`
 	}
-	if json.Unmarshal(params, &call) != nil || call.Arguments == nil {
+	if json.Unmarshal(params, &call) != nil {
 		return def
 	}
-	if v, ok := call.Arguments[key]; ok {
-		return v
+	raw, ok := call.Arguments[key]
+	if !ok {
+		return def
 	}
-	return def
+	var n int
+	if err := json.Unmarshal(raw, &n); err != nil {
+		// JSON numbers may arrive as floats (5.0); accept those too.
+		var f float64
+		if json.Unmarshal(raw, &f) != nil {
+			return def
+		}
+		return int(f)
+	}
+	return n
 }
 
 func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
@@ -263,13 +315,15 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 		}
 		if err == nil {
 			offset := int64(0)
-			if size > int64(tail) {
+			if o := mcpArgInt(params, "offset", -1); o >= 0 {
+				offset = int64(o)
+			} else if size > int64(tail) {
 				offset = size - int64(tail)
 			}
 			var data []byte
 			data, _, err = s.Blobs.ReadFrom(ref, offset, tail)
 			if err == nil {
-				out = map[string]any{"step": n, "bytes": len(data), "log": string(data)}
+				out = map[string]any{"step": n, "offset": offset, "bytes": len(data), "log": string(data)}
 			}
 		}
 	case "kern_list_runners":
@@ -287,6 +341,202 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			}
 			out = views
 		}
+	case "kern_get_project":
+		slug := mcpArgStringOr(params, "project")
+		if slug == "" {
+			err = fmt.Errorf("project is required")
+			break
+		}
+		var p store.Project
+		p, err = s.Store.Project(ctx, user.OrgID, slug)
+		if err == nil {
+			var wfs []store.Workflow
+			wfs, err = s.Store.Workflows(ctx, p.ID)
+			if err == nil {
+				out = map[string]any{"project": p, "workflows": wfs}
+			}
+		}
+	case "kern_trigger_run":
+		// Mirror POST /projects/:project/workflows/:id/runs (write scope).
+		if !scopeAllows(c, "write") {
+			err = fmt.Errorf("token requires the write scope")
+			break
+		}
+		slug := mcpArgStringOr(params, "project")
+		want := mcpArgStringOr(params, "workflow")
+		if slug == "" || want == "" {
+			err = fmt.Errorf("project and workflow are required")
+			break
+		}
+		var p store.Project
+		p, err = s.Store.Project(ctx, user.OrgID, slug)
+		if err != nil {
+			break
+		}
+		var wf store.Workflow
+		wf, err = s.mcpResolveWorkflow(ctx, p.ID, want)
+		if err != nil {
+			break
+		}
+		event := mcpArgStringOr(params, "event")
+		if event == "" {
+			event = "workflow_dispatch"
+		}
+		ref := mcpArgStringOr(params, "ref")
+		if ref == "" {
+			ref = "refs/heads/" + p.DefaultBranch
+		}
+		trust := mcpArgStringOr(params, "trust_level")
+		if trust == "" {
+			trust = "trusted"
+		}
+		validTrust := map[string]bool{
+			"trusted": true, "protected": true, "pull_request": true,
+			"fork": true, "deployment": true,
+		}
+		if !validTrust[trust] {
+			err = fmt.Errorf("unknown trust level %q", trust)
+			break
+		}
+		var version store.WorkflowVersion
+		wf, version, err = s.Store.LatestWorkflowVersion(ctx, p.ID, wf.Path)
+		if err != nil {
+			break
+		}
+		if !version.Valid {
+			err = fmt.Errorf("stored workflow version is invalid; fix the diagnostics and sync again")
+			break
+		}
+		var inputs map[string]any
+		if raw, ok := mcpArgRaw(params, "inputs"); ok {
+			if uerr := json.Unmarshal(raw, &inputs); uerr != nil {
+				err = fmt.Errorf("inputs must be a JSON object")
+				break
+			}
+		}
+		source := map[string]any{
+			"repo_url":       p.RepoURL,
+			"repo_full_name": p.RepoFullName,
+			"local_path":     p.LocalPath,
+			"default_branch": p.DefaultBranch,
+		}
+		var run store.Run
+		run, err = s.Orch.StartRun(ctx, store.CreateRunParams{
+			ProjectID:         p.ID,
+			WorkflowID:        wf.ID,
+			WorkflowVersionID: version.ID,
+			Event:             event,
+			Ref:               ref,
+			SHA:               firstNonEmpty(mcpArgStringOr(params, "sha"), version.CommitSHA),
+			Actor:             user.Email,
+			TrustLevel:        trust,
+			Source:            source,
+			Inputs:            inputs,
+		})
+		if err == nil {
+			s.Store.Audit(ctx, user.OrgID, &user.ID, "run.trigger", run.ID.String())
+			out = run
+		}
+	case "kern_rerun_run":
+		// Mirror POST /runs/:id/rerun (write scope).
+		if !scopeAllows(c, "write") {
+			err = fmt.Errorf("token requires the write scope")
+			break
+		}
+		id, perr := uuid.Parse(mcpArgStringOr(params, "run_id"))
+		if perr != nil {
+			err = fmt.Errorf("run_id must be a UUID")
+			break
+		}
+		orig, rerr := s.Store.Run(ctx, id)
+		if rerr != nil {
+			err = rerr
+			break
+		}
+		var source map[string]any
+		_ = json.Unmarshal(orig.Source, &source)
+		var run store.Run
+		run, err = s.Orch.StartRun(ctx, store.CreateRunParams{
+			ProjectID:         orig.ProjectID,
+			WorkflowID:        orig.WorkflowID,
+			WorkflowVersionID: orig.WorkflowVersionID,
+			Event:             orig.Event,
+			Ref:               orig.Ref,
+			SHA:               orig.SHA,
+			CommitMessage:     orig.CommitMessage,
+			Actor:             user.Email,
+			TrustLevel:        orig.TrustLevel,
+			Source:            source,
+		})
+		if err == nil {
+			s.Store.Audit(ctx, user.OrgID, &user.ID, "run.rerun", orig.ID.String())
+			out = run
+		}
+	case "kern_list_secrets":
+		// Names and scopes only — secret values never leave the store.
+		var projectID, envID *uuid.UUID
+		if slug := mcpArgStringOr(params, "project"); slug != "" {
+			p, perr := s.Store.Project(ctx, user.OrgID, slug)
+			if perr != nil {
+				err = perr
+				break
+			}
+			projectID = &p.ID
+		}
+		if envName := mcpArgStringOr(params, "environment"); envName != "" {
+			if projectID == nil {
+				err = fmt.Errorf("environment scope requires project")
+				break
+			}
+			env, eerr := s.Store.Environment(ctx, *projectID, envName)
+			if eerr != nil {
+				err = eerr
+				break
+			}
+			envID = &env.ID
+		}
+		var rows []store.Secret
+		rows, err = s.Store.Secrets(ctx, user.OrgID, projectID, envID)
+		if err == nil {
+			out = map[string]any{"secrets": secretSummaries(rows)}
+		}
+	case "kern_set_runner_drain":
+		// Mirror POST /runners/:id/drain — admin scope plus admin role.
+		if !scopeAllows(c, "admin") {
+			err = fmt.Errorf("token requires the admin scope")
+			break
+		}
+		if roleRank(user.Role) < roleRank("admin") {
+			err = fmt.Errorf("requires the admin role")
+			break
+		}
+		name := mcpArgStringOr(params, "runner")
+		draining, dok := mcpArgBool(params, "draining")
+		if name == "" || !dok {
+			err = fmt.Errorf("runner and draining are required")
+			break
+		}
+		runners, rerr := s.Store.Runners(ctx, user.OrgID)
+		if rerr != nil {
+			err = rerr
+			break
+		}
+		var target *store.Runner
+		for i := range runners {
+			if runners[i].ID.String() == name || runners[i].Name == name {
+				target = &runners[i]
+				break
+			}
+		}
+		if target == nil {
+			err = fmt.Errorf("runner %q not found", name)
+			break
+		}
+		if derr := s.Store.SetRunnerDraining(ctx, user.OrgID, target.ID, draining); derr != nil {
+			err = derr
+			break
+		}
+		out = map[string]any{"runner": target.Name, "id": target.ID, "draining": draining}
 	case "kern_approve_run", "kern_cancel_run":
 		// Mirror the HTTP gates: cancel needs write scope, approve needs
 		// admin scope plus the admin role (same as POST /runs/:id/approve).
@@ -352,4 +602,58 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 func mcpArgStringOr(params json.RawMessage, key string) string {
 	s, _ := mcpArgString(params, key)
 	return s
+}
+
+// mcpArgRaw returns the raw JSON value of one tool argument.
+func mcpArgRaw(params json.RawMessage, key string) (json.RawMessage, bool) {
+	var call struct {
+		Arguments map[string]json.RawMessage `json:"arguments"`
+	}
+	if json.Unmarshal(params, &call) != nil || call.Arguments == nil {
+		return nil, false
+	}
+	raw, ok := call.Arguments[key]
+	return raw, ok
+}
+
+func mcpArgBool(params json.RawMessage, key string) (bool, bool) {
+	raw, ok := mcpArgRaw(params, key)
+	if !ok {
+		return false, false
+	}
+	var b bool
+	if json.Unmarshal(raw, &b) != nil {
+		return false, false
+	}
+	return b, true
+}
+
+// mcpResolveWorkflow accepts a workflow UUID, exact path/name, or basename —
+// the same resolution the CLI applies for `kern runs trigger`.
+func (s *Server) mcpResolveWorkflow(ctx context.Context, projectID uuid.UUID, want string) (store.Workflow, error) {
+	if id, perr := uuid.Parse(want); perr == nil {
+		wf, err := s.Store.WorkflowByID(ctx, id)
+		if err != nil || wf.ProjectID != projectID {
+			return store.Workflow{}, fmt.Errorf("workflow not found in this project")
+		}
+		return wf, nil
+	}
+	wfs, err := s.Store.Workflows(ctx, projectID)
+	if err != nil {
+		return store.Workflow{}, err
+	}
+	var matches []store.Workflow
+	for _, w := range wfs {
+		if w.Path == want || w.Name == want || path.Base(w.Path) == want {
+			matches = append(matches, w)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return store.Workflow{}, fmt.Errorf("no workflow matching %q", want)
+	case 1:
+		return matches[0], nil
+	default:
+		return store.Workflow{}, fmt.Errorf("workflow %q is ambiguous", want)
+	}
 }

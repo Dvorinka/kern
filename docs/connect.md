@@ -81,6 +81,16 @@ Client config:
 }
 ```
 
-Tools: `kern_list_projects`, `kern_list_runs`, `kern_get_run`, `kern_step_log`, `kern_list_runners`, `kern_approve_run`, `kern_cancel_run`. Write actions are audited under the token owner's identity. Secrets and raw logs stay masked server-side — the endpoint exposes nothing the console doesn't.
+Tools cover the console's read surface plus the run lifecycle:
 
-Scopes apply: list/get tools need `read`, `kern_cancel_run` needs `write`, `kern_approve_run` needs `admin` plus the admin org role — the same gates as the HTTP routes they mirror.
+| Domain | Tools |
+| --- | --- |
+| Projects | `kern_list_projects`, `kern_get_project` |
+| Runs | `kern_list_runs`, `kern_get_run`, `kern_trigger_run`, `kern_rerun_run`, `kern_approve_run`, `kern_cancel_run` |
+| Logs | `kern_step_log` (tail by default, `offset` to page) |
+| Runners | `kern_list_runners`, `kern_set_runner_drain` |
+| Secrets | `kern_list_secrets` — names and scopes only, never values |
+
+Write actions are audited under the token owner's identity. Secrets and raw logs stay masked server-side — the endpoint exposes nothing the console doesn't. Artifacts, cache, environments, deployments, settings, members and audit export remain HTTP-only for now.
+
+Scopes apply: list/get/log/secret tools need `read`, `kern_trigger_run`/`kern_rerun_run`/`kern_cancel_run` need `write`, `kern_approve_run`/`kern_set_runner_drain` need `admin` plus the admin org role — the same gates as the HTTP routes they mirror.
