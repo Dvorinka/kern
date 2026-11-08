@@ -1,0 +1,26 @@
+name: Windows smoke
+
+# Manual dispatch only — verifies the Windows host executor end to end:
+# node-action runtime (actions/checkout downloads node.exe), shell steps
+# under git-bash, and env/GITHUB_* plumbing. Run from the KERN dashboard or
+# `kern run dispatch` once a windows-labelled runner is registered.
+on:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain probe
+        run: |
+          echo "runner.os=$RUNNER_OS arch=$RUNNER_ARCH name=$RUNNER_NAME"
+          node --version
+          git --version
+          pwd
+
+      - name: Workspace writable
+        run: |
+          echo probe > kern-win-smoke.txt
+          cat kern-win-smoke.txt

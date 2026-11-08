@@ -4,8 +4,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-
-	"golang.org/x/sys/unix"
 )
 
 // heartbeatMetrics is the utilization snapshot sent with each heartbeat.
@@ -41,10 +39,8 @@ func (h *hostSampler) sample(workRoot string, activeJobs int) heartbeatMetrics {
 	if used, ok := memUsed(); ok {
 		m.MemUsedBytes = &used
 	}
-	var stat unix.Statfs_t
-	if err := unix.Statfs(workRoot, &stat); err == nil {
-		v := int64(stat.Bavail) * int64(stat.Bsize)
-		m.DiskFreeBytes = &v
+	if free, _ := diskSpace(workRoot); free > 0 {
+		m.DiskFreeBytes = &free
 	}
 	return m
 }

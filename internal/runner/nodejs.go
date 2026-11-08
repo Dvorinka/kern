@@ -8,6 +8,7 @@ package runner
 // dropped capabilities, INPUT_* and GITHUB_* env contract.
 
 import (
+	"archive/zip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -41,9 +42,13 @@ func (e *executor) nodeHostDir() string {
 }
 
 // containerNodeBin is the node binary as executed code sees it: /kern/node
-// inside job containers, the host path on the host executor.
+// inside job containers, the host path on the host executor. The Windows
+// dist unpacks node.exe at the archive root (no bin/ dir).
 func (e *executor) nodeBin() string {
 	if e.host {
+		if runtime.GOOS == "windows" {
+			return filepath.Join(e.nodeHostDir(), "node.exe")
+		}
 		return filepath.Join(e.nodeHostDir(), "bin", "node")
 	}
 	return containerNodeRoot + "/" + nodeRelease + "/bin/node"
@@ -55,10 +60,11 @@ func (e *executor) nodeBinDir() string {
 	return filepath.Dir(e.nodeBin())
 }
 
-// nodeArchive maps the runner platform to the dist tarball name.
+// nodeArchive maps the runner platform to the dist archive name. Windows
+// ships a .zip (node.exe at the root); unix ships a .tar.gz with bin/node.
 func nodeArchive() (string, error) {
-	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
-		return "", fmt.Errorf("JavaScript actions need a linux or darwin runner host (got %s)", runtime.GOOS)
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+		return "", fmt.Errorf("JavaScript actions need a linux, darwin or windows runner host (got %s)", runtime.GOOS)
 	}
 	var arch string
 	switch runtime.GOARCH {
@@ -68,6 +74,9 @@ func nodeArchive() (string, error) {
 		arch = "arm64"
 	default:
 		return "", fmt.Errorf("JavaScript actions are unsupported on %s runners", runtime.GOARCH)
+	}
+	if runtime.GOOS == "windows" {
+		return fmt.Sprintf("node-%s-win-%s.zip", nodeRelease, arch), nil
 	}
 	return fmt.Sprintf("node-%s-%s-%s.tar.gz", nodeRelease, runtime.GOOS, arch), nil
 }
@@ -94,18 +103,23 @@ func (e *executor) ensureNode(ctx context.Context) error {
 	if err := os.MkdirAll(tmp, 0o755); err != nil {
 		return err
 	}
-	tgz := filepath.Join(tmp, archive)
-	if err := download(ctx, nodeDistBase+"/"+nodeRelease+"/"+archive, tgz); err != nil {
+	pkg := filepath.Join(tmp, archive)
+	if err := download(ctx, nodeDistBase+"/"+nodeRelease+"/"+archive, pkg); err != nil {
 		return fmt.Errorf("download node %s: %w", nodeRelease, err)
 	}
-	if err := verifyDistSum(ctx, archive, tgz); err != nil {
+	if err := verifyDistSum(ctx, archive, pkg); err != nil {
 		return err
 	}
-	if err := untarGz(tgz, tmp); err != nil {
+	root := strings.TrimSuffix(strings.TrimSuffix(archive, ".tar.gz"), ".zip")
+	if strings.HasSuffix(archive, ".zip") {
+		if err := unzip(pkg, tmp); err != nil {
+			return fmt.Errorf("unpack node: %w", err)
+		}
+	} else if err := untarGz(pkg, tmp); err != nil {
 		return fmt.Errorf("unpack node: %w", err)
 	}
 	_ = os.RemoveAll(dir)
-	if err := os.Rename(filepath.Join(tmp, strings.TrimSuffix(archive, ".tar.gz")), dir); err != nil {
+	if err := os.Rename(filepath.Join(tmp, root), dir); err != nil {
 		return err
 	}
 	return os.WriteFile(dir+".complete", []byte(nodeRelease+"\n"), 0o644)
@@ -144,6 +158,50 @@ func verifyDistSum(ctx context.Context, archive, tgz string) error {
 	}
 	if got := hex.EncodeToString(h.Sum(nil)); got != want {
 		return fmt.Errorf("node tarball checksum mismatch: got %s want %s", got, want)
+	}
+	return nil
+}
+
+// unzip extracts a .zip archive into dest. Entries are confined to dest —
+// a member with ../ or an absolute path is skipped rather than allowed to
+// write outside the provisioning dir.
+func unzip(archive, dest string) error {
+	zr, err := zip.OpenReader(archive)
+	if err != nil {
+		return err
+	}
+	defer zr.Close()
+	for _, f := range zr.File {
+		name := filepath.Clean(f.Name)
+		if filepath.IsAbs(name) || strings.HasPrefix(name, "..") {
+			continue
+		}
+		out := filepath.Join(dest, name)
+		if !strings.HasPrefix(out, filepath.Clean(dest)+string(os.PathSeparator)) {
+			continue
+		}
+		if f.FileInfo().IsDir() {
+			_ = os.MkdirAll(out, 0o755)
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+			return err
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return err
+		}
+		w, err := os.OpenFile(out, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+		if err != nil {
+			rc.Close()
+			return err
+		}
+		_, copyErr := io.Copy(w, rc)
+		w.Close()
+		rc.Close()
+		if copyErr != nil {
+			return copyErr
+		}
 	}
 	return nil
 }

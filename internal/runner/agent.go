@@ -193,6 +193,10 @@ func (a *Agent) labelsFor(goos, arch string) []string {
 		}
 	case "darwin":
 		base = append(base, "macos")
+	case "windows":
+		// GitHub's windows-latest tracks the newest client/Server image;
+		// versioned labels (windows-2022 etc.) stay opt-in via KERN_RUNNER_LABELS.
+		base = append(base, "windows", "windows-latest")
 	}
 	// The docker label advertises container execution; a host-mode runner
 	// must never carry it even if a daemon happens to be installed.
