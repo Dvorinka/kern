@@ -114,6 +114,7 @@ type runnerRow struct {
 	Version         string     `json:"version"`
 	Status          string     `json:"status"`
 	Draining        bool       `json:"draining"`
+	WakeOnDemand    bool       `json:"wake_on_demand"`
 	LastHeartbeatAt *time.Time `json:"last_heartbeat_at"`
 	CPUPercent      *float64   `json:"cpu_percent"`
 	MemUsedBytes    *int64     `json:"mem_used_bytes"`

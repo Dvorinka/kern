@@ -58,7 +58,11 @@ services:
       # The App pem mounts read-only; the env default /dev/null is a no-op.
       - ${KERN_GITHUB_APP_KEY_FILE:-/dev/null}:/run/kern-app.pem:ro
 
+  # The bundled runner is profile-gated: a bare `up` (and the host updater)
+  # starts only the control plane. Enable with COMPOSE_PROFILES=runner or
+  # `--profile runner` on hosts that should also run jobs.
   runner:
+    profiles: ["runner"]
     build:
       context: ..
       dockerfile: deployments/runner.Dockerfile

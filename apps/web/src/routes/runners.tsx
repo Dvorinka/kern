@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState, type FormEvent } from "react";
-import { Cpu, Image as ImageIcon, LocateFixed, Pause, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Cpu, Image as ImageIcon, LocateFixed, Pause, Pencil, Plus, RefreshCw, Trash2, Zap } from "lucide-react";
 import { api } from "../lib/api";
 import type { Runner } from "../lib/types";
 import { Button, Card, EmptyState, Input, RunnerIcon, Spinner } from "../components/ui";
@@ -31,6 +31,11 @@ export function RunnersPage() {
 	const setUpdate = useMutation({
 		mutationFn: (v: { id: string; on: boolean }) =>
 			api.post(`/runners/${v.id}/auto-update`, { enabled: v.on }),
+		onSuccess: () => qc.invalidateQueries({ queryKey: ["runners"] }),
+	});
+	const setWake = useMutation({
+		mutationFn: (v: { id: string; on: boolean }) =>
+			api.patch(`/runners/${v.id}`, { wake_on_demand: v.on }),
 		onSuccess: () => qc.invalidateQueries({ queryKey: ["runners"] }),
 	});
 	const drain = useMutation({
@@ -219,6 +224,16 @@ export function RunnersPage() {
 												onClick={() => setUpdate.mutate({ id: r.id, on: !r.auto_update })}
 											>
 												<RefreshCw size={12} />
+											</button>
+											<button
+												className={r.wake_on_demand ? "pill solid" : "pill"}
+												title={r.wake_on_demand
+													? "Wake on demand — a scaler may power this host for queued work"
+													: "Wake on demand off — the host stays down"}
+												disabled={setWake.isPending}
+												onClick={() => setWake.mutate({ id: r.id, on: !r.wake_on_demand })}
+											>
+												<Zap size={12} />
 											</button>
 											<button
 												className="pill"
@@ -440,48 +455,116 @@ function GeoEditor({ runner, onDone }: { runner: Runner; onDone: () => void }) {
 	);
 }
 
-// IconEditor sets the runner's glyph: an emoji, a short label, or an image
-// URL/path. Empty restores the default marker.
+// Sensible runner glyphs: platform, substrate, and status marks.
+const ICON_PRESETS = [
+	"🐧", "🪟", "🍎", "🐳", "☁️", "🖥️", "💻", "⚙️",
+	"🔧", "🏗️", "📦", "🚀", "🤖", "🦾", "☸️", "🏠",
+	"🌐", "⚡", "🔥", "🍓", "📟", "🏭", "🧊", "🐋",
+];
+
+const RECENT_KEY = "kern.runner-icons";
+
+function recentIcons(): string[] {
+	try {
+		const v = JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]");
+		return Array.isArray(v) ? v.filter((x) => typeof x === "string").slice(0, 8) : [];
+	} catch {
+		return [];
+	}
+}
+
+function pushRecentIcon(icon: string) {
+	if (!icon || ICON_PRESETS.includes(icon)) return;
+	const next = [icon, ...recentIcons().filter((x) => x !== icon)].slice(0, 8);
+	try {
+		localStorage.setItem(RECENT_KEY, JSON.stringify(next));
+	} catch {
+		// storage may be unavailable — recents are a nicety, not a feature
+	}
+}
+
+// Light client-side check; the server enforces the real bound (500 chars,
+// no control chars). Anything that looks like a URL must be http(s).
+function iconInputError(v: string): string | null {
+	if (v.includes("://") && !/^https?:\/\//i.test(v)) return "image URLs must be http(s)";
+	if (v.length > 500) return "max 500 chars";
+	return null;
+}
+
+// IconEditor sets the runner's glyph: a preset or recent emoji, a short
+// label, or an image URL/path. Empty restores the default marker.
 function IconEditor({ runner, onDone }: { runner: Runner; onDone: () => void }) {
 	const qc = useQueryClient();
+	const [draft, setDraft] = useState(runner.icon);
+	const [inputErr, setInputErr] = useState<string | null>(null);
+	const recents = recentIcons().filter((x) => !ICON_PRESETS.includes(x));
 	const save = useMutation({
 		mutationFn: (icon: string) => api.patch(`/runners/${runner.id}`, { icon }),
-		onSuccess: () => {
+		onSuccess: (_res, icon) => {
+			pushRecentIcon(icon);
 			qc.invalidateQueries({ queryKey: ["runners"] });
 			onDone();
 		},
 	});
+	const apply = (icon: string) => {
+		const err = iconInputError(icon);
+		setInputErr(err);
+		if (!err) save.mutate(icon);
+	};
 	const submit = (e: FormEvent<HTMLFormElement>) => {
 		e.preventDefault();
-		save.mutate(String(new FormData(e.currentTarget).get("icon")).trim());
+		apply(draft.trim());
 	};
 	return (
-		<form onSubmit={submit} className="ml-[23px] mt-2 flex flex-wrap items-center gap-2">
-			<span className="text-[11px] text-[var(--faint)]">icon</span>
-			<RunnerIcon icon={runner.icon} className="rricon rrname" />
-			<Input
-				name="icon"
-				placeholder="emoji like 🚀 — or an image URL/path"
-				defaultValue={runner.icon}
-				className="w-64"
-			/>
-			<Button type="submit" variant="primary" size="sm" disabled={save.isPending}>
-				Save
-			</Button>
-			<Button
-				type="button"
-				size="sm"
-				variant="ghost"
-				disabled={save.isPending || !runner.icon}
-				onClick={() => save.mutate("")}
-			>
-				Clear
-			</Button>
-			<Button type="button" size="sm" variant="ghost" onClick={onDone}>
-				Cancel
-			</Button>
-			{save.error && <span className="text-xs text-[var(--err)]">{save.error.message}</span>}
-		</form>
+		<div className="ml-[23px] mt-2">
+			<div className="flex flex-wrap items-center gap-1.5">
+				<span className="text-[11px] text-[var(--faint)]">pick</span>
+				{[...recents, ...ICON_PRESETS].map((g, i) => (
+					<button
+						key={`${g}-${i}`}
+						type="button"
+						className={draft === g ? "pill solid" : "pill"}
+						title={i < recents.length ? "recent" : undefined}
+						onClick={() => setDraft(g)}
+					>
+						<span className="text-sm leading-none">{g}</span>
+					</button>
+				))}
+			</div>
+			<form onSubmit={submit} className="mt-2 flex flex-wrap items-center gap-2">
+				<span className="text-[11px] text-[var(--faint)]">preview</span>
+				<RunnerIcon icon={draft} className="rricon rrname" />
+				<b className="text-xs">{runner.name}</b>
+				<Input
+					name="icon"
+					placeholder="emoji like 🚀 — or an image URL/path"
+					value={draft}
+					onChange={(e) => {
+						setDraft(e.target.value);
+						setInputErr(iconInputError(e.target.value.trim()));
+					}}
+					className="w-64"
+				/>
+				<Button type="submit" variant="primary" size="sm" disabled={save.isPending || !!inputErr}>
+					Save
+				</Button>
+				<Button
+					type="button"
+					size="sm"
+					variant="ghost"
+					disabled={save.isPending || !runner.icon}
+					onClick={() => save.mutate("")}
+				>
+					Clear
+				</Button>
+				<Button type="button" size="sm" variant="ghost" onClick={onDone}>
+					Cancel
+				</Button>
+				{(inputErr || save.error) && (
+					<span className="text-xs text-[var(--err)]">{inputErr ?? save.error?.message}</span>
+				)}
+			</form>
+		</div>
 	);
 }
 

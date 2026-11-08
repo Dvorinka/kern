@@ -17,6 +17,10 @@ const usage = `kern — KERN control plane CLI
 
 Usage: kern <command> [args] [--server URL] [--token T] [--project P] [--json]
 
+Setup:
+  install               first-run wizard — server URL + login, writes the config
+  status [--watch]      control-plane dashboard: meta, queue, runner counts
+
 Auth:
   login                 exchange email+password for an API token and save it
   logout                revoke the saved token and clear local credentials
@@ -50,7 +54,9 @@ Settings:
 
 Runners:
   runners list
-  runners drain|undrain|delete <runner-id>
+  runners drain|undrain|self-update|wake|delete <id|name>
+  runners install [--name N] [--labels a,b] [--ttl MIN]
+                        enroll this host and install the systemd user unit
   runners enroll [--name N] [--ttl MIN]   mint a one-time join token
 
 Artifacts / cache / secrets:
@@ -144,6 +150,14 @@ func dispatch(c *cli, args []string) int {
 	switch name {
 	case "version", "--version", "-v":
 		fmt.Println("kern " + version.Version)
+	case "install":
+		err = c.cmdInstall(ctx, rest)
+	case "status":
+		// --watch refreshes until Ctrl-C; give status its own signal context
+		// instead of the default request budget.
+		sctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		err = c.cmdStatus(sctx, rest)
 	case "login":
 		err = c.cmdLogin(ctx, rest)
 	case "logout":
