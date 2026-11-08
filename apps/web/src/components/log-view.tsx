@@ -116,7 +116,6 @@ export function LogView({
 	const [lvl, setLvl] = useState<"" | "err" | "warn" | "cmd">("");
 	const [selLine, setSelLine] = useState<number | null>(null);
 	const [copied, setCopied] = useState(false);
-	const endRef = useRef<HTMLDivElement>(null);
 	const logRef = useRef<HTMLDivElement>(null);
 	const [away, setAway] = useState(false);
 
@@ -207,7 +206,8 @@ export function LogView({
 	}, [parsed, q, lvl]);
 
 	useEffect(() => {
-		if (follow && !filtering) endRef.current?.scrollIntoView({ block: "end" });
+		const el = logRef.current;
+		if (follow && !filtering && el) el.scrollTop = el.scrollHeight;
 	}, [text, follow, filtering]);
 
 	const copyAll = async () => {
@@ -291,7 +291,9 @@ export function LogView({
 				ref={logRef}
 				onScroll={(e) => {
 					const el = e.currentTarget;
-					setAway(el.scrollHeight - el.scrollTop - el.clientHeight > 80);
+					const d = el.scrollHeight - el.scrollTop - el.clientHeight;
+					setAway(d > 80);
+					setFollow(d <= 80);
 				}}
 			>
 				{parsed.length === 0 && !err && (
@@ -331,11 +333,14 @@ export function LogView({
 						</span>
 					</div>
 				)}
-				<div ref={endRef} />
 				{away && !filtering && (
 					<button
 						className="jump"
-						onClick={() => endRef.current?.scrollIntoView({ block: "end", behavior: "smooth" })}
+						onClick={() => {
+							setFollow(true);
+							const el = logRef.current;
+							if (el) el.scrollTop = el.scrollHeight;
+						}}
 					>
 						↓ latest
 					</button>
