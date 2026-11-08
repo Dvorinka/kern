@@ -5,6 +5,24 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 
 ## [Unreleased]
 
+## [v0.6.2] - 2026-11-09
+
+### Added
+- `kern runs wait <id> [--interval] [--timeout]` blocks until a run
+  reaches a terminal state and prints failed jobs — the monitoring
+  primitive for scripts and agents gating on CI (#159).
+
+### Fixed
+- Runner self-healing: crashed or restarted runners no longer leak
+  `kern-svc-*`/`kern-job-*` containers and `kern-svc-*`/`kern-ego-*`/
+  `kern-egro-*` networks. The disk GC loop (startup + every 15 min) now
+  sweeps KERN-owned resources whose job is not active on that runner —
+  leaked postgres containers were squatting host ports (`0.0.0.0:5432`
+  bind conflicts) and serving stale databases to later jobs (#159).
+- Idle dangling-image prune on every GC sweep: layer creep no longer
+  accumulates between disk-pressure events (ci-runner-902 hit 2 GB free)
+  (#159).
+
 ## [v0.6.1] - 2026-11-08
 
 ### Fixed
