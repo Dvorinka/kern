@@ -66,6 +66,13 @@ if [ "$(active)" != "0" ]; then
   exit 0
 fi
 
+# A stopped VM has no idle clock: clear any stamp left by a previous run so
+# a fresh boot gets a full idle window instead of an instant shutdown.
+if [ "$state" != "running" ]; then
+  rm -f "$STATE"
+  exit 0
+fi
+
 # Idle: stamp the first idle observation, shut down past the window.
 now=$(date +%s)
 since=$(cat "$STATE" 2>/dev/null || echo "$now")
