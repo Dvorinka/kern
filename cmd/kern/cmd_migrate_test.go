@@ -54,3 +54,18 @@ func TestSlugify(t *testing.T) {
 		}
 	}
 }
+
+func TestParseFlagsExBool(t *testing.T) {
+	opts, pos := parseFlagsEx([]string{"--follow", "--job", "build", "--step=2"},
+		[]string{"follow"}, "job", "step", "follow")
+	if opts["follow"] != "true" || opts["job"] != "build" || opts["step"] != "2" {
+		t.Fatalf("opts = %v", opts)
+	}
+	if len(pos) != 0 {
+		t.Fatalf("pos = %v", pos)
+	}
+	opts, _ = parseFlagsEx([]string{"--follow=false"}, []string{"follow"}, "follow")
+	if opts["follow"] != "false" {
+		t.Fatalf("--follow=false = %q", opts["follow"])
+	}
+}

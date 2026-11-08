@@ -267,8 +267,12 @@ func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 			}
 			norm = append(norm, a)
 		}
-		opts, _ := parseFlags(norm, "job", "step", "follow")
-		return c.runLogs(ctx, id, opts["job"], opts["step"], opts["follow"])
+		opts, _ := parseFlagsEx(norm, []string{"follow"}, "job", "step", "follow")
+		follow := opts["follow"]
+		if follow == "false" {
+			follow = ""
+		}
+		return c.runLogs(ctx, id, opts["job"], opts["step"], follow)
 	case "remediate":
 		opts, pos := parseFlags(rest, "step")
 		jobID, err := strarg(pos, 0, "job id")
