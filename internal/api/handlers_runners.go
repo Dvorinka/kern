@@ -94,6 +94,31 @@ func (s *Server) patchRunner(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true, "icon": icon})
 }
 
+// autoUpdateRunner toggles the server-side self-update opt-in — the runner
+// receives signed image offers on its next idle heartbeat, regardless of its
+// local KERN_RUNNER_UPDATE env flag.
+func (s *Server) autoUpdateRunner(c *gin.Context) {
+	user, _ := currentUser(c)
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		fail(c, http.StatusBadRequest, "invalid_id", "runner id must be a uuid")
+		return
+	}
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "invalid_body", "enabled is required")
+		return
+	}
+	if err := s.Store.SetRunnerAutoUpdate(c.Request.Context(), user.OrgID, id, req.Enabled); err != nil {
+		s.internalError(c, err)
+		return
+	}
+	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "runner.auto_update", id.String())
+	c.JSON(http.StatusOK, gin.H{"ok": true, "auto_update": req.Enabled})
+}
+
 func (s *Server) deleteRunner(c *gin.Context) {
 	user, _ := currentUser(c)
 	id, err := uuid.Parse(c.Param("id"))

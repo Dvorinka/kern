@@ -220,19 +220,22 @@ type Step struct {
 }
 
 type Runner struct {
-	ID              uuid.UUID  `json:"id"`
-	OrgID           uuid.UUID  `json:"org_id"`
-	Name            string     `json:"name"`
-	Hostname        string     `json:"hostname"`
-	OS              string     `json:"os"`
-	Arch            string     `json:"arch"`
-	CPUs            int        `json:"cpus"`
-	MemoryBytes     int64      `json:"memory_bytes"`
-	DiskBytes       int64      `json:"disk_bytes"`
-	Labels          []string   `json:"labels"`
-	Version         string     `json:"version"`
-	Status          string     `json:"status"`
-	Draining        bool       `json:"draining"`
+	ID          uuid.UUID `json:"id"`
+	OrgID       uuid.UUID `json:"org_id"`
+	Name        string    `json:"name"`
+	Hostname    string    `json:"hostname"`
+	OS          string    `json:"os"`
+	Arch        string    `json:"arch"`
+	CPUs        int       `json:"cpus"`
+	MemoryBytes int64     `json:"memory_bytes"`
+	DiskBytes   int64     `json:"disk_bytes"`
+	Labels      []string  `json:"labels"`
+	Version     string    `json:"version"`
+	Status      string    `json:"status"`
+	Draining    bool      `json:"draining"`
+	// AutoUpdate is the server-side self-update opt-in — settable via API/CLI
+	// independent of the runner's local KERN_RUNNER_UPDATE env flag.
+	AutoUpdate      bool       `json:"auto_update"`
 	Ephemeral       bool       `json:"ephemeral"`
 	LastHeartbeatAt *time.Time `json:"last_heartbeat_at"`
 	CPUPercent      *float64   `json:"cpu_percent"`

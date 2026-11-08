@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -363,6 +364,19 @@ func githubGetAccept(ctx context.Context, endpoint, accept, token string, limit 
 	return body, nil
 }
 
+// autoUpdateEnabled resolves the org auto_update setting, with KERN_AUTO_UPDATE
+// env as an operator override ("1", "true", "on") for installs that manage the
+// control plane declaratively.
+func autoUpdateEnabled(raw json.RawMessage) bool {
+	switch os.Getenv("KERN_AUTO_UPDATE") {
+	case "1", "true", "on":
+		return true
+	case "0", "false", "off":
+		return false
+	}
+	return settingsValue(raw, "auto_update", "off") == "on"
+}
+
 // offerRunnerUpdate returns the pinned image when this runner is the one
 // allowed to replace itself. The offer is omitted otherwise.
 func (s *Server) offerRunnerUpdate(ctx context.Context, runner store.Runner, optedIn bool, active int) (image, ver string, ok bool) {
@@ -370,7 +384,7 @@ func (s *Server) offerRunnerUpdate(ctx context.Context, runner store.Runner, opt
 		return "", "", false
 	}
 	raw, err := s.Store.OrgSettings(ctx, runner.OrgID)
-	if err != nil || settingsValue(raw, "auto_update", "off") != "on" {
+	if err != nil || !autoUpdateEnabled(raw) {
 		return "", "", false
 	}
 	info := s.cachedRelease(ctx, s.releaseRepo(), false)

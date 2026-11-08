@@ -135,7 +135,7 @@ func (s *Server) runnerHeartbeat(c *gin.Context) {
 	if body.ActiveJobs > active {
 		active = body.ActiveJobs
 	}
-	if image, ver, ok := s.offerRunnerUpdate(c.Request.Context(), runner, body.SelfUpdate, active); ok {
+	if image, ver, ok := s.offerRunnerUpdate(c.Request.Context(), runner, body.SelfUpdate || runner.AutoUpdate, active); ok {
 		resp["update"] = gin.H{"version": ver, "image": image}
 	}
 	c.JSON(http.StatusOK, resp)

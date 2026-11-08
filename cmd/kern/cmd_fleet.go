@@ -12,7 +12,7 @@ import (
 
 func (c *cli) cmdRunners(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: kern runners list|drain|undrain|delete|enroll")
+		return fmt.Errorf("usage: kern runners list|drain|undrain|self-update|delete|enroll")
 	}
 	if err := c.requireAuth(); err != nil {
 		return err
@@ -58,6 +58,23 @@ func (c *cli) cmdRunners(ctx context.Context, args []string) error {
 			return err
 		}
 		fmt.Println(sub + "ed")
+	case "self-update":
+		id, err := strarg(rest, 0, "runner id")
+		if err != nil {
+			return err
+		}
+		on, err := strarg(rest, 1, "on|off")
+		if err != nil {
+			return err
+		}
+		if on != "on" && on != "off" {
+			return fmt.Errorf("self-update takes on|off, got %q", on)
+		}
+		if err := c.api().post(ctx, "/runners/"+id+"/auto-update",
+			map[string]any{"enabled": on == "on"}, nil); err != nil {
+			return err
+		}
+		fmt.Printf("self-update %s\n", on)
 	case "delete":
 		id, err := strarg(rest, 0, "runner id")
 		if err != nil {
@@ -87,7 +104,8 @@ func (c *cli) cmdRunners(ctx context.Context, args []string) error {
 			return nil
 		}
 		fmt.Printf("enrollment token (shown once, expires %s):\n%s\n\n", out.Record.ExpiresAt, out.Token)
-		fmt.Printf("on the runner host:\n  kern-runner join --control %s --token %s\n", c.server, out.Token)
+		fmt.Printf("on the runner host:\n  kern-runner join --control %s --token %s\n\n", c.server, out.Token)
+		fmt.Printf("or one container, everything included:\n  docker run -d --name kern-runner --restart always \\\n    -e KERN_CONTROL_URL=%s -e KERN_RUNNER_JOIN_TOKEN=%s \\\n    -e KERN_RUNNER_UPDATE=1 -e KERN_RUNNER_CONCURRENCY=1 \\\n    -e KERN_WORK_ROOT=/opt/kern/work -e HOME=/root \\\n    -v /var/run/docker.sock:/var/run/docker.sock -v /opt/kern/work:/opt/kern/work \\\n    kern-runner:local\n", c.server, out.Token)
 	default:
 		return fmt.Errorf("unknown runners subcommand %q", sub)
 	}
