@@ -119,6 +119,8 @@ const (
 func (a *Agent) diskGCLoop(ctx context.Context) {
 	a.sweepWorkspaces()
 	a.sweepBoundedCache()
+	a.sweepOrphanServices(ctx)
+	a.pruneDangling(ctx)
 	a.maybePruneDisk(ctx)
 	t := time.NewTicker(diskSweepInterval)
 	defer t.Stop()
@@ -129,8 +131,90 @@ func (a *Agent) diskGCLoop(ctx context.Context) {
 		case <-t.C:
 			a.sweepWorkspaces()
 			a.sweepBoundedCache()
+			a.sweepOrphanServices(ctx)
+			a.pruneDangling(ctx)
 			a.maybePruneDisk(ctx)
 		}
+	}
+}
+
+// sweepOrphanServices removes kern-svc-*/kern-job-* containers and
+// kern-svc-* networks left behind when a runner died mid-job: cleanup()
+// never ran, the containers are --rm but still running, and they squat
+// host ports (postgres:5432 conflicts) and serve stale state to later
+// jobs. A resource is live only while its job ID sits in activeJobs —
+// one runner per docker host is the documented model (same assumption
+// hostPortLocks already makes).
+func (a *Agent) sweepOrphanServices(ctx context.Context) {
+	if a.executor() != "docker" {
+		return
+	}
+	out, err := exec.CommandContext(ctx, "docker", "ps", "-aq", "--filter", "name=kern-", "--format", "{{.ID}}|{{.Names}}").Output()
+	if err == nil {
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			id, name, ok := strings.Cut(line, "|")
+			name = strings.TrimPrefix(strings.TrimSpace(name), "/")
+			if !ok || id == "" || a.jobActive(name) ||
+				!(strings.HasPrefix(name, "kern-svc-") || strings.HasPrefix(name, "kern-job-")) {
+				continue
+			}
+			rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			if err := exec.CommandContext(rctx, "docker", "rm", "-f", id).Run(); err == nil {
+				a.log.Info("orphan sweep: removed container", zap.String("name", name))
+			} else {
+				a.log.Debug("orphan sweep: rm failed", zap.String("id", id), zap.Error(err))
+			}
+			cancel()
+		}
+	}
+	out, err = exec.CommandContext(ctx, "docker", "network", "ls", "--filter", "name=kern-", "--format", "{{.Name}}").Output()
+	if err != nil {
+		return
+	}
+	for _, name := range strings.Fields(string(out)) {
+		if a.jobActive(name) ||
+			!(strings.HasPrefix(name, "kern-svc-") || strings.HasPrefix(name, "kern-ego-") || strings.HasPrefix(name, "kern-egro-")) {
+			continue
+		}
+		rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		if err := exec.CommandContext(rctx, "docker", "network", "rm", name).Run(); err == nil {
+			a.log.Info("orphan sweep: removed network", zap.String("name", name))
+		}
+		cancel()
+	}
+}
+
+// jobActive reports whether name belongs to a job currently executing on
+// this runner. Container names embed the job ID (kern-svc-<id>-<svc>,
+// kern-job-<id>-<attempt>); network names end with it (kern-svc-<id>).
+func (a *Agent) jobActive(name string) bool {
+	active := false
+	a.activeJobs.Range(func(k, _ any) bool {
+		if id, ok := k.(string); ok && strings.Contains(name, id) {
+			active = true
+			return false
+		}
+		return true
+	})
+	return active
+}
+
+// pruneDangling drops untagged image layers every sweep while idle —
+// cheap, always safe, and keeps disk creep from partial pulls and
+// retagged builds from accumulating between pressure events.
+func (a *Agent) pruneDangling(ctx context.Context) {
+	if a.executor() != "docker" || a.active.Load() > 0 {
+		return
+	}
+	pctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	out, err := exec.CommandContext(pctx, "docker", "image", "prune", "-f").CombinedOutput()
+	cancel()
+	if err != nil {
+		a.log.Debug("dangling prune failed", zap.String("docker", tailStr(string(out), 200)))
+		return
+	}
+	if s := strings.TrimSpace(string(out)); s != "" && !strings.Contains(s, "Total reclaimed space: 0B") {
+		a.log.Info("dangling prune", zap.String("out", tailStr(s, 200)))
 	}
 }
 
