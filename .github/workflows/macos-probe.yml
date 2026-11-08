@@ -1,0 +1,19 @@
+name: macOS probe
+# Dispatch-only: proves the on-demand macOS runner (VM 904 on Nab9) end to end.
+# Never fires on push/PR.
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: [self-hosted, macos]
+    steps:
+      - name: identify runner
+        run: |
+          echo "KERN runner alive"
+          hostname
+          uname -a
+          uname -m
+          sw_vers || true
+          xcodebuild -version || true
+          echo "::notice::macos job ran on $(hostname) $(uname -m)"
