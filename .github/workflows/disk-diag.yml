@@ -1,6 +1,8 @@
 name: disk-diag
 on:
   workflow_dispatch
+  push:
+    branches: [diag/disk-usage]
 jobs:
   diag:
     strategy:
