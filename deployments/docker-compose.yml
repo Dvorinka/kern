@@ -43,6 +43,8 @@ services:
       # the fallback when the image is not reachable. No compose default: a
       # bare `up` without --env-file must fail loudly, not ship ubuntu:24.04.
       KERN_DEFAULT_IMAGE: ${KERN_DEFAULT_IMAGE:?set KERN_DEFAULT_IMAGE (see .env.example)}
+      # Optional arm64 substitute for KERN_DEFAULT_IMAGE (see .env.example).
+      KERN_ARM64_IMAGE: ${KERN_ARM64_IMAGE:-}
       KERN_GITHUB_APP_ID: ${KERN_GITHUB_APP_ID:-}
       KERN_GITHUB_APP_PRIVATE_KEY_FILE: ${KERN_GITHUB_APP_PRIVATE_KEY_FILE:-}
       KERN_GITHUB_WEBHOOK_SECRET: ${KERN_GITHUB_WEBHOOK_SECRET:-}
