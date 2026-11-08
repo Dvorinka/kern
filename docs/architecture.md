@@ -9,7 +9,7 @@ specification see `project.md`; for milestone status see `plan.md`.
 | --- | --- | --- |
 | Control plane | `cmd/api` | HTTP API, auth, workflow compile, scheduler loop, orchestrator, log ingestion |
 | Runner agent | `cmd/runner` | Registers, long-polls for jobs, executes them in ephemeral containers (`KERN_RUNNER_EXECUTOR=host` runs them as local processes instead — trusted tiers only) |
-| CLI | `cmd/kern` | Operator client (`kern`): auth, projects, runs, runners, artifacts, cache, `exec`, `split` |
+| CLI | `cmd/kern` | Operator client (`kern`): auth, projects, runs, runners, artifacts, cache, `exec`, `split`, `lint`, `doctor`, `diagnose`, `migrate` |
 | Migrator | `cmd/migrate` | Applies goose migrations and exits (also runs inside `cmd/api` at boot) |
 | Updater | `deployments/kern-updater.sh` | Compose-profile sidecar that polls `GET /update/plan` and applies signed releases (git fast-forward + rebuild). External runners self-update via `KERN_RUNNER_UPDATE=1` |
 

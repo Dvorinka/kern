@@ -273,9 +273,19 @@ func (c *cli) api() *client { return newClient(c.server, c.token) }
 // parseFlags handles --key value and --key=value for a fixed key set; the
 // remaining positional args are returned separately.
 func parseFlags(args []string, keys ...string) (map[string]string, []string) {
+	return parseFlagsEx(args, nil, keys...)
+}
+
+// parseFlagsEx is parseFlags plus boolean keys: a bool key never consumes
+// the next arg — presence sets "true", --key=false sets "false".
+func parseFlagsEx(args []string, bools []string, keys ...string) (map[string]string, []string) {
 	known := map[string]bool{}
 	for _, k := range keys {
 		known[k] = true
+	}
+	isBool := map[string]bool{}
+	for _, k := range bools {
+		isBool[k] = true
 	}
 	out := map[string]string{}
 	var pos []string
@@ -288,6 +298,14 @@ func parseFlags(args []string, keys ...string) (map[string]string, []string) {
 		key, val, hasVal := strings.Cut(strings.TrimPrefix(a, "--"), "=")
 		if !known[key] {
 			fatalf("unknown flag --%s", key)
+		}
+		if isBool[key] {
+			if hasVal {
+				out[key] = val
+			} else {
+				out[key] = "true"
+			}
+			continue
 		}
 		if hasVal {
 			out[key] = val
