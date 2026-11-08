@@ -5,11 +5,7 @@ on:
     branches: [diag/disk-usage]
 jobs:
   diag:
-    strategy:
-      fail-fast: false
-      matrix:
-        lane: [lxc-902, lxc-903, lxc-906, lxc-901]
-    runs-on: [self-hosted, linux, x64, "${{ matrix.lane }}"]
+    runs-on: [self-hosted, linux, x64, lxc-902]
     steps:
       - name: disk usage
         run: |
@@ -17,6 +13,6 @@ jobs:
           echo "=== top-level ==="
           du -xh --max-depth=1 / 2>/dev/null | sort -rh | head -12
           echo "=== deep ==="
-          for d in /home /data /var /opt /root /srv /kern; do
+          for d in /home /data /var /opt /root /srv /kern /actions-runner /_work; do
             [ -d "$d" ] && du -xh --max-depth=2 "$d" 2>/dev/null | sort -rh | head -8
           done
