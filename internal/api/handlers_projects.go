@@ -235,13 +235,14 @@ func (s *Server) listWorkflows(c *gin.Context) {
 }
 
 type triggerRequest struct {
-	Event         string `json:"event"`
-	Ref           string `json:"ref"`
-	SHA           string `json:"sha"`
-	Actor         string `json:"actor"`
-	CommitMessage string `json:"commit_message"`
-	TrustLevel    string `json:"trust_level"`
-	BundleRef     string `json:"bundle_ref"`
+	Event         string         `json:"event"`
+	Ref           string         `json:"ref"`
+	SHA           string         `json:"sha"`
+	Actor         string         `json:"actor"`
+	CommitMessage string         `json:"commit_message"`
+	TrustLevel    string         `json:"trust_level"`
+	BundleRef     string         `json:"bundle_ref"`
+	Inputs        map[string]any `json:"inputs"`
 }
 
 func (s *Server) triggerRun(c *gin.Context) {
@@ -324,6 +325,7 @@ func (s *Server) triggerRun(c *gin.Context) {
 		Actor:             req.Actor,
 		TrustLevel:        req.TrustLevel,
 		Source:            source,
+		Inputs:            req.Inputs,
 	})
 	if err != nil {
 		s.internalError(c, err)

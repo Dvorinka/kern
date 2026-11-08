@@ -199,7 +199,7 @@ func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 		}
 		return c.showRun(ctx, id)
 	case "trigger":
-		opts, pos := parseFlags(rest, "event", "ref", "sha")
+		opts, pos := parseFlags(rest, "event", "ref", "sha", "inputs")
 		var slug, wf string
 		switch len(pos) {
 		case 1:
@@ -207,7 +207,7 @@ func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 		case 2:
 			slug, wf = pos[0], pos[1]
 		default:
-			return fmt.Errorf("usage: kern runs trigger [<project>] <workflow> [--event] [--ref] [--sha]")
+			return fmt.Errorf("usage: kern runs trigger [<project>] <workflow> [--event] [--ref] [--sha] [--inputs '{\"k\":\"v\"}']")
 		}
 		if slug == "" {
 			return fmt.Errorf("project required — positional arg, --project or kern config set project")
@@ -216,12 +216,20 @@ func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
+		body := map[string]any{
+			"event": opts["event"], "ref": opts["ref"], "sha": opts["sha"],
+		}
+		if raw := opts["inputs"]; raw != "" {
+			var inputs map[string]any
+			if err := json.Unmarshal([]byte(raw), &inputs); err != nil {
+				return fmt.Errorf("--inputs must be a JSON object: %w", err)
+			}
+			body["inputs"] = inputs
+		}
 		var out struct {
 			Run run `json:"run"`
 		}
-		err = c.api().post(ctx, "/projects/"+slug+"/workflows/"+workflowID+"/runs", map[string]any{
-			"event": opts["event"], "ref": opts["ref"], "sha": opts["sha"],
-		}, &out)
+		err = c.api().post(ctx, "/projects/"+slug+"/workflows/"+workflowID+"/runs", body, &out)
 		if err != nil {
 			return err
 		}
