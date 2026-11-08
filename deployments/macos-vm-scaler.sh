@@ -58,8 +58,17 @@ need=$(pending)
 if [ "$need" != "0" ]; then
   rm -f "$STATE"
   if [ "$state" = "stopped" ]; then
-    echo "queued macos work ($need job(s)): starting $VMID"
-    qm start "$VMID"
+    # Operator opt-outs: org runner_autostart=off is the fleet kill-switch;
+    # runners.wake_on_demand=false suppresses this host's start. Idle
+    # shutdown below still applies either way.
+    autostart=$(sql "SELECT coalesce((SELECT settings->>'runner_autostart' FROM orgs LIMIT 1), 'on')" | tr -d '[:space:]')
+    wake=$(sql "SELECT coalesce((SELECT wake_on_demand FROM runners WHERE name='$RUNNER'), true)" | tr -d '[:space:]')
+    if [ "$autostart" = "off" ] || [ "$wake" = "false" ]; then
+      echo "queued macos work ($need job(s)) but autostart suppressed (org=$autostart runner wake_on_demand=$wake)"
+    else
+      echo "queued macos work ($need job(s)): starting $VMID"
+      qm start "$VMID"
+    fi
   fi
   exit 0
 fi

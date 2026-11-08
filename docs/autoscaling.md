@@ -59,6 +59,18 @@ runner (VM 904) runs launchd + host executor inside the guest; see
 `docs/production.md` for the guest layout. Boot latency is roughly two
 minutes — queue wait on a cold VM is expected.
 
+### Operator opt-outs
+
+Both scripts honor two controls before starting a host (idle shutdown is
+never suppressed):
+
+- `runner_autostart` org setting (`kern settings set runner_autostart on|off`,
+  Settings → Wake on demand) — fleet-wide kill-switch; default `on`.
+- `runners.wake_on_demand` per runner (`kern runners wake <name> on|off`,
+  `PATCH /runners/:id`, the bolt pill on the runners page) — opts a single
+  host out; default `on`. Applies to the runner row named by
+  `KERN_VM_RUNNER` — currently `macos-904` is the only scaler-backed host.
+
 ## Decision
 
 (c) — status quo plus the enroll-token runbook — for now. Rationale: the

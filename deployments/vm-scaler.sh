@@ -84,8 +84,20 @@ for conf in "${confs[@]}"; do
   if [ "${pending:-0}" != "0" ]; then
     rm -f "$state_file"
     if [ $is_up -eq 0 ]; then
-      echo "vm-scaler[$id]: $pending queued job(s) matching [$KERN_VM_LABELS], starting"
-      eval "$KERN_VM_START_CMD" || true
+      # Operator opt-outs: the org runner_autostart setting is the fleet
+      # kill-switch; runners.wake_on_demand is the per-host flag. Idle
+      # shutdown below still applies either way.
+      autostart=$(vsql "SELECT coalesce((SELECT settings->>'runner_autostart' FROM orgs LIMIT 1), 'on')")
+      wake=true
+      if [ -n "$KERN_VM_RUNNER" ]; then
+        wake=$(vsql "SELECT coalesce((SELECT wake_on_demand FROM runners WHERE name='$KERN_VM_RUNNER'), true)")
+      fi
+      if [ "$autostart" = "off" ] || [ "$wake" = "false" ]; then
+        echo "vm-scaler[$id]: autostart suppressed (org=$autostart runner wake_on_demand=$wake)"
+      else
+        echo "vm-scaler[$id]: $pending queued job(s) matching [$KERN_VM_LABELS], starting"
+        eval "$KERN_VM_START_CMD" || true
+      fi
     fi
     continue
   fi

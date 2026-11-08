@@ -74,7 +74,8 @@ func (s *Store) InsertRunner(ctx context.Context, p RegisterRunnerParams) (Runne
 const runnerCols = `id, org_id, name, hostname, os, arch, cpus, memory_bytes, disk_bytes, labels,
 	version, status, draining, ephemeral, last_heartbeat_at, cpu_percent,
 	mem_used_bytes, disk_free_bytes, metrics_at, geo_lat, geo_lng, geo_city,
-	geo_country, geo_source, geo_ip, geo_updated_at, executor, created_at, icon, auto_update`
+	geo_country, geo_source, geo_ip, geo_updated_at, executor, created_at, icon, auto_update,
+	wake_on_demand`
 
 func scanRunner(row pgx.Row) (Runner, error) {
 	var r Runner
@@ -83,7 +84,7 @@ func scanRunner(row pgx.Row) (Runner, error) {
 		&r.Ephemeral, &r.LastHeartbeatAt, &r.CPUPercent, &r.MemUsedBytes,
 		&r.DiskFreeBytes, &r.MetricsAt, &r.GeoLat, &r.GeoLng, &r.GeoCity,
 		&r.GeoCountry, &r.GeoSource, &r.GeoIP, &r.GeoUpdatedAt, &r.Executor, &r.CreatedAt,
-		&r.Icon, &r.AutoUpdate)
+		&r.Icon, &r.AutoUpdate, &r.WakeOnDemand)
 	return r, err
 }
 
@@ -129,6 +130,20 @@ func (s *Store) Runners(ctx context.Context, orgID uuid.UUID) ([]Runner, error) 
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// SetRunnerWakeOnDemand flips whether an external scaler may power this
+// runner's host on demand. It is advisory state for out-of-band scalers —
+// nothing in the API starts or stops hosts.
+func (s *Store) SetRunnerWakeOnDemand(ctx context.Context, orgID, id uuid.UUID, on bool) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE runners SET wake_on_demand = $3 WHERE org_id = $1 AND id = $2`, orgID, id, on)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // SetRunnerAutoUpdate flips the server-side self-update opt-in.
