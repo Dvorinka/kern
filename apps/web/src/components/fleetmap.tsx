@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Minus, Plus, RotateCcw } from "lucide-react";
 import type { FleetMapPin, FleetMapResponse } from "../lib/types";
 import { WORLD_DOTS } from "../lib/world-dots";
+import { WORLD_GRATICULE_PATH, WORLD_LAND_PATH } from "../lib/world-land";
 import { jobHue } from "./fingerprint";
 
 // Dot-matrix world, rasterized from Natural Earth 110m land — the mockup's
@@ -13,6 +14,14 @@ const LAT_T = 83;
 const LAT_B = -58;
 const VB = { x: 0, y: 0, w: MW, h: MH };
 const ASPECT = MH / MW;
+const MIN_W = 40;
+const MAX_W = 1600;
+
+// land/graticule paths live in a 1000×500 equirectangular canvas; our view
+// crops lat 83..-58 of the same projection → affine map onto 1200×470.
+const LAND_TF = "matrix(1.2 0 0 1.2 0 -23.3333333)";
+
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 const LON = (l: number) => ((l + 180) / 360) * MW;
 const LAT = (l: number) => ((LAT_T - l) / (LAT_T - LAT_B)) * MH;
@@ -37,6 +46,13 @@ interface View {
 	w: number;
 	h: number;
 }
+
+// keep the viewBox honest: zoomed in it can sit anywhere inside the world,
+// zoomed out the world stays centred rather than drifting into void.
+const clampView = (v: View): View =>
+	v.w >= MW
+		? { ...v, x: (MW - v.w) / 2, y: (MH - v.h) / 2 }
+		: { ...v, x: clamp(v.x, 0, MW - v.w), y: clamp(v.y, 0, MH - v.h) };
 
 export interface Site {
 	key: string;
@@ -102,6 +118,16 @@ export function FleetMap({ data }: { data: FleetMapResponse }) {
 	const hx = control ? LON(control.lng) : 0;
 	const hy = control ? LAT(control.lat) : 0;
 
+	// deep zoom swaps the dot raster for the real land path; markers shrink so
+	// they stay honest at country scale instead of swallowing the viewport.
+	const landA = clamp((820 - view.w) / 420, 0, 1);
+	const dotsA = clamp((view.w - 320) / 500, 0, 1);
+	const dotR = clamp(view.w / 400, 0.4, 3);
+	const mk = clamp(view.w / 700, 0.22, 1);
+	const showLabels = view.w >= 140;
+
+	const setV = (fn: (v: View) => View) => setView((v) => clampView(fn(v)));
+
 	// client px → svg user units inside the current viewBox
 	const toSvg = useCallback(
 		(cx: number, cy: number): [number, number] => {
@@ -121,9 +147,9 @@ export function FleetMap({ data }: { data: FleetMapResponse }) {
 		const onWheel = (e: WheelEvent) => {
 			e.preventDefault();
 			const [mx, my] = toSvg(e.clientX, e.clientY);
-			setView((v) => {
+			setV((v) => {
 				const f = e.deltaY > 0 ? 1.18 : 1 / 1.18;
-				const w = Math.min(1600, Math.max(260, v.w * f));
+				const w = clamp(v.w * f, MIN_W, MAX_W);
 				const h = w * ASPECT;
 				const k = w / v.w;
 				return { w, h, x: mx - (mx - v.x) * k, y: my - (my - v.y) * k };
@@ -134,10 +160,10 @@ export function FleetMap({ data }: { data: FleetMapResponse }) {
 	}, [toSvg]);
 
 	const zoomBy = (f: number) =>
-		setView((v) => {
+		setV((v) => {
 			const cx = v.x + v.w / 2;
 			const cy = v.y + v.h / 2;
-			const w = Math.min(1600, Math.max(260, v.w * f));
+			const w = clamp(v.w * f, MIN_W, MAX_W);
 			const h = w * ASPECT;
 			const k = w / v.w;
 			return { w, h, x: cx - (cx - v.x) * k, y: cy - (cy - v.y) * k };
@@ -148,7 +174,7 @@ export function FleetMap({ data }: { data: FleetMapResponse }) {
 	// label side: right of the marker unless that runs off the edge
 	const labelFor = (s: Site) => {
 		const left = s.x > MW * 0.7;
-		return { x: s.x + (left ? -16 : 16), y: s.y + 6, an: left ? "end" : "start" };
+		return { x: s.x + (left ? -16 * mk : 16 * mk), y: s.y + 6 * mk, an: left ? "end" : "start" };
 	};
 
 	return (
@@ -171,7 +197,7 @@ export function FleetMap({ data }: { data: FleetMapResponse }) {
 							const dx = ((e.clientX - d.px) / rect.width) * view.w;
 							const dy = ((e.clientY - d.py) / rect.height) * view.h;
 							if (Math.abs(e.clientX - d.px) + Math.abs(e.clientY - d.py) > 4) d.moved = true;
-							setView((v) => ({ ...v, x: d.vx - dx, y: d.vy - dy }));
+							setV((v) => ({ ...v, x: d.vx - dx, y: d.vy - dy }));
 						}
 						return;
 					}
@@ -196,19 +222,27 @@ export function FleetMap({ data }: { data: FleetMapResponse }) {
 					setTip(null);
 				}}
 			>
+				{/* real land + graticule fade in under the dots once zoomed past
+				    continent scale — this is what makes countries legible */}
+				<g opacity={landA} className="fm-land">
+					<path d={WORLD_GRATICULE_PATH} transform={LAND_TF} className="fm-grat" />
+					<path d={WORLD_LAND_PATH} transform={LAND_TF} className="fm-landpath" />
+				</g>
 				{/* the land dot-matrix */}
-				{DOTS.map((d, i) => (
-					<circle key={i} cx={d.x.toFixed(1)} cy={d.y.toFixed(1)} r="3" className="fm-dot" />
-				))}
+				<g opacity={dotsA}>
+					{DOTS.map((d, i) => (
+						<circle key={i} cx={d.x.toFixed(1)} cy={d.y.toFixed(1)} r={dotR.toFixed(2)} className="fm-dot" />
+					))}
+				</g>
 				{/* logo-fan arcs to the hub — one per live job, one dashed per quiet site */}
 				{control &&
 					sites.map((s) => {
 						const n = Math.max(1, s.jobs.length);
 						return Array.from({ length: n }, (_, i) => {
 							// fan coincident job arcs apart, alternating sides
-							const bow = i === 0 ? 0 : i % 2 ? (i + 1) * 10 : -i * 10;
+							const bow = i === 0 ? 0 : (i % 2 ? (i + 1) * 10 : -i * 10) * mk;
 							const mx = (s.x + hx) / 2;
-							const my = Math.min(s.y, hy) - Math.abs(hx - s.x) * 0.3 - 14 + bow;
+							const my = Math.min(s.y, hy) - Math.abs(hx - s.x) * 0.3 - 14 * mk + bow;
 							const live = i < s.jobs.length;
 							return (
 								<path
@@ -216,6 +250,7 @@ export function FleetMap({ data }: { data: FleetMapResponse }) {
 									d={`M${s.x.toFixed(1)} ${s.y.toFixed(1)}Q${mx.toFixed(1)} ${my.toFixed(1)} ${hx.toFixed(1)} ${hy.toFixed(1)}`}
 									className={live ? "fm-arc" : "fm-arc fm-arc-idle"}
 									strokeOpacity={live ? 0.75 : 0.4}
+									strokeWidth={2 * mk}
 								/>
 							);
 						});
@@ -224,17 +259,25 @@ export function FleetMap({ data }: { data: FleetMapResponse }) {
 				{control && (
 					<g>
 						<rect
-							x={hx - 7}
-							y={hy - 7}
-							width="14"
-							height="14"
-							rx="4"
+							x={hx - 7 * mk}
+							y={hy - 7 * mk}
+							width={14 * mk}
+							height={14 * mk}
+							rx={4 * mk}
 							className="fm-hub"
 							transform={`rotate(45 ${hx} ${hy})`}
 						/>
-						<text x={hx - 16} y={hy + 6} textAnchor="end" className="fm-label">
-							{siteCode(control.city, "hub")}
-						</text>
+						{showLabels && (
+							<text
+								x={hx - 16 * mk}
+								y={hy + 6 * mk}
+								textAnchor="end"
+								className="fm-label"
+								style={{ fontSize: 16 * mk }}
+							>
+								{siteCode(control.city, "hub")}
+							</text>
+						)}
 					</g>
 				)}
 				{/* site markers */}
@@ -260,35 +303,69 @@ export function FleetMap({ data }: { data: FleetMapResponse }) {
 							}}
 							style={{ cursor: "pointer" }}
 						>
-							<rect x={s.x - 14} y={s.y - 14} width="28" height="28" className="fm-hit" />
+							<rect
+								x={s.x - 14 * mk}
+								y={s.y - 14 * mk}
+								width={28 * mk}
+								height={28 * mk}
+								className="fm-hit"
+							/>
 							{s.st === "live" && (
 								<>
-									<circle className="halosvg" cx={s.x} cy={s.y} r="8" fill="var(--live)" />
-									<circle cx={s.x} cy={s.y} r="8" fill="var(--paper)" stroke="var(--live)" strokeWidth="4" />
+									<circle className="halosvg" cx={s.x} cy={s.y} r={8 * mk} fill="var(--live)" />
+									<circle
+										cx={s.x}
+										cy={s.y}
+										r={8 * mk}
+										fill="var(--paper)"
+										stroke="var(--live)"
+										strokeWidth={4 * mk}
+									/>
 								</>
 							)}
 							{s.st === "idle" && (
-								<circle cx={s.x} cy={s.y} r="7" fill="var(--paper)" stroke="var(--ink)" strokeWidth="3" />
+								<circle
+									cx={s.x}
+									cy={s.y}
+									r={7 * mk}
+									fill="var(--paper)"
+									stroke="var(--ink)"
+									strokeWidth={3 * mk}
+								/>
 							)}
 							{s.st === "off" && (
 								<circle
 									cx={s.x}
 									cy={s.y}
-									r="7"
+									r={7 * mk}
 									fill="var(--paper)"
 									stroke="var(--faint)"
-									strokeWidth="2"
-									strokeDasharray="3 3"
+									strokeWidth={2 * mk}
+									strokeDasharray={`${3 * mk} ${3 * mk}`}
 								/>
 							)}
 							{s.runners.length > 1 && (
-								<text x={s.x} y={s.y + 22} textAnchor="middle" className="fm-count">
+								<text
+									x={s.x}
+									y={s.y + 22 * mk}
+									textAnchor="middle"
+									className="fm-count"
+									style={{ fontSize: 9 * mk }}
+								>
 									×{s.runners.length}
 								</text>
 							)}
-							<text x={l.x} y={l.y} textAnchor={l.an as "start" | "end"} className="fm-label">
-								{s.code}
-							</text>
+							{showLabels && (
+								<text
+									x={l.x}
+									y={l.y}
+									textAnchor={l.an as "start" | "end"}
+									className="fm-label"
+									style={{ fontSize: 16 * mk }}
+								>
+									{s.code}
+								</text>
+							)}
 						</g>
 					);
 				})}
