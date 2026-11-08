@@ -219,6 +219,7 @@ export interface Runner {
 	geo_source: "" | "auto" | "manual";
 	geo_ip: string;
 	geo_updated_at: string | null;
+	icon: string;
 	created_at: string;
 	active_jobs?: number;
 }

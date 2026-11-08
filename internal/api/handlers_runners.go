@@ -63,6 +63,37 @@ func (s *Server) drainRunner(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true, "draining": req.Draining})
 }
 
+type runnerPatchRequest struct {
+	Icon *string `json:"icon"`
+}
+
+// patchRunner edits runner presentation fields. Today that's the operator
+// icon — an emoji or an image URL/path; "" restores the default marker.
+func (s *Server) patchRunner(c *gin.Context) {
+	user, _ := currentUser(c)
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		fail(c, http.StatusBadRequest, "invalid_id", "runner id must be a uuid")
+		return
+	}
+	var req runnerPatchRequest
+	if err := c.ShouldBindJSON(&req); err != nil || req.Icon == nil {
+		fail(c, http.StatusBadRequest, "invalid_body", "icon is required")
+		return
+	}
+	icon := strings.TrimSpace(*req.Icon)
+	if len(icon) > 500 || strings.ContainsAny(icon, "\x00\r\n") {
+		fail(c, http.StatusBadRequest, "invalid_body", "icon must be an emoji or an image URL/path (max 500 chars)")
+		return
+	}
+	if err := s.Store.SetRunnerIcon(c.Request.Context(), user.OrgID, id, icon); err != nil {
+		s.internalError(c, err)
+		return
+	}
+	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "runner.icon", id.String())
+	c.JSON(http.StatusOK, gin.H{"ok": true, "icon": icon})
+}
+
 func (s *Server) deleteRunner(c *gin.Context) {
 	user, _ := currentUser(c)
 	id, err := uuid.Parse(c.Param("id"))

@@ -203,6 +203,7 @@ func (s *Server) buildRouter() *gin.Engine {
 		admin.POST("/enroll-tokens", s.createEnrollToken)
 		admin.POST("/runners", s.jitRunner)
 		admin.POST("/runners/:id/drain", s.drainRunner)
+		admin.PATCH("/runners/:id", s.patchRunner)
 		admin.PATCH("/runners/:id/geo", s.patchRunnerGeo)
 		admin.DELETE("/runners/:id", s.deleteRunner)
 
@@ -239,6 +240,7 @@ func (s *Server) buildRouter() *gin.Engine {
 		auth.GET("/projects/:project/settings", s.getProjectSettings)
 		admin.PUT("/projects/:project/settings", s.putProjectSettings)
 		auth.GET("/projects/:project/icon", s.projectIcon)
+		auth.GET("/projects/:project/icons", s.listProjectIcons)
 		write.POST("/jobs/:id/remediate", s.approveRemediation)
 		write.POST("/jobs/:id/remediate-dismiss", s.dismissRemediation)
 

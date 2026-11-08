@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
-import { Cpu, LocateFixed, Pause, Pencil, Plus, Trash2 } from "lucide-react";
+import { Cpu, Image as ImageIcon, LocateFixed, Pause, Pencil, Plus, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import type { Runner } from "../lib/types";
-import { Button, Card, EmptyState, Input, Spinner } from "../components/ui";
+import { Button, Card, EmptyState, Input, RunnerIcon, Spinner } from "../components/ui";
 import { StatusSq } from "../components/status";
 import { CopyButton } from "./settings";
 import { Row } from "../components/layout";
@@ -13,6 +13,7 @@ export function RunnersPage() {
 	const qc = useQueryClient();
 	const [enrolling, setEnrolling] = useState(false);
 	const [geoEdit, setGeoEdit] = useState<string | null>(null);
+	const [iconEdit, setIconEdit] = useState<string | null>(null);
 	const { data, isLoading } = useQuery({
 		queryKey: ["runners"],
 		queryFn: () => api.get<{ runners: Runner[] }>("/runners"),
@@ -101,7 +102,14 @@ export function RunnersPage() {
 							return (
 								<div key={r.id} className="frow">
 									<div className="fn">
-										<b>{r.name}</b>
+										<b>
+											{r.icon && (
+												<span className="mr-2 inline-flex align-middle">
+													<RunnerIcon icon={r.icon} className="rricon rrname" />
+												</span>
+											)}
+											{r.name}
+										</b>
 										<small>
 											{r.cpus} cores · {r.arch}
 											{r.hostname ? ` · ${r.hostname}` : ""}
@@ -144,6 +152,13 @@ export function RunnersPage() {
 										<span className="acts2">
 											<button
 												className="pill"
+												title="Runner icon — an emoji or an image URL/path"
+												onClick={() => setIconEdit((g) => (g === r.id ? null : r.id))}
+											>
+												<ImageIcon size={12} />
+											</button>
+											<button
+												className="pill"
 												title={
 													r.geo_source === "manual"
 														? `manual location — ${r.geo_lat?.toFixed(2)}, ${r.geo_lng?.toFixed(2)}`
@@ -178,6 +193,11 @@ export function RunnersPage() {
 									{geoEdit === r.id && (
 										<div className="fgeo">
 											<GeoEditor runner={r} onDone={() => setGeoEdit(null)} />
+										</div>
+									)}
+									{iconEdit === r.id && (
+										<div className="fgeo">
+											<IconEditor runner={r} onDone={() => setIconEdit(null)} />
 										</div>
 									)}
 								</div>
@@ -320,6 +340,51 @@ function GeoEditor({ runner, onDone }: { runner: Runner; onDone: () => void }) {
 					? `auto via ${runner.geo_ip}`
 					: "manual wins over auto"}
 			</span>
+		</form>
+	);
+}
+
+// IconEditor sets the runner's glyph: an emoji, a short label, or an image
+// URL/path. Empty restores the default marker.
+function IconEditor({ runner, onDone }: { runner: Runner; onDone: () => void }) {
+	const qc = useQueryClient();
+	const save = useMutation({
+		mutationFn: (icon: string) => api.patch(`/runners/${runner.id}`, { icon }),
+		onSuccess: () => {
+			qc.invalidateQueries({ queryKey: ["runners"] });
+			onDone();
+		},
+	});
+	const submit = (e: FormEvent<HTMLFormElement>) => {
+		e.preventDefault();
+		save.mutate(String(new FormData(e.currentTarget).get("icon")).trim());
+	};
+	return (
+		<form onSubmit={submit} className="ml-[23px] mt-2 flex flex-wrap items-center gap-2">
+			<span className="text-[11px] text-[var(--faint)]">icon</span>
+			<RunnerIcon icon={runner.icon} className="rricon rrname" />
+			<Input
+				name="icon"
+				placeholder="emoji like 🚀 — or an image URL/path"
+				defaultValue={runner.icon}
+				className="w-64"
+			/>
+			<Button type="submit" variant="primary" size="sm" disabled={save.isPending}>
+				Save
+			</Button>
+			<Button
+				type="button"
+				size="sm"
+				variant="ghost"
+				disabled={save.isPending || !runner.icon}
+				onClick={() => save.mutate("")}
+			>
+				Clear
+			</Button>
+			<Button type="button" size="sm" variant="ghost" onClick={onDone}>
+				Cancel
+			</Button>
+			{save.error && <span className="text-xs text-[var(--err)]">{save.error.message}</span>}
 		</form>
 	);
 }
