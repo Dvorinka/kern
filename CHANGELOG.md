@@ -5,6 +5,36 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 
 ## [Unreleased]
 
+## [v0.6.0] - 2026-11-08
+
+### Added
+- CLI parity: `kern doctor` (health/readiness + authenticated probes),
+  `kern diagnose` (pasteable run/runner/failed-log bundle), `kern migrate`
+  (import GitHub workflows into a project), `kern logs` alias with
+  `-f`/`--follow` (#68, #128).
+- `kern hooks install` generates a git pre-push hook that runs
+  `kern lint` offline; `--dry-run`/`--force`, refuses overwrite (#70, #131).
+- MCP server coverage: run lifecycle (trigger/rerun/cancel/approve),
+  project detail, offset-paged step logs, runner list + drain, secret
+  list — scope and role gates mirror the HTTP routes (#69, #129).
+- workflow_dispatch inputs, release + repository_dispatch + workflow_run
+  events, tags/paths push filters, case-insensitive repo matching,
+  workflow_call reusable workflows, concurrency groups (#107-#122 range).
+- Windows + macOS host runners live; docker-in-job routing via
+  kern-docker host executors; fleet wake-on-demand controls, runner
+  self-update opt-in, enroll one-liner (#105-#125 range).
+
+### Fixed
+- Boolean CLI flags no longer demand a value (`parseFlagsEx`).
+- Runner self-update no longer inherits the heartbeat's request context
+  (v0.5.1); signed-manifest fetch falls back to the API release-asset
+  endpoint on CDN 504s.
+- GitHub App: installation permission cache expires after 15m;
+  manifest requests `contents:write`.
+- Deploy: fail loudly when KERN_DEFAULT_IMAGE is unset; updater binds
+  /opt/kern dir, not the .env file.
+
+
 ## [v0.5.1] - 2026-11-08
 
 ### Fixed
