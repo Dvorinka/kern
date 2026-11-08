@@ -32,6 +32,7 @@ Config:
 
 Projects:
   projects list|show|create|sync|workflows
+  migrate <owner/name|github-url>        import workflows into a new/existing project
 
 Runs:
   runs list [--status S] [--limit N]
@@ -40,6 +41,9 @@ Runs:
   runs cancel|approve|rerun <run-id>
   runs logs <run-id> [--job KEY] [--step N] [--follow]
   runs remediate <job-id> --step N        approve a remediation proposal
+  logs <run-id> [-f]                      alias for runs logs; -f follows
+  diagnose <run-id> [--tail N] [--job K]  pasteable failure bundle
+  doctor                                  control-plane + fleet health check
 
 Remote offload:
   exec <workflow> [--dir DIR] [--pull DIR] [--ref R] [--sha S]
@@ -172,6 +176,14 @@ func dispatch(c *cli, args []string) int {
 		err = c.cmdProjects(ctx, rest)
 	case "runs":
 		err = c.cmdRuns(ctx, rest)
+	case "logs":
+		err = c.cmdRuns(ctx, append([]string{"logs"}, rest...))
+	case "diagnose":
+		err = c.cmdDiagnose(ctx, rest)
+	case "doctor":
+		err = c.cmdDoctor(ctx, rest)
+	case "migrate":
+		err = c.cmdMigrate(ctx, rest)
 	case "runners":
 		err = c.cmdRunners(ctx, rest)
 	case "artifacts":
