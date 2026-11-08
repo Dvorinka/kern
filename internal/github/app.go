@@ -33,6 +33,7 @@ type App struct {
 	mu       sync.Mutex
 	inst     map[string]int64             // "owner/repo" -> installation id
 	instPerm map[string]map[string]string // "owner/repo" -> granted permissions
+	instAt   map[string]time.Time         // "owner/repo" -> when inst/instPerm were fetched
 	toks     map[int64]instToken          // installation id -> cached token
 }
 
@@ -55,7 +56,8 @@ func NewApp(id, privateKeyPEM, apiBase string) (*App, error) {
 		id: id, key: key, base: strings.TrimRight(apiBase, "/"),
 		http: &http.Client{Timeout: 15 * time.Second},
 		inst: make(map[string]int64), instPerm: make(map[string]map[string]string),
-		toks: make(map[int64]instToken),
+		instAt: make(map[string]time.Time),
+		toks:   make(map[int64]instToken),
 	}, nil
 }
 
@@ -147,11 +149,15 @@ func (a *App) doBody(ctx context.Context, method, path string, body any, out any
 }
 
 // installation resolves a repo to its app installation id and the permission
-// set the installation grants, cached for the process lifetime (installations
-// rarely change).
+// set the installation grants. The pair is cached for instCacheTTL — long
+// enough to keep token mints cheap, short enough that an installation
+// permission upgrade reaches RunToken without an api restart (a lifetime
+// cache once pinned a repo to contents:read for hours after the upgrade).
+const instCacheTTL = 15 * time.Minute
+
 func (a *App) installation(ctx context.Context, repo string) (int64, map[string]string, error) {
 	a.mu.Lock()
-	if id, ok := a.inst[repo]; ok {
+	if id, ok := a.inst[repo]; ok && time.Since(a.instAt[repo]) < instCacheTTL {
 		perms := a.instPerm[repo]
 		a.mu.Unlock()
 		return id, perms, nil
@@ -167,12 +173,13 @@ func (a *App) installation(ctx context.Context, repo string) (int64, map[string]
 	a.mu.Lock()
 	a.inst[repo] = out.ID
 	a.instPerm[repo] = out.Permissions
+	a.instAt[repo] = time.Now()
 	a.mu.Unlock()
 	return out.ID, out.Permissions, nil
 }
 
-// InstallationID resolves a repo to its app installation, cached for the
-// process lifetime (installations rarely change).
+// InstallationID resolves a repo to its app installation, cached for
+// instCacheTTL alongside the permission set.
 func (a *App) InstallationID(ctx context.Context, repo string) (int64, error) {
 	id, _, err := a.installation(ctx, repo)
 	return id, err
