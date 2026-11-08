@@ -224,6 +224,9 @@ func TestOrphanedContainers(t *testing.T) {
 }
 
 func TestPersistGitPushAuth(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not in PATH")
+	}
 	ws := t.TempDir()
 	if out, err := exec.Command("git", "-C", ws, "init", "-q").CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v %s", err, out)
