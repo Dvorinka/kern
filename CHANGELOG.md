@@ -5,6 +5,16 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 
 ## [Unreleased]
 
+### Fixed
+- Update checks no longer inherit the caller's request context: a runner
+  heartbeat's ~5s client budget could cancel the release fetch mid-flight
+  and cache `context canceled` for a full hour, permanently starving the
+  auto-update plan. Failed checks now also cache for 5 minutes instead
+  of an hour.
+- Signed-manifest download falls back to the `api.github.com` release-asset
+  endpoint when the browser download URL fails — the release CDN serves
+  cached 504s in bursts (same fallback the runner image already uses).
+
 ## [v0.5.0] - 2026-11-08
 
 ### Added
