@@ -110,7 +110,9 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${KERN_SRC:-/opt/kern/src}:/opt/kern/src
-      - ${KERN_ENV_FILE:-/opt/kern/.env}:/opt/kern/.env:ro
+      # dir bind, not the file: a replaced .env (new inode) must stay live.
+      # A custom KERN_ENV_FILE outside /opt/kern needs its own mount.
+      - /opt/kern:/opt/kern:ro
     depends_on:
       - api
     restart: unless-stopped
