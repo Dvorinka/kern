@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -684,13 +685,34 @@ func (e *executor) checkout(ctx context.Context) error {
 		return nil
 	}
 	if run.SHA != "" {
-		return git("checkout", "--force", run.SHA)
-	}
-	if branch := strings.TrimPrefix(run.Ref, "refs/heads/"); branch != "" && branch != run.Ref {
+		if err := git("checkout", "--force", run.SHA); err != nil {
+			return err
+		}
+	} else if branch := strings.TrimPrefix(run.Ref, "refs/heads/"); branch != "" && branch != run.Ref {
 		// A refless clone lands on HEAD; align it with the run branch best effort.
 		_ = exec.CommandContext(ctx, "git", "-C", ws, "checkout", "--force", branch).Run()
 	}
+	e.persistGitPushAuth(ctx, ws)
 	return nil
+}
+
+// persistGitPushAuth mirrors actions/checkout: on trust tiers that receive a
+// GITHUB_TOKEN, the per-run token is written to the clone's http.extraheader
+// so `git push` authenticates like on GitHub-hosted runners. Fork and
+// pull_request runs never get a GitHubToken, so nothing is persisted for
+// them — untrusted work cannot push even if it tries.
+func (e *executor) persistGitPushAuth(ctx context.Context, ws string) {
+	run := e.claim.Run
+	if run.GitHubToken == "" || run.RepoURL == "" {
+		return
+	}
+	u, err := url.Parse(run.RepoURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return
+	}
+	basic := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + run.GitHubToken))
+	key := "http." + u.Scheme + "://" + u.Host + "/.extraheader"
+	_ = exec.CommandContext(ctx, "git", "-C", ws, "config", key, "AUTHORIZATION: basic "+basic).Run()
 }
 
 // cloneArgs builds the git command line. A clone token rides an extra header
