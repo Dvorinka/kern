@@ -149,4 +149,10 @@ func TestEnvAndGitHubRef(t *testing.T) {
 	if gh["ref"] != "refs/heads/master" || gh["ref_name"] != "master" {
 		t.Fatalf("empty ref = %#v", gh)
 	}
+
+	tagged := store.Run{Event: "push", Ref: "refs/tags/v1.2.3", SHA: "def", Actor: "octo"}
+	gh = githubContext(tagged, project, job)
+	if gh["ref_name"] != "v1.2.3" || gh["ref_type"] != "tag" || gh["ref"] != "refs/tags/v1.2.3" {
+		t.Fatalf("tag ref = %#v", gh)
+	}
 }

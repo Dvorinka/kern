@@ -611,11 +611,16 @@ func githubContext(run store.Run, project store.Project, job store.Job) map[stri
 		owner = project.Slug
 	}
 	refName := strings.TrimPrefix(run.Ref, "refs/heads/")
+	refType := "branch"
+	if strings.HasPrefix(run.Ref, "refs/tags/") {
+		refName = strings.TrimPrefix(run.Ref, "refs/tags/")
+		refType = "tag"
+	}
 	ctx := map[string]any{
 		"event_name":       run.Event,
 		"ref":              run.Ref,
 		"ref_name":         refName,
-		"ref_type":         "branch",
+		"ref_type":         refType,
 		"sha":              run.SHA,
 		"run_id":           run.ID.String(),
 		"run_number":       float64(run.RunNumber),
