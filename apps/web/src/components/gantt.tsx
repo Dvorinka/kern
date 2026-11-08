@@ -38,6 +38,7 @@ interface Lane {
 	en: number | null;
 	running: boolean;
 	failed: boolean;
+	cancelled: boolean;
 	skipped: boolean;
 	waiting: boolean;
 }
@@ -73,24 +74,27 @@ export function RunGantt({
 		const st = j.started_at ? Date.parse(j.started_at) : null;
 		const en = j.completed_at ? Date.parse(j.completed_at) : live ? now : st;
 		const running = j.status === "in_progress" || j.status === "waiting";
-		const failed = j.conclusion === "failure" || j.status === "cancelled";
-		const skipped = j.status === "skipped" || j.status === "cancelled";
-		const waiting = st == null && !skipped;
-		return { j, qs, st, en, running, failed, skipped, waiting };
+		const failed = j.conclusion === "failure";
+		const cancelled = j.status === "cancelled" || j.conclusion === "cancelled";
+		const skipped = j.status === "skipped";
+		const waiting = st == null && !skipped && !cancelled;
+		return { j, qs, st, en, running, failed, skipped, waiting, cancelled };
 	});
 
 	const elapsed = now - t0;
 	const flagHide = totalMs * 0.085;
 
-	const laneSub = ({ j, waiting, skipped }: Lane): string => {
+	const laneSub = ({ j, waiting, skipped, cancelled }: Lane): string => {
 		if (skipped) return "did not run";
+		if (cancelled) return "cancelled";
 		if (j.status === "waiting_approval") return "needs an approval";
 		if (waiting) return j.needs.length ? `waiting for ${j.needs.join(", ")}` : "queued";
 		return j.runner_id ? (runners.get(j.runner_id) ?? "runner") : "unassigned";
 	};
 
-	const laneDur = ({ j, st, running, failed, skipped, waiting }: Lane) => {
+	const laneDur = ({ j, st, running, failed, skipped, waiting, cancelled }: Lane) => {
 		if (skipped) return <b className="mute">skipped</b>;
+		if (cancelled) return <b className="mute">cancelled</b>;
 		if (waiting) return <b className="mute">{j.status === "waiting_approval" ? "approval" : "waiting"}</b>;
 		if (running) return <b className="live">{mmss(now - st!)}</b>;
 		if (failed)
@@ -203,7 +207,15 @@ export function RunGantt({
 							</svg>
 							{laneData.map((l) => (
 								<div className="lane" style={{ height: LH }} key={l.j.id}>
-									{l.skipped ? null : l.st == null ? (
+									{l.skipped ? null : l.cancelled ? (
+										<i
+											className="bar q"
+											style={{
+												left: `${pct(l.st ?? l.qs)}%`,
+												width: `${Math.max(0.6, pct(l.en ?? now) - pct(l.st ?? l.qs))}%`,
+											}}
+										/>
+									) : l.st == null ? (
 										<i
 											className="bar q"
 											style={{ left: `${pct(l.qs)}%`, width: `${Math.max(1.5, pct(now) - pct(l.qs))}%` }}
@@ -211,7 +223,7 @@ export function RunGantt({
 									) : (
 										<>
 											<i
-												className={`bar pat-${jobHue(l.j.job_key || l.j.name)}`}
+												className={`bar pat-${jobHue(l.j.job_key || l.j.name)}${l.running ? " run" : ""}${l.failed ? " fail" : ""}`}
 												style={{
 													left: `${pct(l.st)}%`,
 													width: `${Math.max(0.6, pct(l.en ?? now) - pct(l.st))}%`,
