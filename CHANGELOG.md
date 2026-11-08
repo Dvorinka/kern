@@ -3,6 +3,81 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
+## [Unreleased]
+
+### Added
+- Runner icons: emoji, text, image URL/path per runner, editable by admins,
+  rendered across runner lists and run views (#93).
+- Project icon auto-discovery: `GET /projects/{project}/icons` ranks likely
+  image candidates from repo source (local checkout or GitHub contents API)
+  and `GET /projects/{project}/icon` serves the chosen file (#93).
+
+### Fixed
+- Content Security Policy: theme bootstrap moved out of inline script,
+  `form-action` allows the GitHub App manifest flow, Cloudflare Insights
+  beacon handled explicitly — GitHub connect and repo icons unblocked (#92).
+
+### Changed
+- Fleet map: real Natural Earth land geometry under the dot matrix, zoom to
+  country scale with cursor-centered zoom and clamped pan (#94).
+- Dashboard honesty pass: queued/waiting states render gray and dashed,
+  running/failure/success carry distinct colors across gantt, fingerprint
+  and timeline; runs list rows show a hover preview card with quick
+  rerun/cancel actions; projects grid is responsive with bounded metrics;
+  runs-per-day tooltip adds totals, failures, cancellations and per-project
+  breakdown; activity grid gains month labels and a cancelled state;
+  time-by-project donut is interactive (#95).
+
+## [v0.4.2] - 2026-11-08
+
+### Added
+- Security isolation: verified egress allowlist for job containers, JIT
+  single-job runner registration, and scoped `GITHUB_TOKEN` per job (#81).
+- Org governance surface: observability endpoints, audit and member
+  management polish, project `pr_trust` setting that promotes same-repo PR
+  runs to trusted (#79, #82).
+- Workflow-command annotations (`::error::`, `::notice::`, …) surfaced on
+  steps in the UI (#83).
+- GitHub Actions compatibility tail: remaining expression/context and
+  workflow features (#84).
+- Host executor mode for runners plus honest platform labels — jobs can run
+  natively on the host instead of inside Docker (#86).
+- Web console port and project icons with dashboard interactivity (#78).
+
+### Fixed
+- Atomic artifact quota enforcement — concurrent uploads can no longer race
+  past the limit (#85).
+- Scheduler cost, runner disk hygiene, action cache and metrics-series
+  improvements (#80).
+- Bounded persistent runner cache with LRU eviction
+  (`KERN_RUNNER_CACHE_MAX_BYTES`), prune deferral with `reclaimed_bytes`
+  logging, and `deployments/ci-cleanup.sh` for host-side Docker hygiene
+  including orphaned buildx state volumes (#88).
+- macOS VM autoscaler no longer shuts down a manually started VM on a stale
+  idle stamp (#90).
+- Client-disconnect contexts (runner heartbeat timeouts) no longer logged as
+  request failures (#91).
+
+### Verified
+- Live egress, ephemeral-runner and restore-drill evidence documented
+  (#87); native macOS runner lifecycle proven end to end on a Proxmox VM —
+  scaler starts the VM on queued `runs-on: macos` work, launchd runner
+  executes the job, VM powers off after idle.
+
+## [v0.4.1] - 2026-11-07
+
+### Fixed
+- Host-published service ports are serialized per runner — concurrent jobs
+  can no longer collide on the same host port (#76).
+
+### Changed
+- CI lanes moved to self-hosted runners; GitHub-hosted runners are no longer
+  used (#75).
+
+### Performance
+- Playwright browsers are cached across jobs; fake run axis removed from
+  charts (#77).
+
 ## [v0.4.0] - 2026-11-07
 
 ### Added
