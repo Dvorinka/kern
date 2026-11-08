@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# macos-vm-scaler — power a Proxmox macOS VM on demand for KERN `runs-on: macos`
+# macos-vm-scaler — DEPRECATED single-group scaler, kept for the deployed
+# Nab9 timer. New deployments should use deployments/vm-scaler.sh, which
+# generalizes this to any number of provider-defined groups.
+#
+# power a Proxmox macOS VM on demand for KERN `runs-on: macos`
 # work. Runs on the Proxmox host (Nab9) from a systemd timer, e.g. every minute.
 #
 #   KERN_MAC_VMID=904            Proxmox VM id
