@@ -1,18 +1,7 @@
 name: disk-diag
-on:
-  workflow_dispatch
-  push:
-    branches: [diag/disk-usage]
+on: [push, workflow_dispatch]
 jobs:
   diag:
-    runs-on: [self-hosted, linux, x64, lxc-902]
+    runs-on: ubuntu-latest
     steps:
-      - name: disk usage
-        run: |
-          df -h / | tail -1
-          echo "=== top-level ==="
-          du -xh --max-depth=1 / 2>/dev/null | sort -rh | head -12
-          echo "=== deep ==="
-          for d in /home /data /var /opt /root /srv /kern /actions-runner /_work; do
-            [ -d "$d" ] && du -xh --max-depth=2 "$d" 2>/dev/null | sort -rh | head -8
-          done
+      - run: echo hello
