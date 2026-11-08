@@ -328,6 +328,22 @@ paths:
       responses:
         "200": { description: Image bytes }
         "404": { $ref: "#/components/responses/Error" }
+  /projects/{project}/icons:
+    get:
+      tags: [projects]
+      summary: Discovered project icon candidates, best first
+      parameters: [{ $ref: "#/components/parameters/Project" }]
+      responses:
+        "200":
+          description: Icon candidates
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  icons: { type: array, items: { type: string } }
+                  icon_path: { type: string }
+                  source: { type: string, enum: [local, github] }
   /projects/{project}/workflows:
     get:
       tags: [projects]
@@ -523,6 +539,22 @@ paths:
       responses:
         "200": { description: Updated }
   /runners/{id}:
+    patch:
+      tags: [runners]
+      summary: Edit runner presentation fields (admin)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [icon]
+              properties:
+                icon:
+                  type: string
+                  description: Emoji or image URL/path; empty restores the default marker
+      responses:
+        "200": { description: Updated }
     delete:
       tags: [runners]
       summary: Delete a runner (admin)
@@ -1153,6 +1185,7 @@ components:
         labels: { type: array, items: { type: string } }
         last_seen_at: { type: string, format: date-time, nullable: true }
         draining: { type: boolean }
+        icon: { type: string }
         created_at: { type: string, format: date-time }
     SecretSummary:
       type: object

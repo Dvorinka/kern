@@ -252,9 +252,20 @@ export function ProjectDetailPage() {
 				artifact_bytes?: number;
 			}>(`/projects/${slug}/settings`),
 	});
+	const { data: iconScan } = useQuery({
+		queryKey: ["project-icons", slug],
+		queryFn: () =>
+			api.get<{ icons: string[]; icon_path: string; source: string }>(
+				`/projects/${slug}/icons`,
+			),
+		staleTime: 60_000,
+	});
 	const setIcon = useMutation({
 		mutationFn: (v: string) => api.put(`/projects/${slug}/settings`, { icon_path: v }),
-		onSuccess: () => qc.invalidateQueries({ queryKey: ["project-settings", slug] }),
+		onSuccess: () => {
+			qc.invalidateQueries({ queryKey: ["project-settings", slug] });
+			qc.invalidateQueries({ queryKey: ["project-icons", slug] });
+		},
 	});
 	const { data: runsData } = useQuery({
 		queryKey: ["runs", "all"],
@@ -354,6 +365,7 @@ export function ProjectDetailPage() {
 								<input
 									className="h-7 w-44 rounded-lg border border-[var(--ctl)] bg-transparent px-2 font-mono text-[11px]"
 									placeholder="logo.png — path in repo"
+									list={`icon-list-${slug}`}
 									defaultValue={psettings?.icon_path ?? ""}
 									onKeyDown={(e) => {
 										if (e.key === "Enter") setIcon.mutate((e.target as HTMLInputElement).value.trim());
@@ -363,6 +375,20 @@ export function ProjectDetailPage() {
 											setIcon.mutate(e.target.value.trim());
 									}}
 								/>
+								<datalist id={`icon-list-${slug}`}>
+									{(iconScan?.icons ?? []).map((i) => (
+										<option key={i} value={i} />
+									))}
+								</datalist>
+								{iconScan && iconScan.icons.length > 0 && (
+									<span
+										className="text-[10px] text-[var(--faint)]"
+										title={iconScan.icons.slice(0, 12).join("\n")}
+									>
+										{iconScan.icons.length} image{iconScan.icons.length === 1 ? "" : "s"} found
+										{!psettings?.icon_path && iconScan.icons[0] ? ` · auto: ${iconScan.icons[0]}` : ""}
+									</span>
+								)}
 								{setIcon.isPending && <span className="text-[10px] text-[var(--faint)]">saving…</span>}
 							</span>
 						}

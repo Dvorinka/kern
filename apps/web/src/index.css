@@ -2356,6 +2356,14 @@ dl.rkv dd {
 .fm-dot {
 	fill: var(--mapdot);
 }
+.fm-landpath {
+	fill: var(--mapdot);
+}
+.fm-grat {
+	fill: none;
+	stroke: var(--line2);
+	stroke-width: 0.6;
+}
 .fm-hub {
 	fill: var(--ink);
 }
@@ -2368,7 +2376,6 @@ dl.rkv dd {
 .fm-arc {
 	fill: none;
 	stroke: var(--ink);
-	stroke-width: 2;
 	stroke-linecap: round;
 }
 .fm-arc-idle {
@@ -3140,6 +3147,41 @@ dl.rkv dd {
 	font-weight: 700;
 	color: var(--faint);
 	align-self: center;
+}
+
+/* runner icon glyphs — emoji/text or a small contained image */
+.rricon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 20px;
+	height: 20px;
+	font-size: 14px;
+	line-height: 1;
+	flex: none;
+}
+.rrimg {
+	object-fit: contain;
+	border-radius: 5px;
+}
+.rrname {
+	width: 24px;
+	height: 24px;
+	font-size: 17px;
+}
+.rrname.rrimg {
+	width: 24px;
+	height: 24px;
+}
+.rrsm {
+	width: 15px;
+	height: 15px;
+	font-size: 11px;
+}
+.rrsm.rrimg {
+	width: 15px;
+	height: 15px;
+	border-radius: 4px;
 }
 
 /* runs list day groups + row actions + fleet sidebar */

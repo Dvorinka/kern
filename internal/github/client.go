@@ -107,8 +107,15 @@ type WorkflowFile struct {
 	Name string
 }
 
-// ListWorkflowFiles returns workflow file paths under .github/workflows at ref.
-func (c *Client) ListWorkflowFiles(ctx context.Context, repo, ref string) ([]WorkflowFile, error) {
+// TreeEntry is one node from a recursive git-tree listing.
+type TreeEntry struct {
+	Path string
+	Type string
+}
+
+// TreeEntries lists every blob/tree path under the repo at ref via the git
+// trees API — one call covers the whole checkout.
+func (c *Client) TreeEntries(ctx context.Context, repo, ref string) ([]TreeEntry, error) {
 	var out struct {
 		Tree []struct {
 			Path string `json:"path"`
@@ -118,8 +125,21 @@ func (c *Client) ListWorkflowFiles(ctx context.Context, repo, ref string) ([]Wor
 	if err := c.do(ctx, http.MethodGet, "/repos/"+repo+"/git/trees/"+ref+"?recursive=1", "", nil, &out); err != nil {
 		return nil, err
 	}
-	var files []WorkflowFile
+	entries := make([]TreeEntry, 0, len(out.Tree))
 	for _, e := range out.Tree {
+		entries = append(entries, TreeEntry{Path: e.Path, Type: e.Type})
+	}
+	return entries, nil
+}
+
+// ListWorkflowFiles returns workflow file paths under .github/workflows at ref.
+func (c *Client) ListWorkflowFiles(ctx context.Context, repo, ref string) ([]WorkflowFile, error) {
+	entries, err := c.TreeEntries(ctx, repo, ref)
+	if err != nil {
+		return nil, err
+	}
+	var files []WorkflowFile
+	for _, e := range entries {
 		if e.Type != "blob" || !strings.HasPrefix(e.Path, ".github/workflows/") {
 			continue
 		}

@@ -4,7 +4,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import { RotateCcw, X } from "lucide-react";
 import { api } from "../lib/api";
 import type { Job, OverviewResponse, Run, Runner } from "../lib/types";
-import { PageHeader, Spinner, cn } from "../components/ui";
+import { PageHeader, RunnerIcon, Spinner, cn } from "../components/ui";
 import { StatusPill, StatusSq } from "../components/status";
 import { Fingerprint, jobHue, useRunDetails } from "../components/fingerprint";
 import { bytes, duration, projectColor, refName, relTime, shortSha } from "../lib/format";
@@ -241,6 +241,7 @@ export function RunsPage() {
 								onClick={() => nav("/runners")}
 							>
 								<StatusSq status={r.active_jobs ? "in_progress" : r.status} />
+								<RunnerIcon icon={r.icon} className="rricon rrsm" />
 								<span className="min-w-0 flex-1 truncate text-[12.5px] font-medium">
 									{r.name}
 								</span>
