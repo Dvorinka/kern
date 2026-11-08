@@ -24,6 +24,7 @@ const SECTIONS: { id: string; label: string }[] = [
 	{ id: "s-public", label: "Public runs" },
 	{ id: "s-heal", label: "Self-heal" },
 	{ id: "s-auto", label: "Auto-update" },
+	{ id: "s-wake", label: "Wake on demand" },
 	{ id: "s-members", label: "Members" },
 	{ id: "s-sessions", label: "Sessions" },
 	{ id: "s-notify", label: "Notifications" },
@@ -58,6 +59,7 @@ export function SettingsPage() {
 			<div id="s-public"><PublicCICard /></div>
 			<div id="s-heal"><SelfHealCard /></div>
 			<div id="s-auto"><AutoUpdateCard /></div>
+			<div id="s-wake"><WakeOnDemandCard /></div>
 			<div id="s-members"><MembersCard /></div>
 			<div id="s-sessions"><SessionsCard /></div>
 			<div id="s-notify"><NotifyCard /></div>
@@ -349,6 +351,48 @@ function AutoUpdateCard() {
 			</Row>
 			{setAuto.error && (
 				<div className="px-4 py-2 text-xs text-[var(--err)]">{setAuto.error.message}</div>
+			)}
+		</Card>
+	);
+}
+
+function WakeOnDemandCard() {
+	const qc = useQueryClient();
+	const { data } = useQuery({
+		queryKey: ["settings"],
+		queryFn: () =>
+			api.get<{ runner_autostart: string }>("/settings"),
+	});
+	const setWake = useMutation({
+		mutationFn: (v: string) => api.put("/settings", { runner_autostart: v }),
+		onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
+	});
+	return (
+		<Card className="mb-4">
+			<CardHeader
+				title="Wake on demand"
+				sub="fleet-wide kill-switch for external scalers (deployments/vm-scaler.sh)"
+			/>
+			<Row>
+				<span className="min-w-0 flex-1 text-xs text-[var(--dim)]">
+					When on, a host-side scaler may power runner hosts up for queued work and back
+					down when idle. When off, no host is ever started. Per-runner{" "}
+					<span className="font-mono">wake_on_demand</span> toggles on the runners page opt
+					individual hosts out — currently only macos-904 (VM904 on Nab9) is scaler-backed.
+				</span>
+				<select
+					className="fsel"
+					aria-label="Wake on demand"
+					value={data?.runner_autostart ?? "on"}
+					disabled={setWake.isPending}
+					onChange={(e) => setWake.mutate(e.target.value)}
+				>
+					<option value="on">on</option>
+					<option value="off">off</option>
+				</select>
+			</Row>
+			{setWake.error && (
+				<div className="px-4 py-2 text-xs text-[var(--err)]">{setWake.error.message}</div>
 			)}
 		</Card>
 	);

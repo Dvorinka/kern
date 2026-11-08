@@ -91,8 +91,9 @@ while true; do
 		continue
 	fi
 	# Same working directory as the operator recipe, so the compose project
-	# name stays "deployments". The updater service is not in this command.
-	if ! (cd "$SRC/deployments" && KERN_VERSION="$ver" docker compose --env-file "$ENV_FILE" up -d --build --no-deps api runner); then
+	# name stays "deployments". The updater service is not in this command,
+	# and neither is the profile-gated runner service.
+	if ! (cd "$SRC/deployments" && KERN_VERSION="$ver" docker compose --env-file "$ENV_FILE" up -d --build --no-deps api); then
 		post error "compose up failed" "$ver"
 		sleep 30
 		continue

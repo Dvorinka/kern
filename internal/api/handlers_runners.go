@@ -64,11 +64,14 @@ func (s *Server) drainRunner(c *gin.Context) {
 }
 
 type runnerPatchRequest struct {
-	Icon *string `json:"icon"`
+	Icon         *string `json:"icon"`
+	WakeOnDemand *bool   `json:"wake_on_demand"`
 }
 
-// patchRunner edits runner presentation fields. Today that's the operator
-// icon — an emoji or an image URL/path; "" restores the default marker.
+// patchRunner edits runner presentation and fleet-policy fields: the
+// operator icon (an emoji or an image URL/path; "" restores the default
+// marker) and wake_on_demand, which tells external scalers whether this
+// runner's host may be powered on for queued work.
 func (s *Server) patchRunner(c *gin.Context) {
 	user, _ := currentUser(c)
 	id, err := uuid.Parse(c.Param("id"))
@@ -77,21 +80,30 @@ func (s *Server) patchRunner(c *gin.Context) {
 		return
 	}
 	var req runnerPatchRequest
-	if err := c.ShouldBindJSON(&req); err != nil || req.Icon == nil {
-		fail(c, http.StatusBadRequest, "invalid_body", "icon is required")
+	if err := c.ShouldBindJSON(&req); err != nil || (req.Icon == nil && req.WakeOnDemand == nil) {
+		fail(c, http.StatusBadRequest, "invalid_body", "icon or wake_on_demand is required")
 		return
 	}
-	icon := strings.TrimSpace(*req.Icon)
-	if len(icon) > 500 || strings.ContainsAny(icon, "\x00\r\n") {
-		fail(c, http.StatusBadRequest, "invalid_body", "icon must be an emoji or an image URL/path (max 500 chars)")
-		return
+	if req.Icon != nil {
+		icon := strings.TrimSpace(*req.Icon)
+		if len(icon) > 500 || strings.ContainsAny(icon, "\x00\r\n") {
+			fail(c, http.StatusBadRequest, "invalid_body", "icon must be an emoji or an image URL/path (max 500 chars)")
+			return
+		}
+		if err := s.Store.SetRunnerIcon(c.Request.Context(), user.OrgID, id, icon); err != nil {
+			s.internalError(c, err)
+			return
+		}
+		s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "runner.icon", id.String())
 	}
-	if err := s.Store.SetRunnerIcon(c.Request.Context(), user.OrgID, id, icon); err != nil {
-		s.internalError(c, err)
-		return
+	if req.WakeOnDemand != nil {
+		if err := s.Store.SetRunnerWakeOnDemand(c.Request.Context(), user.OrgID, id, *req.WakeOnDemand); err != nil {
+			s.internalError(c, err)
+			return
+		}
+		s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "runner.wake_on_demand", id.String())
 	}
-	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "runner.icon", id.String())
-	c.JSON(http.StatusOK, gin.H{"ok": true, "icon": icon})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "icon": req.Icon, "wake_on_demand": req.WakeOnDemand})
 }
 
 // autoUpdateRunner toggles the server-side self-update opt-in — the runner

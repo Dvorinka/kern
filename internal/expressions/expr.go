@@ -614,6 +614,18 @@ func accessOne(base any, key string) (any, bool) {
 // and unwraps to a plain []any at expression boundaries.
 type filteredArray struct{ items []any }
 
+// ListElements reports whether v is a list value — a plain array or a
+// filter result — and returns its elements.
+func ListElements(v any) ([]any, bool) {
+	switch t := v.(type) {
+	case []any:
+		return t, true
+	case filteredArray:
+		return t.items, true
+	}
+	return nil, false
+}
+
 func unwrap(v any) any {
 	if f, ok := v.(filteredArray); ok {
 		return f.items

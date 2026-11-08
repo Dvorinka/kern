@@ -235,7 +235,10 @@ type Runner struct {
 	Draining    bool      `json:"draining"`
 	// AutoUpdate is the server-side self-update opt-in — settable via API/CLI
 	// independent of the runner's local KERN_RUNNER_UPDATE env flag.
-	AutoUpdate      bool       `json:"auto_update"`
+	AutoUpdate bool `json:"auto_update"`
+	// WakeOnDemand marks the runner's host as safe for an external scaler
+	// (deployments/vm-scaler.sh) to power on for queued work. Advisory only.
+	WakeOnDemand    bool       `json:"wake_on_demand"`
 	Ephemeral       bool       `json:"ephemeral"`
 	LastHeartbeatAt *time.Time `json:"last_heartbeat_at"`
 	CPUPercent      *float64   `json:"cpu_percent"`

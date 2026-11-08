@@ -30,6 +30,35 @@ func readPassword(prompt string) (string, error) {
 	return strings.TrimRight(line, "\r\n"), nil
 }
 
+// cmdInstall is the first-run wizard: it asks for the server URL (defaulting
+// to the configured one), warns when a config already exists, then runs the
+// login flow to mint and save a token. Piped usage passes --server/--email/
+// --password like login.
+func (c *cli) cmdInstall(ctx context.Context, args []string) error {
+	opts, _ := parseFlags(args, "server", "email", "password", "name", "days", "project")
+	if (c.cfg.Server != "" || c.cfg.Token != "") && term.IsTerminal(int(os.Stdin.Fd())) {
+		fmt.Fprintf(os.Stderr, "config exists at %s (server %q) — overwrite? [y/N] ", configPath(), c.cfg.Server)
+		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "y") {
+			return fmt.Errorf("aborted")
+		}
+	}
+	server := opts["server"]
+	if server == "" {
+		server = c.cfg.Server
+	}
+	if server == "" && term.IsTerminal(int(os.Stdin.Fd())) {
+		fmt.Fprint(os.Stderr, "server URL: ")
+		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		server = strings.TrimSpace(line)
+	}
+	if server == "" {
+		return fmt.Errorf("server URL is required — pass --server")
+	}
+	// Hand the resolved server to login; an explicit --server in args still wins.
+	return c.cmdLogin(ctx, append([]string{"--server", server}, args...))
+}
+
 // cmdLogin exchanges credentials for an API token via POST /auth/token and
 // saves it to the config file. No session cookie is involved.
 func (c *cli) cmdLogin(ctx context.Context, args []string) error {

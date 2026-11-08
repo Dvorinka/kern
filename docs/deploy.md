@@ -49,6 +49,9 @@ docker compose -f deployments/docker-compose.yml --env-file /opt/kern/.env up -d
 
 The compose file runs three services: `postgres`, `api` (serves the SPA and
 the API on :8080), `runner` (executes jobs; mounts the host docker socket).
+The `runner` service is behind the `runner` compose profile — a bare `up`
+starts only the control plane; add `--profile runner` (or
+`COMPOSE_PROFILES=runner`) on hosts that should also run jobs.
 
 Important detail: job bind mounts are resolved by the *host* docker daemon,
 so the runner's work root must be the same path inside and outside its
@@ -72,7 +75,7 @@ The API container cannot replace itself. Apply is a second process.
 2. Start the sidecar once: `docker compose -f deployments/docker-compose.yml --env-file /opt/kern/.env --profile update up -d`.
    It polls `GET /api/v1/update/plan` with the runner join token. When the
    plan says apply, it `git fetch`es the manifest's commit, fast-forwards
-   `master` only, and runs `docker compose up -d --build --no-deps api runner`
+   `master` only, and runs `docker compose up -d --build --no-deps api`
    from `deployments/` with `KERN_VERSION` set to the release tag. A dirty
    checkout or a non-fast-forward is reported and not forced.
 3. External runners (not the compose service) opt in with

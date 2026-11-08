@@ -5,14 +5,42 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 )
 
+// resolveRunner accepts a runner id, id prefix, or name and returns the row.
+func (c *cli) resolveRunner(ctx context.Context, arg string) (runnerRow, error) {
+	var out struct {
+		Runners []runnerRow `json:"runners"`
+	}
+	if err := c.api().get(ctx, "/runners", nil, &out); err != nil {
+		return runnerRow{}, err
+	}
+	var match *runnerRow
+	for i, r := range out.Runners {
+		if r.ID == arg || r.Name == arg {
+			return r, nil
+		}
+		if len(arg) >= 4 && strings.HasPrefix(r.ID, arg) {
+			if match != nil {
+				return runnerRow{}, fmt.Errorf("id prefix %q matches more than one runner", arg)
+			}
+			match = &out.Runners[i]
+		}
+	}
+	if match != nil {
+		return *match, nil
+	}
+	return runnerRow{}, fmt.Errorf("no runner named or matching %q", arg)
+}
+
 func (c *cli) cmdRunners(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: kern runners list|drain|undrain|self-update|delete|enroll")
+		return fmt.Errorf("usage: kern runners list|drain|undrain|self-update|wake|install|delete|enroll")
 	}
 	if err := c.requireAuth(); err != nil {
 		return err
@@ -49,17 +77,21 @@ func (c *cli) cmdRunners(ctx context.Context, args []string) error {
 			table([]string{"ID", "NAME", "STATE", "JOBS", "CPU", "MEM", "DISK", "BEAT"}, rows)
 		})
 	case "drain", "undrain":
-		id, err := strarg(rest, 0, "runner id")
+		arg, err := strarg(rest, 0, "runner id|name")
 		if err != nil {
 			return err
 		}
-		if err := c.api().post(ctx, "/runners/"+id+"/drain",
+		r, err := c.resolveRunner(ctx, arg)
+		if err != nil {
+			return err
+		}
+		if err := c.api().post(ctx, "/runners/"+r.ID+"/drain",
 			map[string]any{"draining": sub == "drain"}, nil); err != nil {
 			return err
 		}
-		fmt.Println(sub + "ed")
+		fmt.Println(r.Name, sub+"ed")
 	case "self-update":
-		id, err := strarg(rest, 0, "runner id")
+		arg, err := strarg(rest, 0, "runner id|name")
 		if err != nil {
 			return err
 		}
@@ -70,20 +102,51 @@ func (c *cli) cmdRunners(ctx context.Context, args []string) error {
 		if on != "on" && on != "off" {
 			return fmt.Errorf("self-update takes on|off, got %q", on)
 		}
-		if err := c.api().post(ctx, "/runners/"+id+"/auto-update",
-			map[string]any{"enabled": on == "on"}, nil); err != nil {
-			return err
-		}
-		fmt.Printf("self-update %s\n", on)
-	case "delete":
-		id, err := strarg(rest, 0, "runner id")
+		r, err := c.resolveRunner(ctx, arg)
 		if err != nil {
 			return err
 		}
-		if err := c.api().del(ctx, "/runners/"+id); err != nil {
+		if err := c.api().post(ctx, "/runners/"+r.ID+"/auto-update",
+			map[string]any{"enabled": on == "on"}, nil); err != nil {
 			return err
 		}
-		fmt.Println("runner deleted")
+		fmt.Printf("%s self-update %s\n", r.Name, on)
+	case "wake":
+		arg, err := strarg(rest, 0, "runner id|name")
+		if err != nil {
+			return err
+		}
+		on, err := strarg(rest, 1, "on|off")
+		if err != nil {
+			return err
+		}
+		if on != "on" && on != "off" {
+			return fmt.Errorf("wake takes on|off, got %q", on)
+		}
+		r, err := c.resolveRunner(ctx, arg)
+		if err != nil {
+			return err
+		}
+		if err := c.api().patch(ctx, "/runners/"+r.ID,
+			map[string]any{"wake_on_demand": on == "on"}, nil); err != nil {
+			return err
+		}
+		fmt.Printf("%s wake_on_demand %s\n", r.Name, on)
+	case "install":
+		return c.runnerInstall(ctx, rest)
+	case "delete":
+		arg, err := strarg(rest, 0, "runner id|name")
+		if err != nil {
+			return err
+		}
+		r, err := c.resolveRunner(ctx, arg)
+		if err != nil {
+			return err
+		}
+		if err := c.api().del(ctx, "/runners/"+r.ID); err != nil {
+			return err
+		}
+		fmt.Println(r.Name, "deleted")
 	case "enroll":
 		opts, _ := parseFlags(rest, "name", "ttl")
 		var out struct {
@@ -109,6 +172,61 @@ func (c *cli) cmdRunners(ctx context.Context, args []string) error {
 	default:
 		return fmt.Errorf("unknown runners subcommand %q", sub)
 	}
+	return nil
+}
+
+// runnerInstall turns the local host into a runner: mint an enroll token,
+// run `kern-runner join` (register → env file → systemd user unit), then
+// enable and start the unit. Linux only — systemd is the contract.
+func (c *cli) runnerInstall(ctx context.Context, args []string) error {
+	if runtime.GOOS != "linux" {
+		return fmt.Errorf("runners install writes a systemd unit (linux only) — on Windows register a scheduled task per docs/porting.md, or use the docker one-liner from `kern runners enroll`")
+	}
+	opts, pos := parseFlags(args, "name", "labels", "ttl")
+	name := opts["name"]
+	if name == "" && len(pos) > 0 {
+		name = pos[0]
+	}
+	if name == "" {
+		host, _ := os.Hostname()
+		name = host
+	}
+	var out struct {
+		Token string `json:"token"`
+	}
+	if err := c.api().post(ctx, "/enroll-tokens", map[string]any{
+		"name": name, "ttl_minutes": atoi(opts["ttl"]),
+	}, &out); err != nil {
+		return err
+	}
+	exe, err := exec.LookPath("kern-runner")
+	if err != nil {
+		return fmt.Errorf("kern-runner not on PATH — install it from the release tarball (kern-<tag>-linux-%s.tar.gz) or use the docker one-liner from `kern runners enroll`", runtime.GOARCH)
+	}
+	join := []string{"join", "--control", c.server, "--token", out.Token, "--name", name}
+	if v := opts["labels"]; v != "" {
+		join = append(join, "--labels", v)
+	}
+	cmd := exec.Command(exe, join...)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("kern-runner join: %w", err)
+	}
+	for _, a := range [][]string{
+		{"--user", "daemon-reload"},
+		{"--user", "enable", "--now", "kern-runner"},
+	} {
+		sc := exec.Command("systemctl", a...)
+		sc.Stdout, sc.Stderr = os.Stdout, os.Stderr
+		if err := sc.Run(); err != nil {
+			return fmt.Errorf("systemctl %s: %w", strings.Join(a, " "), err)
+		}
+	}
+	// Without lingering, a user unit dies with the login session.
+	if err := exec.Command("loginctl", "enable-linger").Run(); err != nil {
+		fmt.Fprintln(os.Stderr, "kern: loginctl enable-linger failed — the unit stops at logout")
+	}
+	fmt.Println("runner installed and started")
 	return nil
 }
 
@@ -223,10 +341,11 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 	switch args[0] {
 	case "get":
 		var out struct {
-			SelfHeal   string `json:"self_heal"`
-			PublicCI   string `json:"public_ci"`
-			AutoUpdate string `json:"auto_update"`
-			ForkGate   string `json:"fork_gate"`
+			SelfHeal        string `json:"self_heal"`
+			PublicCI        string `json:"public_ci"`
+			AutoUpdate      string `json:"auto_update"`
+			RunnerAutostart string `json:"runner_autostart"`
+			ForkGate        string `json:"fork_gate"`
 		}
 		if err := c.api().get(ctx, path, nil, &out); err != nil {
 			return err
@@ -246,6 +365,11 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 					v = "off"
 				}
 				fmt.Println("auto_update:", v)
+				v = out.RunnerAutostart
+				if v == "" {
+					v = "on"
+				}
+				fmt.Println("runner_autostart:", v)
 			} else {
 				v := out.ForkGate
 				if v == "" {
@@ -278,6 +402,14 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 				return fmt.Errorf("usage: kern settings set auto_update on|off")
 			}
 			body["auto_update"] = pos[1]
+		case "runner_autostart":
+			if path != "/settings" {
+				return fmt.Errorf("runner_autostart is an org setting")
+			}
+			if pos[1] != "on" && pos[1] != "off" {
+				return fmt.Errorf("usage: kern settings set runner_autostart on|off")
+			}
+			body["runner_autostart"] = pos[1]
 		case "fork_gate":
 			if path == "/settings" {
 				return fmt.Errorf("fork_gate is a project setting — pass --project S")

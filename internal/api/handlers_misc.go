@@ -258,6 +258,7 @@ func (s *Server) getOrgSettings(c *gin.Context) {
 		"self_heal":         settingsValue(raw, "self_heal", "off"),
 		"public_ci":         settingsValue(raw, "public_ci", "off"),
 		"auto_update":       settingsValue(raw, "auto_update", "off"),
+		"runner_autostart":  settingsValue(raw, "runner_autostart", "on"),
 		"notify_url":        settingsValue(raw, "notify_url", ""),
 		"notify_secret_set": settingsValue(raw, "notify_secret", "") != "",
 		"notify_events":     settingsValue(raw, "notify_events", ""),
@@ -277,13 +278,14 @@ type settingsRequest struct {
 // orgSettingsRequest accepts either key. A self_heal-only body, which the
 // runners page sends, must keep working.
 type orgSettingsRequest struct {
-	SelfHeal     *string `json:"self_heal"`
-	PublicCI     *string `json:"public_ci"`
-	AutoUpdate   *string `json:"auto_update"`
-	NotifyURL    *string `json:"notify_url"`
-	NotifySecret *string `json:"notify_secret"`
-	NotifyEvents *string `json:"notify_events"`
-	NotifyFormat *string `json:"notify_format"`
+	SelfHeal        *string `json:"self_heal"`
+	PublicCI        *string `json:"public_ci"`
+	AutoUpdate      *string `json:"auto_update"`
+	RunnerAutostart *string `json:"runner_autostart"`
+	NotifyURL       *string `json:"notify_url"`
+	NotifySecret    *string `json:"notify_secret"`
+	NotifyEvents    *string `json:"notify_events"`
+	NotifyFormat    *string `json:"notify_format"`
 }
 
 var notifyConclusions = map[string]bool{
@@ -301,9 +303,9 @@ func validNotifyEvents(v string) bool {
 	return true
 }
 
-func orgSettingWrites(selfHeal, publicCI, autoUpdate, notifyURL, notifySecret, notifyEvents, notifyFormat *string) (map[string]string, string) {
-	if selfHeal == nil && publicCI == nil && autoUpdate == nil && notifyURL == nil && notifySecret == nil && notifyEvents == nil && notifyFormat == nil {
-		return nil, "self_heal, public_ci, auto_update, notify_url, notify_secret, notify_events or notify_format is required"
+func orgSettingWrites(selfHeal, publicCI, autoUpdate, runnerAutostart, notifyURL, notifySecret, notifyEvents, notifyFormat *string) (map[string]string, string) {
+	if selfHeal == nil && publicCI == nil && autoUpdate == nil && runnerAutostart == nil && notifyURL == nil && notifySecret == nil && notifyEvents == nil && notifyFormat == nil {
+		return nil, "self_heal, public_ci, auto_update, runner_autostart, notify_url, notify_secret, notify_events or notify_format is required"
 	}
 	out := map[string]string{}
 	if selfHeal != nil {
@@ -323,6 +325,12 @@ func orgSettingWrites(selfHeal, publicCI, autoUpdate, notifyURL, notifySecret, n
 			return nil, "auto_update must be on or off"
 		}
 		out["auto_update"] = *autoUpdate
+	}
+	if runnerAutostart != nil {
+		if *runnerAutostart != "on" && *runnerAutostart != "off" {
+			return nil, "runner_autostart must be on or off"
+		}
+		out["runner_autostart"] = *runnerAutostart
 	}
 	if notifyURL != nil {
 		v := strings.TrimSpace(*notifyURL)
@@ -357,7 +365,7 @@ func (s *Server) putOrgSettings(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_body", "self_heal, public_ci or auto_update is required")
 		return
 	}
-	writes, msg := orgSettingWrites(req.SelfHeal, req.PublicCI, req.AutoUpdate, req.NotifyURL, req.NotifySecret, req.NotifyEvents, req.NotifyFormat)
+	writes, msg := orgSettingWrites(req.SelfHeal, req.PublicCI, req.AutoUpdate, req.RunnerAutostart, req.NotifyURL, req.NotifySecret, req.NotifyEvents, req.NotifyFormat)
 	if msg != "" {
 		fail(c, http.StatusBadRequest, "invalid_body", msg)
 		return
