@@ -117,6 +117,105 @@ func TestPullRequestMatchesPlan(t *testing.T) {
 	}
 }
 
+func wrPlan(trigger map[string]any) *workflows.Plan {
+	return &workflows.Plan{
+		Events:   []string{"workflow_run"},
+		Triggers: map[string]any{"workflow_run": trigger},
+	}
+}
+
+func TestWorkflowRunMatchesPlan(t *testing.T) {
+	cases := []struct {
+		name       string
+		plan       *workflows.Plan
+		action     string
+		wfName     string
+		wfPath     string
+		headBranch string
+		want       bool
+		whyRe      string
+	}{
+		{"name hit", wrPlan(map[string]any{"workflows": []any{"Build"}, "types": []any{"completed"}}), "completed", "Build", ".github/workflows/build.yml", "main", true, ""},
+		{"name glob", wrPlan(map[string]any{"workflows": []any{"Build*"}, "types": []any{"completed"}}), "completed", "Build C++", "x.yml", "main", true, ""},
+		{"path hit", wrPlan(map[string]any{"workflows": []any{".github/workflows/ci.yml"}}), "completed", "CI", ".github/workflows/ci.yml", "main", true, ""},
+		{"name miss", wrPlan(map[string]any{"workflows": []any{"Build"}}), "completed", "Tests", "t.yml", "main", false, "not in workflows filter"},
+		{"types hit", wrPlan(map[string]any{"workflows": []any{"Build"}, "types": []any{"completed"}}), "completed", "Build", "", "main", true, ""},
+		{"types miss", wrPlan(map[string]any{"workflows": []any{"Build"}, "types": []any{"completed"}}), "requested", "Build", "", "main", false, "not in types filter"},
+		{"no types matches any", wrPlan(map[string]any{"workflows": []any{"Build"}}), "in_progress", "Build", "", "main", true, ""},
+		{"no workflows filter", wrPlan(map[string]any{"types": []any{"completed"}}), "completed", "Build", "", "main", false, "no workflows filter"},
+		{"branches hit", wrPlan(map[string]any{"workflows": []any{"Build"}, "branches": []any{"release/**"}}), "completed", "Build", "", "release/1.0", true, ""},
+		{"branches miss", wrPlan(map[string]any{"workflows": []any{"Build"}, "branches": []any{"release/**"}}), "completed", "Build", "", "main", false, "not in branches filter"},
+		{"branches-ignore hit", wrPlan(map[string]any{"workflows": []any{"Build"}, "branches-ignore": []any{"canary"}}), "completed", "Build", "", "canary", false, "is ignored"},
+		{"not subscribed", &workflows.Plan{Events: []string{"push"}, Triggers: map[string]any{}}, "completed", "Build", "", "main", false, ""},
+		{"unsupported key", wrPlan(map[string]any{"workflows": []any{"Build"}, "paths": []any{"x"}}), "completed", "Build", "", "main", false, "unsupported workflow_run filter paths"},
+	}
+	for _, tc := range cases {
+		got, why := workflowRunMatchesPlan(tc.plan, tc.action, tc.wfName, tc.wfPath, tc.headBranch)
+		if got != tc.want {
+			t.Errorf("%s: got %v want %v (why %q)", tc.name, got, tc.want, why)
+			continue
+		}
+		if tc.whyRe != "" && !strings.Contains(why, tc.whyRe) {
+			t.Errorf("%s: why %q missing %q", tc.name, why, tc.whyRe)
+		}
+	}
+}
+
+func TestParseWorkflowRunTrigger(t *testing.T) {
+	body := []byte(`{
+		"action": "completed",
+		"workflow_run": {
+			"id": 42, "name": "CI", "path": ".github/workflows/ci.yml",
+			"event": "push", "status": "completed", "conclusion": "success",
+			"head_branch": "main", "head_sha": "abc123",
+			"run_number": 7, "run_attempt": 1,
+			"html_url": "https://github.com/o/r/actions/runs/42"
+		},
+		"sender": {"login": "octo"},
+		"repository": {"full_name": "o/r", "clone_url": "https://github.com/o/r.git", "default_branch": "main"}
+	}`)
+	tr, status, _ := parseWorkflowRunTrigger(body)
+	if tr == nil {
+		t.Fatalf("workflow_run rejected: %s", status)
+	}
+	if tr.event != "workflow_run" || tr.trust != "trusted" || tr.repoName != "o/r" {
+		t.Fatalf("trigger = %#v", tr)
+	}
+	if tr.defaultBranch != "main" || tr.baseSHA != "abc123" {
+		t.Fatalf("default-branch resolution fields = %q %q", tr.defaultBranch, tr.baseSHA)
+	}
+	if tr.sha != "" || tr.ref != "" {
+		t.Fatalf("sha/ref must defer to resolvePRTargetSHA, got %q %q", tr.sha, tr.ref)
+	}
+	if tr.extra["wr_conclusion"] != "success" || tr.extra["wr_name"] != "CI" {
+		t.Fatalf("extras = %#v", tr.extra)
+	}
+}
+
+func TestParseWorkflowRunTriggerNonDefaultHead(t *testing.T) {
+	body := []byte(`{
+		"action": "completed",
+		"workflow_run": {"name": "CI", "head_branch": "feature-x", "head_sha": "def456"},
+		"repository": {"full_name": "o/r", "clone_url": "u", "default_branch": "main"}
+	}`)
+	tr, _, _ := parseWorkflowRunTrigger(body)
+	if tr == nil {
+		t.Fatal("workflow_run rejected")
+	}
+	// head_sha is not the default head here — no fallback, API must resolve.
+	if tr.baseSHA != "" {
+		t.Fatalf("baseSHA = %q, want empty for non-default head", tr.baseSHA)
+	}
+}
+
+func TestParseWorkflowRunTriggerMissingFields(t *testing.T) {
+	body := []byte(`{"action":"completed","workflow_run":{"conclusion":"success"},"repository":{"full_name":"o/r"}}`)
+	tr, status, _ := parseWorkflowRunTrigger(body)
+	if tr != nil || status != "ignored" {
+		t.Fatalf("empty workflow_run should be ignored, got %v %q", tr, status)
+	}
+}
+
 func TestDeliveryEventsSynthesizesPullRequestTarget(t *testing.T) {
 	got := deliveryEvents("pull_request")
 	if len(got) != 2 || got[0] != "pull_request" || got[1] != "pull_request_target" {

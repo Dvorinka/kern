@@ -87,6 +87,8 @@ func (s *Server) actOnGithubEvent(c *gin.Context, delivery, event string, body [
 		t, status, detail = parsePushTrigger(body)
 	case "pull_request", "pull_request_target":
 		t, status, detail = parsePRTrigger(body, event)
+	case "workflow_run":
+		t, status, detail = parseWorkflowRunTrigger(body)
 	default:
 		return "ignored", "event type " + event + " is recorded but not acted on"
 	}
@@ -315,6 +317,117 @@ func parsePRTrigger(body []byte, event string) (*ghTrigger, string, string) {
 			return pullRequestMatchesPlan(plan, event, p.Action, pr.Base.Ref)
 		},
 	}, "", ""
+}
+
+// workflowRunPayload is the webhook body for workflow_run deliveries. Only
+// the fields KERN acts on are modelled; the rest of the run object is rebuilt
+// for github.event from the run source extras.
+type workflowRunPayload struct {
+	Action      string `json:"action"`
+	WorkflowRun struct {
+		ID         int64  `json:"id"`
+		Name       string `json:"name"`
+		Path       string `json:"path"`
+		Event      string `json:"event"`
+		Status     string `json:"status"`
+		Conclusion string `json:"conclusion"`
+		HeadBranch string `json:"head_branch"`
+		HeadSHA    string `json:"head_sha"`
+		RunNumber  int    `json:"run_number"`
+		RunAttempt int    `json:"run_attempt"`
+		HTMLURL    string `json:"html_url"`
+	} `json:"workflow_run"`
+	Sender struct {
+		Login string `json:"login"`
+	} `json:"sender"`
+	Repository struct {
+		FullName      string `json:"full_name"`
+		CloneURL      string `json:"clone_url"`
+		DefaultBranch string `json:"default_branch"`
+	} `json:"repository"`
+}
+
+// parseWorkflowRunTrigger normalises a workflow_run delivery. GitHub runs the
+// triggered workflow on the default branch — default-branch code with secrets,
+// the same trust model as pull_request_target — so sha/ref resolve through
+// resolvePRTargetSHA against the default head.
+func parseWorkflowRunTrigger(body []byte) (*ghTrigger, string, string) {
+	var p workflowRunPayload
+	if err := json.Unmarshal(body, &p); err != nil {
+		return nil, "failed", "payload is not a workflow_run event: " + err.Error()
+	}
+	wr := p.WorkflowRun
+	if wr.Name == "" && wr.Path == "" {
+		return nil, "ignored", "workflow_run payload has no workflow name or path"
+	}
+	if p.Repository.DefaultBranch == "" {
+		return nil, "ignored", "workflow_run payload has no default branch"
+	}
+	// head_sha is a usable default-head fallback only when the completed run
+	// was itself on the default branch.
+	baseSHA := ""
+	if wr.HeadBranch == p.Repository.DefaultBranch {
+		baseSHA = wr.HeadSHA
+	}
+	return &ghTrigger{
+		event: "workflow_run", repoName: p.Repository.FullName, cloneURL: p.Repository.CloneURL,
+		sha: "", ref: "", message: wr.Name, actor: p.Sender.Login, trust: "trusted",
+		defaultBranch: p.Repository.DefaultBranch, baseSHA: baseSHA,
+		extra: map[string]any{
+			"action": p.Action,
+			"wr_id":  wr.ID, "wr_name": wr.Name, "wr_path": wr.Path,
+			"wr_event": wr.Event, "wr_status": wr.Status, "wr_conclusion": wr.Conclusion,
+			"wr_head_branch": wr.HeadBranch, "wr_head_sha": wr.HeadSHA,
+			"wr_number": wr.RunNumber, "wr_attempt": wr.RunAttempt, "wr_url": wr.HTMLURL,
+		},
+		matches: func(plan *workflows.Plan) (bool, string) {
+			return workflowRunMatchesPlan(plan, p.Action, wr.Name, wr.Path, wr.HeadBranch)
+		},
+	}, "", ""
+}
+
+// workflowRunMatchesPlan applies on:workflow_run semantics. workflows: lists
+// workflow names or paths as glob patterns (matched against both); types:
+// lists activity types — requested, in_progress, completed — with no filter
+// meaning any; branches/branches-ignore match the triggering run's
+// head_branch. Any other non-empty key stays a declared skip.
+func workflowRunMatchesPlan(plan *workflows.Plan, action, name, path, headBranch string) (bool, string) {
+	subscribed := false
+	for _, e := range plan.Events {
+		if e == "workflow_run" {
+			subscribed = true
+		}
+	}
+	if !subscribed {
+		return false, ""
+	}
+	cfg, _ := plan.Triggers["workflow_run"].(map[string]any)
+	for key, v := range cfg {
+		switch key {
+		case "workflows", "types", "branches", "branches-ignore":
+		default:
+			if !emptyFilter(v) {
+				return false, "unsupported workflow_run filter " + key
+			}
+		}
+	}
+	names := filterList(cfg["workflows"])
+	if len(names) == 0 {
+		return false, "workflow_run trigger has no workflows filter"
+	}
+	if !matchPatterns(names, name) && (path == "" || !matchPatterns(names, path)) {
+		return false, "completed workflow " + name + " not in workflows filter"
+	}
+	if types := filterList(cfg["types"]); len(types) > 0 && !contains(types, action) {
+		return false, "action " + action + " not in types filter"
+	}
+	if patterns := filterList(cfg["branches"]); len(patterns) > 0 && !matchPatterns(patterns, headBranch) {
+		return false, "head branch " + headBranch + " not in branches filter"
+	}
+	if patterns := filterList(cfg["branches-ignore"]); len(patterns) > 0 && matchPatterns(patterns, headBranch) {
+		return false, "head branch " + headBranch + " is ignored"
+	}
+	return true, ""
 }
 
 // resolvePRTargetSHA pins a pull_request_target trigger to the base repo's
