@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -20,6 +22,14 @@ func pushPlan(events []string, trigger map[string]any) *workflows.Plan {
 		Events:   events,
 		Triggers: map[string]any{"push": trigger},
 	}
+}
+
+func diffFiles(files ...string) func(context.Context) ([]string, error) {
+	return func(context.Context) ([]string, error) { return files, nil }
+}
+
+var diffBoom = func(context.Context) ([]string, error) {
+	return nil, errors.New("compare api down")
 }
 
 func TestPushMatchesPlan(t *testing.T) {
@@ -74,18 +84,91 @@ func TestPushMatchesPlan(t *testing.T) {
 		{"odd ref filtered", pushPlan([]string{"push"}, map[string]any{"branches": []any{"main"}}), "refs/pull/1/head", false, "neither a branch nor a tag"},
 
 		// Declared gaps still skip safely.
-		{"paths still unsupported", pushPlan([]string{"push"}, map[string]any{"paths": []any{"src/**"}}), "refs/heads/main", false, "unsupported push filter paths"},
-		{"paths on tag also unsupported", pushPlan([]string{"push"}, map[string]any{"tags": []any{"v*"}, "paths": []any{"src/**"}}), "refs/tags/v1", false, "unsupported push filter paths"},
 		{"types under push unsupported", pushPlan([]string{"push"}, map[string]any{"types": []any{"x"}}), "refs/heads/main", false, "unsupported push filter types"},
 	}
 	for _, tc := range cases {
-		got, why := pushMatchesPlan(tc.plan, tc.ref)
+		got, why := pushMatchesPlan(context.Background(), tc.plan, tc.ref, nil)
 		if got != tc.want {
 			t.Errorf("%s: got %v want %v (why %q)", tc.name, got, tc.want, why)
 			continue
 		}
 		if tc.whyRe != "" && !strings.Contains(why, tc.whyRe) {
 			t.Errorf("%s: why %q missing %q", tc.name, why, tc.whyRe)
+		}
+	}
+}
+
+func TestPushMatchesPlanPaths(t *testing.T) {
+	cases := []struct {
+		name  string
+		plan  *workflows.Plan
+		ref   string
+		diff  func(context.Context) ([]string, error)
+		want  bool
+		whyRe string
+	}{
+		{"paths hit", pushPlan([]string{"push"}, map[string]any{"paths": []any{"src/**"}}), "refs/heads/main", diffFiles("src/a.go"), true, ""},
+		{"paths miss", pushPlan([]string{"push"}, map[string]any{"paths": []any{"src/**"}}), "refs/heads/main", diffFiles("docs/a.md"), false, "no changed file matches paths filter"},
+		{"paths empty diff", pushPlan([]string{"push"}, map[string]any{"paths": []any{"src/**"}}), "refs/heads/main", diffFiles(), false, "no changed file"},
+		{"paths star no slash", pushPlan([]string{"push"}, map[string]any{"paths": []any{"docs/*"}}), "refs/heads/main", diffFiles("docs/a/b.md"), false, "no changed file"},
+		{"paths star hit", pushPlan([]string{"push"}, map[string]any{"paths": []any{"docs/*"}}), "refs/heads/main", diffFiles("docs/a.md"), true, ""},
+		{"paths double-star", pushPlan([]string{"push"}, map[string]any{"paths": []any{"**.go"}}), "refs/heads/main", diffFiles("a/b/c.go"), true, ""},
+		{"paths double-star-dir root", pushPlan([]string{"push"}, map[string]any{"paths": []any{"**/docs/**"}}), "refs/heads/main", diffFiles("docs/x.md"), true, ""},
+		{"paths double-star-dir nested", pushPlan([]string{"push"}, map[string]any{"paths": []any{"**/docs/**"}}), "refs/heads/main", diffFiles("a/b/docs/x.md"), true, ""},
+		{"paths-ignore hit", pushPlan([]string{"push"}, map[string]any{"paths-ignore": []any{"src/**"}}), "refs/heads/main", diffFiles("src/a.go"), false, "matches paths-ignore"},
+		{"paths-ignore miss", pushPlan([]string{"push"}, map[string]any{"paths-ignore": []any{"src/**"}}), "refs/heads/main", diffFiles("docs/a.md"), true, ""},
+		{"paths plus ignore blocked", pushPlan([]string{"push"}, map[string]any{"paths": []any{"**"}, "paths-ignore": []any{"**_test.go"}}), "refs/heads/main", diffFiles("x_test.go"), false, "matches paths-ignore"},
+		{"paths plus ignore pass", pushPlan([]string{"push"}, map[string]any{"paths": []any{"**"}, "paths-ignore": []any{"**_test.go"}}), "refs/heads/main", diffFiles("x.go"), true, ""},
+		{"paths negation re-include", pushPlan([]string{"push"}, map[string]any{"paths": []any{"**", "!docs/**", "docs/keep.md"}}), "refs/heads/main", diffFiles("docs/keep.md"), true, ""},
+		{"paths negation exclude", pushPlan([]string{"push"}, map[string]any{"paths": []any{"**", "!docs/**", "docs/keep.md"}}), "refs/heads/main", diffFiles("docs/drop.md"), false, "no changed file"},
+		{"paths with branches hit", pushPlan([]string{"push"}, map[string]any{"branches": []any{"main"}, "paths": []any{"src/**"}}), "refs/heads/main", diffFiles("src/a.go"), true, ""},
+		{"paths with branches ref miss", pushPlan([]string{"push"}, map[string]any{"branches": []any{"main"}, "paths": []any{"src/**"}}), "refs/heads/dev", diffFiles("src/a.go"), false, "not in branches filter"},
+		{"paths diff error skips", pushPlan([]string{"push"}, map[string]any{"paths": []any{"src/**"}}), "refs/heads/main", diffBoom, false, "push diff unavailable"},
+		{"paths nil diff skips", pushPlan([]string{"push"}, map[string]any{"paths": []any{"src/**"}}), "refs/heads/main", nil, false, "no diff resolver"},
+		{"paths not evaluated for tags", pushPlan([]string{"push"}, map[string]any{"tags": []any{"v*"}, "paths": []any{"src/**"}}), "refs/tags/v1", nil, true, ""},
+		{"paths odd ref skips", pushPlan([]string{"push"}, map[string]any{"paths": []any{"src/**"}}), "refs/pull/1/head", nil, false, "no diff resolver"},
+	}
+	for _, tc := range cases {
+		got, why := pushMatchesPlan(context.Background(), tc.plan, tc.ref, tc.diff)
+		if got != tc.want {
+			t.Errorf("%s: got %v want %v (why %q)", tc.name, got, tc.want, why)
+			continue
+		}
+		if tc.whyRe != "" && !strings.Contains(why, tc.whyRe) {
+			t.Errorf("%s: why %q missing %q", tc.name, why, tc.whyRe)
+		}
+	}
+}
+
+func TestPathGlobMatch(t *testing.T) {
+	cases := []struct {
+		pattern string
+		name    string
+		want    bool
+	}{
+		{"*", "README.md", true},
+		{"*", "docs/a.md", false},
+		{"**", "docs/a.md", true},
+		{"docs/*", "docs/a.md", true},
+		{"docs/*", "docs/a/b.md", false},
+		{"docs/**", "docs/a/b.md", true},
+		{"docs/**", "docs", false},
+		{"**.go", "main.go", true},
+		{"**.go", "a/b/c.go", true},
+		{"**.go", "a/b/c.go.txt", false},
+		{"**/docs/**", "docs/x.md", true},
+		{"**/docs/**", "a/b/docs/x.md", true},
+		{"go.mod", "go.mod", true},
+		{"go.mod", "x/go.mod", false},
+		{"*.jsx?", "page.js", true},
+		{"*.jsx?", "page.jsx", true},
+		{"*.jsx?", "page.jsxX", false},
+		{"src/**", "src/a.go", true},
+		{"src/**", "src", false},
+	}
+	for _, tc := range cases {
+		if got := pathGlobMatch(tc.pattern, tc.name); got != tc.want {
+			t.Errorf("pathGlobMatch(%q, %q) = %v, want %v", tc.pattern, tc.name, got, tc.want)
 		}
 	}
 }
@@ -213,6 +296,28 @@ func TestParseWorkflowRunTriggerMissingFields(t *testing.T) {
 	tr, status, _ := parseWorkflowRunTrigger(body)
 	if tr != nil || status != "ignored" {
 		t.Fatalf("empty workflow_run should be ignored, got %v %q", tr, status)
+	}
+}
+
+func TestParsePushTrigger(t *testing.T) {
+	body := []byte(`{
+		"ref": "refs/heads/main", "before": "aaa111", "after": "bbb222",
+		"head_commit": {"message": "ship it"},
+		"pusher": {"name": "tdv"},
+		"repository": {"full_name": "o/r", "clone_url": "https://github.com/o/r.git"}
+	}`)
+	tr, status, _ := parsePushTrigger(body)
+	if tr == nil {
+		t.Fatalf("push rejected: %s", status)
+	}
+	if tr.sha != "bbb222" || tr.ref != "refs/heads/main" || tr.trust != "trusted" {
+		t.Fatalf("trigger = %#v", tr)
+	}
+	if tr.pushBefore != "aaa111" || tr.pushAfter != "bbb222" {
+		t.Fatalf("diff range = %q %q", tr.pushBefore, tr.pushAfter)
+	}
+	if tr.pushDiff != nil {
+		t.Fatal("pushDiff is installed by actOnGithubEvent, not the parser")
 	}
 }
 

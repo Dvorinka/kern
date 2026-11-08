@@ -90,6 +90,27 @@ func (c *Client) PostCommitStatus(ctx context.Context, repo, sha, state, context
 	}, nil)
 }
 
+// CompareFiles lists the paths changed between base and head via the compare
+// API (three-dot: changes on head since the merge base). The API caps the
+// files array, so very large diffs come back truncated — path filters then
+// evaluate a subset, matching what GitHub itself can see.
+func (c *Client) CompareFiles(ctx context.Context, repo, base, head string) ([]string, error) {
+	var out struct {
+		Files []struct {
+			Filename string `json:"filename"`
+		} `json:"files"`
+	}
+	if err := c.do(ctx, http.MethodGet,
+		"/repos/"+repo+"/compare/"+base+"..."+head, "", nil, &out); err != nil {
+		return nil, err
+	}
+	files := make([]string, 0, len(out.Files))
+	for _, f := range out.Files {
+		files = append(files, f.Filename)
+	}
+	return files, nil
+}
+
 // HeadSHA resolves a branch (or ref) to its head commit sha.
 func (c *Client) HeadSHA(ctx context.Context, repo, ref string) (string, error) {
 	var out struct {
