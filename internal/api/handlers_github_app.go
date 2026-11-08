@@ -36,7 +36,10 @@ func (s *Server) githubAppManifest(c *gin.Context) {
 				"active": true,
 			},
 			"default_permissions": gin.H{
-				"contents":      "read",
+				// contents:write — trusted runs push tags/commits with the
+				// per-run installation token (actions/checkout parity). Read
+				// leaves `git push` at a 403 after #112's credential persist.
+				"contents":      "write",
 				"metadata":      "read",
 				"statuses":      "write",
 				"checks":        "write",
