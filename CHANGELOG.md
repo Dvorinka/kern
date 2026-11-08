@@ -5,6 +5,15 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 
 ## [Unreleased]
 
+### Added
+- Project configuration variables — the GitHub `vars` expression context.
+  `project_vars` store with plaintext values (configuration, not
+  credentials), `GET/PUT/DELETE /api/v1/vars?project=<slug>`, vars resolve
+  in step `env`/`if`/`run`/`with`, job `if:` conditions and `runs-on`
+  seed-time resolution, delivered to every run including untrusted
+  `pull_request`/`fork` like GitHub. CLI `kern vars list|set|delete` and a
+  Variables card on the secrets page (#160).
+
 ## [v0.6.2] - 2026-11-09
 
 ### Added
