@@ -40,8 +40,9 @@ services:
       KERN_ALLOWED_ORIGINS: ${KERN_ALLOWED_ORIGINS:-}
       # Job image for `runs-on: ubuntu-latest` / no container:. The published
       # base image carries the GitHub-parity toolset; a bare ubuntu:24.04 is
-      # the fallback when the image is not reachable.
-      KERN_DEFAULT_IMAGE: ${KERN_DEFAULT_IMAGE:-ubuntu:24.04}
+      # the fallback when the image is not reachable. No compose default: a
+      # bare `up` without --env-file must fail loudly, not ship ubuntu:24.04.
+      KERN_DEFAULT_IMAGE: ${KERN_DEFAULT_IMAGE:?set KERN_DEFAULT_IMAGE (see .env.example)}
       KERN_GITHUB_APP_ID: ${KERN_GITHUB_APP_ID:-}
       KERN_GITHUB_APP_PRIVATE_KEY_FILE: ${KERN_GITHUB_APP_PRIVATE_KEY_FILE:-}
       KERN_GITHUB_WEBHOOK_SECRET: ${KERN_GITHUB_WEBHOOK_SECRET:-}
