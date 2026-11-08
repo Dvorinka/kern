@@ -109,6 +109,7 @@ export function RunsChart({ days, version }: { days: DayPoint[]; version?: strin
 						<span className="mono">
 							{h.total} run{h.total === 1 ? "" : "s"}
 							{h.failed > 0 && <span className="rc-tip-fail"> · {h.failed} failed</span>}
+							{h.cancelled > 0 && <span className="rc-tip-cxl"> · {h.cancelled} cancelled</span>}
 						</span>
 					</div>
 					{h.projects.slice(0, 5).map((p) => (

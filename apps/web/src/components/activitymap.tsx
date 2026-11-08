@@ -58,12 +58,25 @@ export function ActivityMap({ runs, weeks = 10 }: { runs: Run[]; weeks?: number 
 	const cols: (DayCell | null)[][] = [];
 	for (let i = 0; i < padded.length; i += 7) cols.push(padded.slice(i, i + 7));
 
-	const counts = { success: 0, failure: 0, running: 0 };
+	const counts = { success: 0, failure: 0, running: 0, cancelled: 0 };
 	for (const d of days) {
 		if (d.status === "success") counts.success += d.count;
 		else if (d.status === "failure") counts.failure += d.count;
 		else if (d.status === "running") counts.running += d.count;
+		else if (d.status === "cancelled") counts.cancelled += d.count;
 	}
+
+	// month tick under each week column when the month rolls over
+	const monthTicks = cols.map((col, i) => {
+		const first = col.find((d) => d)?.date;
+		if (!first) return "";
+		const m = new Date(`${first}T00:00:00`).toLocaleDateString(undefined, { month: "short" });
+		const prev = i > 0 ? cols[i - 1]!.find((d) => d)?.date : null;
+		const pm = prev
+			? new Date(`${prev}T00:00:00`).toLocaleDateString(undefined, { month: "short" })
+			: null;
+		return m !== pm ? m : "";
+	});
 
 	return (
 		<div className="amap">
@@ -90,6 +103,11 @@ export function ActivityMap({ runs, weeks = 10 }: { runs: Run[]; weeks?: number 
 					</div>
 				))}
 			</div>
+			<div className="amonths">
+				{monthTicks.map((m, i) => (
+					<span key={i}>{m}</span>
+				))}
+			</div>
 			<div className="amleg">
 				<span>{days.filter((d) => d.count > 0).length} active days</span>
 				<span className="key i ok" />
@@ -100,6 +118,12 @@ export function ActivityMap({ runs, weeks = 10 }: { runs: Run[]; weeks?: number 
 					<>
 						<span className="key i live" />
 						{counts.running} live
+					</>
+				)}
+				{counts.cancelled > 0 && (
+					<>
+						<span className="key i cxl" />
+						{counts.cancelled} cancelled
 					</>
 				)}
 			</div>

@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { api } from "../lib/api";
 import type { Run, UsageResponse } from "../lib/types";
 import { ActivityMap } from "../components/activitymap";
-import { Card, CardHeader, EmptyState, PageHeader, Spinner } from "../components/ui";
+import { Card, CardHeader, EmptyState, PageHeader, Spinner, cn } from "../components/ui";
 import { seconds } from "../lib/format";
 
 const WINDOWS = [7, 30, 90];
@@ -311,7 +311,10 @@ function MinutesChart({ u, days }: { u: UsageResponse["usage"]; days: number }) 
 
 // Runner-time share by project as a monochrome donut — slices reuse the
 // pattern idiom (solid, stripes, dots) instead of invented colours.
+// Hover or legend-focus isolates a slice; click opens the project.
 function ShareDonut({ u }: { u: UsageResponse["usage"] }) {
+	const nav = useNavigate();
+	const [active, setActive] = useState<number | null>(null);
 	const total = Math.max(
 		u.projects.reduce((n, p) => n + p.seconds, 0),
 		1,
@@ -320,11 +323,12 @@ function ShareDonut({ u }: { u: UsageResponse["usage"] }) {
 	const C = 2 * Math.PI * R;
 	let acc = 0;
 	const pats = ["solid", "stripes", "dots"];
+	const sel = active != null ? u.projects[active] : null;
 	return (
 		<div className="panel">
 			<div className="phead">
 				<span className="pt">Time by project</span>
-				<span className="r">share of runner seconds</span>
+				<span className="r">share of runner seconds · hover a slice</span>
 			</div>
 			<div className="donut">
 				<svg viewBox="0 0 120 120" className="dsvg">
@@ -342,6 +346,7 @@ function ShareDonut({ u }: { u: UsageResponse["usage"] }) {
 					{u.projects.map((p, i) => {
 						const frac = p.seconds / total;
 						const dash = frac * C;
+						const dim = active != null && active !== i;
 						const el = (
 							<circle
 								key={p.slug}
@@ -350,26 +355,55 @@ function ShareDonut({ u }: { u: UsageResponse["usage"] }) {
 								r={R}
 								fill="none"
 								stroke={pats[i % 3] === "solid" ? "var(--ink)" : pats[i % 3] === "stripes" ? "url(#dstripes)" : "url(#ddots)"}
-								strokeWidth="18"
+								strokeWidth={active === i ? 22 : 18}
 								strokeDasharray={`${dash} ${C - dash}`}
 								strokeDashoffset={-acc * C}
 								transform="rotate(-90 60 60)"
-							/>
+								opacity={dim ? 0.25 : 1}
+								style={{ cursor: "pointer", transition: "opacity .15s, stroke-width .15s" }}
+								onMouseEnter={() => setActive(i)}
+								onMouseLeave={() => setActive(null)}
+								onClick={() => nav(`/projects/${p.slug}`)}
+							>
+								<title>{`${p.name || p.slug} — ${minutes(p.seconds)} · ${Math.round(frac * 100)}%`}</title>
+							</circle>
 						);
 						acc += frac;
 						return el;
 					})}
-					<text x="60" y="57" textAnchor="middle" className="dv">
-						{minutes(total)}
-					</text>
-					<text x="60" y="70" textAnchor="middle" className="dk">
-						{u.projects.length} project{u.projects.length === 1 ? "" : "s"}
-					</text>
+					{sel ? (
+						<>
+							<text x="60" y="57" textAnchor="middle" className="dv" style={{ fontSize: 13 }}>
+								{Math.round((sel.seconds / total) * 100)}%
+							</text>
+							<text x="60" y="70" textAnchor="middle" className="dk" style={{ fontSize: 8 }}>
+								{(sel.name || sel.slug).slice(0, 14)}
+							</text>
+						</>
+					) : (
+						<>
+							<text x="60" y="57" textAnchor="middle" className="dv">
+								{minutes(total)}
+							</text>
+							<text x="60" y="70" textAnchor="middle" className="dk">
+								{u.projects.length} project{u.projects.length === 1 ? "" : "s"}
+							</text>
+						</>
+					)}
 				</svg>
 				<div className="dleg">
 					{u.projects.slice(0, 6).map((p, i) => (
-						<Link key={p.slug} to={`/projects/${p.slug}`} className="dl">
-							<i className={`phm pat-${pats[i % 3]}`} style={{ width: 10, height: 10, borderWidth: 1.5, borderRadius: 3 }} />
+						<Link
+							key={p.slug}
+							to={`/projects/${p.slug}`}
+							className={cn("dl", active === i && "on")}
+							onMouseEnter={() => setActive(i)}
+							onMouseLeave={() => setActive(null)}
+						>
+							<i
+								className={`phm pat-${pats[i % 3]}`}
+								style={{ width: 10, height: 10, borderWidth: 1.5, borderRadius: 3, opacity: active != null && active !== i ? 0.3 : 1 }}
+							/>
 							<span className="truncate">{p.name || p.slug}</span>
 							<b>{Math.round((p.seconds / total) * 100)}%</b>
 						</Link>
