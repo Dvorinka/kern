@@ -444,3 +444,34 @@ func (s *Store) AuditMeta(ctx context.Context, orgID uuid.UUID, actor *uuid.UUID
 		INSERT INTO audit_events (org_id, actor_user_id, action, target, metadata) VALUES ($1, $2, $3, $4, $5)`,
 		orgID, actor, action, target, m)
 }
+
+// UserPrefs returns the caller's stored UI preferences, or an empty object
+// when nothing was saved yet.
+func (s *Store) UserPrefs(ctx context.Context, userID uuid.UUID) (map[string]any, error) {
+	var raw []byte
+	err := s.pool.QueryRow(ctx, `SELECT prefs FROM user_prefs WHERE user_id = $1`, userID).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return map[string]any{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	prefs := map[string]any{}
+	if err := json.Unmarshal(raw, &prefs); err != nil {
+		return map[string]any{}, nil
+	}
+	return prefs, nil
+}
+
+// PutUserPrefs replaces the caller's preference object wholesale — the
+// client owns the full shape, so partial-update semantics would surprise.
+func (s *Store) PutUserPrefs(ctx context.Context, userID uuid.UUID, prefs map[string]any) error {
+	raw, err := json.Marshal(prefs)
+	if err != nil {
+		return err
+	}
+	_, err = s.pool.Exec(ctx, `
+		INSERT INTO user_prefs (user_id, prefs, updated_at) VALUES ($1, $2, now())
+		ON CONFLICT (user_id) DO UPDATE SET prefs = $2, updated_at = now()`, userID, raw)
+	return err
+}

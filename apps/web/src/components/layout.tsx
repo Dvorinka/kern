@@ -1,7 +1,7 @@
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import { LogOut } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import type { OverviewResponse, Project, Run, Runner, UpdateInfo } from "../lib/types";
@@ -40,7 +40,8 @@ export function FanMark({ size = 19 }: { size?: number }) {
 }
 
 export function Layout() {
-	const { user, loading, logout } = useAuth();
+	const { user, prefs, loading, logout } = useAuth();
+	const qc = useQueryClient();
 	const nav = useNavigate();
 	const [palette, setPalette] = useState(false);
 	const [theme, setTheme] = useState(document.documentElement.dataset.theme === "ink" ? "ink" : "paper");
@@ -99,11 +100,25 @@ export function Layout() {
 		return m;
 	}, [overview, fleet]);
 
+	// The saved account preference wins once /auth/me resolves; localStorage
+	// (read by theme-init.js before first paint) stays the instant fallback.
+	const serverTheme = prefs?.theme;
+	useEffect(() => {
+		if (serverTheme !== "ink" && serverTheme !== "paper") return;
+		document.documentElement.dataset.theme = serverTheme;
+		localStorage.setItem("kern-theme", serverTheme);
+		setTheme(serverTheme);
+	}, [serverTheme]);
+
 	const toggleTheme = () => {
 		const t = theme === "paper" ? "ink" : "paper";
 		document.documentElement.dataset.theme = t;
 		localStorage.setItem("kern-theme", t);
 		setTheme(t);
+		void api
+			.put("/auth/me/prefs", { prefs: { ...prefs, theme: t } })
+			.then(() => qc.invalidateQueries({ queryKey: ["me"] }))
+			.catch(() => {});
 	};
 
 	if (loading || !user) {

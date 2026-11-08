@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -120,7 +121,36 @@ func (s *Server) me(c *gin.Context) {
 		fail(c, http.StatusUnauthorized, "unauthenticated", "authentication required")
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"user": user})
+	prefs, err := s.Store.UserPrefs(c.Request.Context(), user.ID)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"user": user, "prefs": prefs})
+}
+
+// putPrefs replaces the caller's preference object (theme and friends).
+// The shape is client-owned; the only guard is a size cap so a runaway
+// client cannot stuff megabytes into every /auth/me response.
+func (s *Server) putPrefs(c *gin.Context) {
+	user, _ := currentUser(c)
+	var req struct {
+		Prefs map[string]any `json:"prefs"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Prefs == nil {
+		fail(c, http.StatusBadRequest, "invalid_body", "prefs object is required")
+		return
+	}
+	raw, err := json.Marshal(req.Prefs)
+	if err != nil || len(raw) > 8192 {
+		fail(c, http.StatusBadRequest, "invalid_body", "prefs must be a JSON object under 8 KiB")
+		return
+	}
+	if err := s.Store.PutUserPrefs(c.Request.Context(), user.ID, req.Prefs); err != nil {
+		s.internalError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"prefs": req.Prefs})
 }
 
 // currentSessionHash is the hash of the caller's session cookie, empty for

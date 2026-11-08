@@ -169,6 +169,7 @@ func (s *Server) buildRouter() *gin.Engine {
 	{
 		auth.POST("/auth/logout", s.logout)
 		auth.GET("/auth/me", s.me)
+		write.PUT("/auth/me/prefs", s.putPrefs)
 		auth.GET("/auth/tokens", s.listTokens)
 		write.POST("/auth/tokens", s.createToken)
 		write.DELETE("/auth/tokens/:id", s.deleteToken)
