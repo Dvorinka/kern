@@ -249,6 +249,10 @@ func (s *Server) buildRouter() *gin.Engine {
 		auth.GET("/secrets", s.listSecrets)
 		admin.PUT("/secrets/:name", s.putSecret)
 		admin.DELETE("/secrets/:name", s.deleteSecret)
+
+		auth.GET("/vars", s.listVars)
+		admin.PUT("/vars/:name", s.putVar)
+		admin.DELETE("/vars/:name", s.deleteVar)
 	}
 
 	r.POST("/api/v1/runners/register", s.registerRunner)

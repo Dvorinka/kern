@@ -475,7 +475,7 @@ func (a *Agent) executeJob(ctx context.Context, claim *Claim) {
 
 // runSteps executes the compiled step list and returns the conclusion plus job outputs.
 func (a *Agent) runSteps(ctx context.Context, log *zap.Logger, claim *Claim) (string, map[string]string, error) {
-	secrets, blocked, err := a.c.jobSecrets(ctx, claim.Job.ID)
+	secrets, vars, blocked, err := a.c.jobSecrets(ctx, claim.Job.ID)
 	if err != nil {
 		return "", nil, fmt.Errorf("fetch secrets: %w", err)
 	}
@@ -483,7 +483,7 @@ func (a *Agent) runSteps(ctx context.Context, log *zap.Logger, claim *Claim) (st
 		log.Info("run is untrusted; secrets withheld")
 	}
 
-	exec, err := newJobExecutor(a.cfg, a.c, claim, secrets, log)
+	exec, err := newJobExecutor(a.cfg, a.c, claim, secrets, vars, log)
 	if err != nil {
 		return "", nil, err
 	}

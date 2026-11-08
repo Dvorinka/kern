@@ -206,7 +206,7 @@ func TestJobStatusSoFarAndContext(t *testing.T) {
 	claim := &Claim{}
 	claim.Job.Image = "ubuntu:24.04"
 	claim.Job.ID = "test-job-1"
-	e, err := newJobExecutor(cfg, &client{}, claim, nil, zap.NewNop())
+	e, err := newJobExecutor(cfg, &client{}, claim, nil, nil, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +297,7 @@ func TestRunnerContextSecretsVarsAndEnvResolution(t *testing.T) {
 	}
 	claim.Job.Matrix = map[string]any{"name": "world"}
 	secretsMap := map[string]string{"ANDROID_KEYSTORE_BASE64": "c2VjcmV0MTIz"}
-	e, err := newJobExecutor(cfg, &client{}, claim, secretsMap, zap.NewNop())
+	e, err := newJobExecutor(cfg, &client{}, claim, secretsMap, nil, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +335,7 @@ func TestRunnerContextSecretsEmptyWhenWithheld(t *testing.T) {
 	claim.Job.ID = "test-job-1"
 	claim.Job.Env = map[string]string{"TOKEN": "${{ secrets.GITHUB_TOKEN }}"}
 	// nil secretMap models an untrusted run: secrets withheld.
-	e, err := newJobExecutor(cfg, &client{}, claim, nil, zap.NewNop())
+	e, err := newJobExecutor(cfg, &client{}, claim, nil, nil, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}

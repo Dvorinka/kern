@@ -506,6 +506,77 @@ func (c *cli) cmdSecrets(ctx context.Context, args []string) error {
 	return nil
 }
 
+// cmdVars manages project configuration variables — the GitHub `vars`
+// context. Unlike secrets, values are plaintext configuration and are
+// delivered to every run including untrusted pull_request runs.
+func (c *cli) cmdVars(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: kern vars list|set|delete <name> [value] [--project S]")
+	}
+	if err := c.requireAuth(); err != nil {
+		return err
+	}
+	opts, pos := parseFlags(args[1:], "project", "value")
+	slug, err := c.projectSlug(opts)
+	if err != nil {
+		return err
+	}
+	q := url.Values{}
+	q.Set("project", slug)
+	switch args[0] {
+	case "list":
+		var out struct {
+			Vars []varRow `json:"vars"`
+		}
+		if err := c.api().get(ctx, "/vars", q, &out); err != nil {
+			return err
+		}
+		c.orJSON(out.Vars, func() {
+			rows := make([][]string, 0, len(out.Vars))
+			for _, v := range out.Vars {
+				rows = append(rows, []string{v.Name, v.Value, relT(v.UpdatedAt)})
+			}
+			table([]string{"NAME", "VALUE", "UPDATED"}, rows)
+		})
+	case "set":
+		name, err := strarg(pos, 0, "variable name")
+		if err != nil {
+			return err
+		}
+		value := opts["value"]
+		if value == "" && len(pos) > 1 {
+			value = pos[1]
+		}
+		if value == "" {
+			return fmt.Errorf("variable value required: kern vars set %s <value> --project %s", name, slug)
+		}
+		path := "/vars/" + url.PathEscape(name) + "?" + q.Encode()
+		if err := c.api().put(ctx, path, map[string]any{"value": value}, nil); err != nil {
+			return err
+		}
+		fmt.Println("var", name, "stored")
+	case "delete":
+		name, err := strarg(pos, 0, "variable name")
+		if err != nil {
+			return err
+		}
+		path := "/vars/" + url.PathEscape(name) + "?" + q.Encode()
+		if err := c.api().del(ctx, path); err != nil {
+			return err
+		}
+		fmt.Println("var", name, "deleted")
+	default:
+		return fmt.Errorf("unknown vars subcommand %q", args[0])
+	}
+	return nil
+}
+
+type varRow struct {
+	Name      string    `json:"name"`
+	Value     string    `json:"value"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 type environmentRow struct {
 	Name              string    `json:"name"`
 	Protected         bool      `json:"protected"`

@@ -512,9 +512,13 @@ func (e *executor) baseContext() map[string]any {
 	for k, v := range e.secrets {
 		secretCtx[k] = v
 	}
+	varCtx := map[string]any{}
+	for k, v := range e.vars {
+		varCtx[k] = v
+	}
 	ctx := map[string]any{
 		"github": github, "matrix": matrix, "steps": steps, "needs": needs,
-		"inputs": inputs, "secrets": secretCtx, "vars": map[string]any{},
+		"inputs": inputs, "secrets": secretCtx, "vars": varCtx,
 		"runner": e.runnerCtxMap(), "job": map[string]any{},
 		"__job_status": e.jobStatusSoFar(),
 		"__workspace":  filepath.Join(e.workRoot(), "workspace"),

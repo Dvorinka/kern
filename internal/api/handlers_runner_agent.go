@@ -555,14 +555,25 @@ func (s *Server) jobSecrets(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
-	if !secretsEligibleTrust(run.TrustLevel) {
-		c.JSON(http.StatusOK, gin.H{"secrets": map[string]string{}, "blocked": true,
-			"reason": "untrusted pull request runs never receive repository secrets"})
-		return
-	}
 	project, err := s.Store.ProjectByID(c.Request.Context(), run.ProjectID)
 	if err != nil {
 		s.internalError(c, err)
+		return
+	}
+	// Vars are configuration, not credentials: they ride along even for
+	// untrusted runs, matching GitHub's vars context semantics.
+	varRows, err := s.Store.VarsForProject(c.Request.Context(), project.ID)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	vars := make(map[string]string, len(varRows))
+	for _, v := range varRows {
+		vars[v.Name] = v.Value
+	}
+	if !secretsEligibleTrust(run.TrustLevel) {
+		c.JSON(http.StatusOK, gin.H{"secrets": map[string]string{}, "vars": vars, "blocked": true,
+			"reason": "untrusted pull request runs never receive repository secrets"})
 		return
 	}
 	rows, err := s.Store.SecretsForProject(c.Request.Context(), project.OrgID, project.ID)
@@ -590,7 +601,7 @@ func (s *Server) jobSecrets(c *gin.Context) {
 		}
 	}
 	c.Header("Cache-Control", "no-store")
-	c.JSON(http.StatusOK, gin.H{"secrets": out, "blocked": false})
+	c.JSON(http.StatusOK, gin.H{"secrets": out, "vars": vars, "blocked": false})
 }
 
 // maskDiagnosis masks every string inside a step diagnosis JSON blob before

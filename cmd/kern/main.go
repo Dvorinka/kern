@@ -67,6 +67,7 @@ Artifacts / cache / secrets:
   artifacts list|download <id> [--out FILE]
   cache list|delete <id>
   secrets list|set|delete [--project S] <name>
+  vars list|set|delete [--project S] <name> [value]   project config vars (vars context)
 
 Environments:
   environments list [--project S]
@@ -193,6 +194,8 @@ func dispatch(c *cli, args []string) int {
 		err = c.cmdCache(ctx, rest)
 	case "secrets":
 		err = c.cmdSecrets(ctx, rest)
+	case "vars":
+		err = c.cmdVars(ctx, rest)
 	case "environments":
 		err = c.cmdEnvironments(ctx, rest)
 	case "deployments":
