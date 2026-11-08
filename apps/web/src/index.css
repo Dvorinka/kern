@@ -2364,6 +2364,43 @@ dl.rkv dd {
 	stroke: var(--line2);
 	stroke-width: 0.6;
 }
+/* geo picker — same world, fixed-height reticle for the runner location editor */
+.geopick {
+	height: 200px;
+	border-radius: 10px;
+	overflow: hidden;
+	background: var(--raise);
+}
+.geopick svg {
+	height: 100%;
+}
+.geopick-coords {
+	position: absolute;
+	left: 10px;
+	bottom: 8px;
+	font-family: var(--mono);
+	font-size: 10px;
+	color: var(--dim);
+	background: var(--raise);
+	padding: 2px 8px;
+	border-radius: 6px;
+	pointer-events: none;
+}
+.geopick-ring {
+	transform-box: fill-box;
+	transform-origin: center;
+	animation: geoping 1.8s ease-out infinite;
+}
+@keyframes geoping {
+	from {
+		opacity: 0.9;
+		transform: scale(0.5);
+	}
+	to {
+		opacity: 0;
+		transform: scale(2.4);
+	}
+}
 .fm-hub {
 	fill: var(--ink);
 }

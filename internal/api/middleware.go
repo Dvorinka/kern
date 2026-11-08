@@ -152,7 +152,7 @@ func (s *Server) securityHeaders() gin.HandlerFunc {
 				"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "+
 				"font-src 'self' data: https://fonts.gstatic.com; "+
 				"img-src 'self' data: https://raw.githubusercontent.com https://avatars.githubusercontent.com; "+
-				"connect-src 'self'; "+
+				"connect-src 'self' https://nominatim.openstreetmap.org; "+
 				"frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://github.com")
 		c.Next()
 	}

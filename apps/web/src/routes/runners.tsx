@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { Cpu, Image as ImageIcon, LocateFixed, Pause, Pencil, Plus, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import type { Runner } from "../lib/types";
@@ -7,6 +7,7 @@ import { Button, Card, EmptyState, Input, RunnerIcon, Spinner } from "../compone
 import { StatusSq } from "../components/status";
 import { CopyButton } from "./settings";
 import { Row } from "../components/layout";
+import { GeoPicker } from "../components/fleetmap";
 import { bytes, relTime } from "../lib/format";
 
 export function RunnersPage() {
@@ -35,6 +36,17 @@ export function RunnersPage() {
 		mutationFn: (id: string) => api.del(`/runners/${id}`),
 		onSuccess: () => qc.invalidateQueries({ queryKey: ["runners"] }),
 	});
+	const [staleDismissed, setStaleDismissed] = useState(false);
+
+	// Offline runners whose last heartbeat is older than a week are almost
+	// certainly decommissioned leftovers (replaced VMs, retired agents).
+	// Surface them for removal instead of letting rows accumulate forever.
+	const stale = (data?.runners ?? []).filter(
+		(r) =>
+			r.status === "offline" &&
+			r.last_heartbeat_at != null &&
+			Date.now() - new Date(r.last_heartbeat_at).getTime() > 7 * 24 * 3600 * 1000,
+	);
 
 	return (
 		<div className="page">
@@ -57,6 +69,29 @@ export function RunnersPage() {
 				</div>
 			</div>
 			{enrolling && <EnrollCard onDone={() => setEnrolling(false)} />}
+			{stale.length > 0 && !staleDismissed && (
+				<Card className="mb-4 flex flex-wrap items-center gap-2 p-3">
+					<span className="text-xs text-[var(--dim)]">
+						{stale.length} runner{stale.length === 1 ? "" : "s"} offline for over 7 days —
+						probably safe to remove:
+					</span>
+					{stale.map((r) => (
+						<button
+							key={r.id}
+							className="pill"
+							title={`last seen ${relTime(r.last_heartbeat_at)}`}
+							onClick={() => {
+								if (confirm(`Delete runner ${r.name}?`)) remove.mutate(r.id);
+							}}
+						>
+							<Trash2 size={11} /> {r.name}
+						</button>
+					))}
+					<Button size="sm" variant="ghost" className="ml-auto" onClick={() => setStaleDismissed(true)}>
+						Dismiss
+					</Button>
+				</Card>
+			)}
 			<Row>
 				<span className="text-xs text-[var(--dim)]">Self-heal (org):</span>
 				<select
@@ -190,11 +225,7 @@ export function RunnersPage() {
 											</button>
 										</span>
 									</div>
-									{geoEdit === r.id && (
-										<div className="fgeo">
-											<GeoEditor runner={r} onDone={() => setGeoEdit(null)} />
-										</div>
-									)}
+									{geoEdit === r.id && <GeoEditor runner={r} onDone={() => setGeoEdit(null)} />}
 									{iconEdit === r.id && (
 										<div className="fgeo">
 											<IconEditor runner={r} onDone={() => setIconEdit(null)} />
@@ -269,10 +300,43 @@ function EnrollCard({ onDone }: { onDone: () => void }) {
 	);
 }
 
-// GeoEditor places a runner on the fleet map by hand, or hands it back to
-// egress-IP auto-detection.
+// GeoEditor places a runner on the fleet map — click the map for coordinates
+// (city/country reverse-geocoded via Nominatim, still editable), type them by
+// hand, or hand location back to egress-IP auto-detection.
 function GeoEditor({ runner, onDone }: { runner: Runner; onDone: () => void }) {
 	const qc = useQueryClient();
+	const [lat, setLat] = useState(runner.geo_lat?.toString() ?? "");
+	const [lng, setLng] = useState(runner.geo_lng?.toString() ?? "");
+	const [city, setCity] = useState(runner.geo_city ?? "");
+	const [country, setCountry] = useState(runner.geo_country ?? "");
+	const revTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+	const geoLat = parseFloat(lat);
+	const geoLng = parseFloat(lng);
+
+	const onPick = (la: number, ln: number) => {
+		setLat(la.toString());
+		setLng(ln.toString());
+		if (revTimer.current) clearTimeout(revTimer.current);
+		revTimer.current = setTimeout(() => {
+			void (async () => {
+				try {
+					const r = await fetch(
+						`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=10&lat=${la}&lon=${ln}`,
+						{ headers: { Accept: "application/json" } },
+					);
+					if (!r.ok) return;
+					const j = (await r.json()) as { address?: Record<string, string> };
+					const a = j.address ?? {};
+					setCity(a.city ?? a.town ?? a.village ?? a.municipality ?? a.county ?? a.state ?? "");
+					setCountry(a.country ?? "");
+				} catch {
+					// offline or rate-limited — coordinates still save
+				}
+			})();
+		}, 400);
+	};
+
 	const save = useMutation({
 		mutationFn: (body: Record<string, unknown>) => api.patch(`/runners/${runner.id}/geo`, body),
 		onSuccess: () => {
@@ -284,63 +348,71 @@ function GeoEditor({ runner, onDone }: { runner: Runner; onDone: () => void }) {
 
 	const submit = (e: FormEvent<HTMLFormElement>) => {
 		e.preventDefault();
-		const fd = new FormData(e.currentTarget);
-		const lat = parseFloat(String(fd.get("lat")));
-		const lng = parseFloat(String(fd.get("lng")));
-		if (Number.isNaN(lat) || Number.isNaN(lng)) return;
-		save.mutate({
-			lat,
-			lng,
-			city: String(fd.get("city")).trim(),
-			country: String(fd.get("country")).trim(),
-		});
+		if (Number.isNaN(geoLat) || Number.isNaN(geoLng)) return;
+		save.mutate({ lat: geoLat, lng: geoLng, city: city.trim(), country: country.trim() });
 	};
 
 	return (
-		<form onSubmit={submit} className="ml-[23px] mt-2 flex flex-wrap items-center gap-2">
-			<Input
-				name="lat"
-				placeholder="lat"
-				defaultValue={runner.geo_lat ?? ""}
-				className="w-24"
-				required
+		<div className="fgeo geopanel">
+			<GeoPicker
+				lat={Number.isNaN(geoLat) ? null : geoLat}
+				lng={Number.isNaN(geoLng) ? null : geoLng}
+				onPick={onPick}
 			/>
-			<Input
-				name="lng"
-				placeholder="lng"
-				defaultValue={runner.geo_lng ?? ""}
-				className="w-24"
-				required
-			/>
-			<Input name="city" placeholder="city" defaultValue={runner.geo_city} className="w-32" />
-			<Input
-				name="country"
-				placeholder="country"
-				defaultValue={runner.geo_country}
-				className="w-28"
-			/>
-			<Button type="submit" variant="primary" size="sm" disabled={save.isPending}>
-				Save
-			</Button>
-			<Button
-				type="button"
-				size="sm"
-				title="re-resolve from the runner's egress IP"
-				disabled={save.isPending}
-				onClick={() => save.mutate({ auto: true })}
-			>
-				<LocateFixed size={13} /> Auto
-			</Button>
-			<Button type="button" size="sm" variant="ghost" onClick={onDone}>
-				Cancel
-			</Button>
-			{save.error && <span className="text-xs text-[var(--err)]">{save.error.message}</span>}
-			<span className="text-[10px] text-[var(--faint)]">
-				{runner.geo_source === "auto" && runner.geo_ip
-					? `auto via ${runner.geo_ip}`
-					: "manual wins over auto"}
-			</span>
-		</form>
+			<form onSubmit={submit} className="mt-2 flex flex-wrap items-center gap-2">
+				<Input
+					name="lat"
+					placeholder="lat"
+					value={lat}
+					onChange={(e) => setLat(e.target.value)}
+					className="w-24"
+					required
+				/>
+				<Input
+					name="lng"
+					placeholder="lng"
+					value={lng}
+					onChange={(e) => setLng(e.target.value)}
+					className="w-24"
+					required
+				/>
+				<Input
+					name="city"
+					placeholder="city"
+					value={city}
+					onChange={(e) => setCity(e.target.value)}
+					className="w-32"
+				/>
+				<Input
+					name="country"
+					placeholder="country"
+					value={country}
+					onChange={(e) => setCountry(e.target.value)}
+					className="w-28"
+				/>
+				<Button type="submit" variant="primary" size="sm" disabled={save.isPending}>
+					Save
+				</Button>
+				<Button
+					type="button"
+					size="sm"
+					title="re-resolve from the runner's egress IP"
+					disabled={save.isPending}
+					onClick={() => save.mutate({ auto: true })}
+				>
+					<LocateFixed size={13} /> Auto
+				</Button>
+				<Button type="button" size="sm" variant="ghost" onClick={onDone}>
+					Cancel
+				</Button>
+				{save.error && <span className="text-xs text-[var(--err)]">{save.error.message}</span>}
+				<span className="text-[10px] text-[var(--faint)]">
+					{runner.geo_source === "auto" && runner.geo_ip
+						? `auto via ${runner.geo_ip}`
+						: "click the map or type coordinates — city/country fill in automatically"}
+				</span>
+			</form>
+		</div>
 	);
 }
 
