@@ -213,6 +213,28 @@ func (s *Store) Run(ctx context.Context, id uuid.UUID) (Run, error) {
 	return scanRun(s.pool.QueryRow(ctx, runSelect+` WHERE r.id = $1`, id))
 }
 
+// RunPrefix resolves an unambiguous run-id prefix — the short ids the CLI
+// and UI print. Returns up to 8 candidates newest-first so callers can
+// detect ambiguity; callers must treat len != 1 as unresolved.
+func (s *Store) RunPrefix(ctx context.Context, prefix string) ([]Run, error) {
+	rows, err := s.pool.Query(ctx, runSelect+`
+		WHERE r.id::text LIKE $1 || '%'
+		ORDER BY r.created_at DESC LIMIT 8`, prefix)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Run{}
+	for rows.Next() {
+		r, err := scanRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 type RunFilter struct {
 	ProjectID *uuid.UUID
 	Status    string
