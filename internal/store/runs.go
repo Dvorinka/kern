@@ -70,6 +70,10 @@ type CreateRunParams struct {
 	Source            map[string]any
 	ConcurrencyGroup  string
 	CancelInProgress  bool
+	// Inputs carries workflow_dispatch inputs. They merge over each job's
+	// plan inputs at seed time (not persisted on the run row — the merged
+	// result lives on jobs.inputs).
+	Inputs map[string]any
 	// HoldForApproval parks the run in awaiting_approval: jobs stay 'waiting'
 	// and nothing is promoted until ApproveRunHold releases it.
 	HoldForApproval bool

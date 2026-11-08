@@ -32,7 +32,7 @@ Projects:
 Runs:
   runs list [--status S] [--limit N]
   runs show <run-id>
-  runs trigger [<project>] <workflow-id|path|name> [--event E] [--ref R] [--sha S]
+  runs trigger [<project>] <workflow-id|path|name> [--event E] [--ref R] [--sha S] [--inputs JSON]
   runs cancel|approve|rerun <run-id>
   runs logs <run-id> [--job KEY] [--step N] [--follow]
   runs remediate <job-id> --step N        approve a remediation proposal

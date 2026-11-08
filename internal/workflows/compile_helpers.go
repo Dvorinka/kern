@@ -45,3 +45,31 @@ func evalWholeExpr(label string, ctx map[string]any) ([]string, bool) {
 	}
 	return out, true
 }
+
+// ResolveRunsOn expands ${{ }} labels in a runs-on list against ctx. A
+// whole-value expression evaluating to a list expands into labels (GitHub
+// treats `runs-on: ${{ matrix.ro }}` with ro: [a, b] as labels a+b;
+// stringifying it would produce the literal "Array" and match nothing).
+// Anything still unresolvable stays literal and must exist as a runner
+// label. Called at compile time with {matrix} and again at run seed time
+// with {matrix, inputs} so dispatch inputs like ${{ inputs.runner }} resolve.
+func ResolveRunsOn(runsOn []string, ctx map[string]any) []string {
+	out := make([]string, 0, len(runsOn))
+	for _, label := range runsOn {
+		if strings.Contains(label, "${{") {
+			if elems, ok := evalWholeExpr(label, ctx); ok {
+				for _, el := range elems {
+					if el = strings.TrimSpace(el); el != "" {
+						out = append(out, el)
+					}
+				}
+				continue
+			}
+			if resolved, err := expressions.Interpolate(label, ctx); err == nil && strings.TrimSpace(resolved) != "" {
+				label = resolved
+			}
+		}
+		out = append(out, label)
+	}
+	return out
+}

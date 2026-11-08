@@ -128,12 +128,28 @@ func (o *Orchestrator) StartRun(ctx context.Context, p store.CreateRunParams) (s
 	p.CancelInProgress = res.Plan.CancelInProgress
 	seeds := make([]store.JobSeed, 0, len(res.Plan.Jobs))
 	for _, jp := range res.Plan.Jobs {
+		// Dispatch inputs merge over plan (workflow_call) inputs and take part
+		// in a second runs-on pass: `${{ inputs.runner }}` only resolves now.
+		inputs := make(map[string]string, len(jp.Inputs)+len(p.Inputs))
+		for k, v := range jp.Inputs {
+			inputs[k] = v
+		}
+		for k, v := range p.Inputs {
+			inputs[k] = fmt.Sprint(v)
+		}
+		if len(inputs) == 0 {
+			inputs = nil
+		}
+		inputsCtx := make(map[string]any, len(inputs))
+		for k, v := range inputs {
+			inputsCtx[k] = v
+		}
 		seed := store.JobSeed{
 			Key:             jp.Key,
 			JobKey:          jp.JobID,
 			Name:            jp.Name,
 			Needs:           jp.Needs,
-			RunsOn:          jp.RunsOn,
+			RunsOn:          workflows.ResolveRunsOn(jp.RunsOn, map[string]any{"matrix": jp.Matrix, "inputs": inputsCtx}),
 			Image:           jp.Image,
 			Matrix:          jp.Matrix,
 			Env:             jp.Env,
@@ -146,7 +162,7 @@ func (o *Orchestrator) StartRun(ctx context.Context, p store.CreateRunParams) (s
 			EnvironmentURL:  jp.EnvironmentURL,
 			SplitN:          jp.SplitN,
 			SplitAuto:       jp.SplitAuto,
-			Inputs:          jp.Inputs,
+			Inputs:          inputs,
 			Services:        serviceSeeds(jp.Services),
 			Permissions:     jp.Permissions,
 			NeedsDocker:     jobNeedsDocker(jp.Steps),
