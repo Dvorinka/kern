@@ -1,15 +1,25 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="KERN logo">
   <title>KERN — hub fan</title>
-  <!-- One input circle feeds the hub, which fans to three output circles;
-       the middle output carries a check. Stroke-based master. -->
+  <!-- Original stroke master with the badge's three fill patterns on the
+       output nodes: solid, dot grid (carries the check), diagonal stripes. -->
+  <defs>
+    <pattern id="pd" width="9" height="9" patternUnits="userSpaceOnUse">
+      <rect width="9" height="9" fill="#fff"/>
+      <circle cx="4.5" cy="4.5" r="2.1" fill="#000"/>
+    </pattern>
+    <pattern id="ps" width="9" height="9" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="9" height="9" fill="#fff"/>
+      <rect width="3.2" height="9" fill="#000"/>
+    </pattern>
+  </defs>
   <path d="M66 86 L92 108" stroke="#000" stroke-width="16" fill="none" stroke-linecap="round"/>
   <path d="M134 116 C 158 106 170 92 178 70 M136 128 H174 M134 140 C 158 150 170 164 178 186"
         stroke="#000" stroke-width="16" fill="none" stroke-linecap="round"/>
   <circle cx="52" cy="72" r="21" fill="#000"/>
   <circle cx="112" cy="128" r="26" fill="#000"/>
   <circle cx="194" cy="52" r="21" fill="#000"/>
-  <circle cx="198" cy="128" r="21" fill="#000"/>
-  <circle cx="194" cy="204" r="21" fill="#000"/>
-  <path d="M187 129 L194 136 L205 118" stroke="#fff" stroke-width="8"
+  <circle cx="198" cy="128" r="21" fill="url(#pd)"/>
+  <circle cx="194" cy="204" r="21" fill="url(#ps)"/>
+  <path d="M187 129 L194 136 L205 118" stroke="#000" stroke-width="8"
         fill="none" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

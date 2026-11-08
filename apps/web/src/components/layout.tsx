@@ -23,21 +23,27 @@ const NAV: { to: string; label: string; end?: boolean }[] = [
 ];
 
 // The hub-fan mark: a push fans out from the hub to the runners.
-// Geometry mirrors the login-page illustration, normalized to 256².
+// Geometry mirrors docs/brand/logo.svg, normalized to 256².
 export function FanMark({ size = 19 }: { size?: number }) {
 	return (
 		<svg width={size} height={size} viewBox="0 0 256 256" aria-hidden>
 			<g fill="none" stroke="currentColor" strokeWidth="16" strokeLinecap="round">
-				<path d="M32 129 H78" />
-				<path d="M125 129 H144 C172 129 172 59 199 59 H226" />
-				<path d="M125 129 H226" />
-				<path d="M125 129 H144 C172 129 172 199 199 199 H226" />
+				<path d="M66 86 L92 108" />
+				<path d="M134 116 C 158 106 170 92 178 70 M136 128 H174 M134 140 C 158 150 170 164 178 186" />
 			</g>
-			<circle cx="16" cy="129" r="16" fill="currentColor" />
-			<circle cx="101" cy="129" r="23" fill="currentColor" />
-			<circle cx="240" cy="59" r="16" fill="currentColor" />
-			<circle cx="240" cy="129" r="14" fill="currentColor" />
-			<circle cx="240" cy="199" r="14" fill="currentColor" />
+			<circle cx="52" cy="72" r="21" fill="currentColor" />
+			<circle cx="112" cy="128" r="26" fill="currentColor" />
+			<circle cx="194" cy="52" r="21" fill="currentColor" />
+			<circle cx="198" cy="128" r="21" fill="currentColor" />
+			<circle cx="194" cy="204" r="21" fill="currentColor" />
+			<path
+				d="M187 129 L194 136 L205 118"
+				fill="none"
+				stroke="var(--paper)"
+				strokeWidth="8"
+				strokeLinecap="round"
+				strokeLinejoin="round"
+			/>
 		</svg>
 	);
 }
