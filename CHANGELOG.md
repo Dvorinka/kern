@@ -5,6 +5,8 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 
 ## [Unreleased]
 
+## [v0.5.1] - 2026-11-08
+
 ### Fixed
 - Update checks no longer inherit the caller's request context: a runner
   heartbeat's ~5s client budget could cancel the release fetch mid-flight
