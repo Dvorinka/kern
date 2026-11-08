@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { Minus, Plus, RotateCcw } from "lucide-react";
 import type { FleetMapPin, FleetMapResponse } from "../lib/types";
@@ -408,6 +408,148 @@ export function FleetMap({ data }: { data: FleetMapResponse }) {
 					next heartbeat or edit manually on the runners page
 				</span>
 			)}
+		</div>
+	);
+}
+
+// GeoPicker is the same dot-matrix world as a targeting reticle: click (or
+// tap) sets lat/lng in the exact projection the fleet map uses, so a picked
+// point lands where the runner marker will draw. Wheel zooms, drag pans.
+export function GeoPicker({
+	lat,
+	lng,
+	onPick,
+}: {
+	lat: number | null;
+	lng: number | null;
+	onPick: (lat: number, lng: number) => void;
+}) {
+	const svgRef = useRef<SVGSVGElement>(null);
+	const [view, setView] = useState<View>({ ...VB });
+	const drag = useRef<{ px: number; py: number; vx: number; vy: number; moved: boolean } | null>(null);
+	const suppressClick = useRef(false);
+
+	const px = lng != null ? LON(lng) : null;
+	const py = lat != null ? LAT(lat) : null;
+
+	const setV = (fn: (v: View) => View) => setView((v) => clampView(fn(v)));
+
+	const toSvg = useCallback(
+		(cx: number, cy: number): [number, number] => {
+			const rect = svgRef.current?.getBoundingClientRect();
+			if (!rect) return [0, 0];
+			const v = view;
+			return [v.x + ((cx - rect.left) / rect.width) * v.w, v.y + ((cy - rect.top) / rect.height) * v.h];
+		},
+		[view],
+	);
+
+	useEffect(() => {
+		const el = svgRef.current;
+		if (!el) return;
+		const onWheel = (e: WheelEvent) => {
+			e.preventDefault();
+			const [mx, my] = toSvg(e.clientX, e.clientY);
+			setV((v) => {
+				const f = e.deltaY > 0 ? 1.18 : 1 / 1.18;
+				const w = clamp(v.w * f, MIN_W, MAX_W);
+				const h = w * ASPECT;
+				const k = w / v.w;
+				return { w, h, x: mx - (mx - v.x) * k, y: my - (my - v.y) * k };
+			});
+		};
+		el.addEventListener("wheel", onWheel, { passive: false });
+		return () => el.removeEventListener("wheel", onWheel);
+	}, [toSvg]);
+
+	const zoomBy = (f: number) =>
+		setV((v) => {
+			const cx = v.x + v.w / 2;
+			const cy = v.y + v.h / 2;
+			const w = clamp(v.w * f, MIN_W, MAX_W);
+			const h = w * ASPECT;
+			const k = w / v.w;
+			return { w, h, x: cx - (cx - v.x) * k, y: cy - (cy - v.y) * k };
+		});
+
+	const pick = (e: MouseEvent<SVGSVGElement>) => {
+		const [mx, my] = toSvg(e.clientX, e.clientY);
+		const lng2 = (mx / MW) * 360 - 180;
+		const lat2 = LAT_T - (my / MH) * (LAT_T - LAT_B);
+		onPick(Number(lat2.toFixed(5)), Number(lng2.toFixed(5)));
+	};
+
+	return (
+		<div className="fleetmap geopick">
+			<svg
+				ref={svgRef}
+				viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`}
+				role="application"
+				aria-label="Location picker — click to drop a pin, scroll to zoom, drag to pan"
+				className={drag.current?.moved ? "fm-dragging" : ""}
+				onPointerDown={(e) => {
+					drag.current = { px: e.clientX, py: e.clientY, vx: view.x, vy: view.y, moved: false };
+					(e.target as Element).setPointerCapture?.(e.pointerId);
+				}}
+				onPointerMove={(e) => {
+					const d = drag.current;
+					if (!d) return;
+					const rect = svgRef.current?.getBoundingClientRect();
+					if (!rect) return;
+					const dx = ((e.clientX - d.px) / rect.width) * view.w;
+					const dy = ((e.clientY - d.py) / rect.height) * view.h;
+					if (Math.abs(e.clientX - d.px) + Math.abs(e.clientY - d.py) > 4) d.moved = true;
+					setV((v) => ({ ...v, x: d.vx - dx, y: d.vy - dy }));
+				}}
+				onPointerUp={() => {
+					if (drag.current?.moved) suppressClick.current = true;
+					drag.current = null;
+				}}
+				onPointerLeave={() => {
+					drag.current = null;
+				}}
+				onClick={(e) => {
+					if (suppressClick.current) {
+						suppressClick.current = false;
+						return;
+					}
+					pick(e);
+				}}
+			>
+				<g opacity={clamp((view.w - 260) / 400, 0, 1)} className="fm-land">
+					<path d={WORLD_GRATICULE_PATH} transform={LAND_TF} className="fm-grat" />
+					<path d={WORLD_LAND_PATH} transform={LAND_TF} className="fm-landpath" />
+				</g>
+				<g opacity={clamp((560 - view.w) / 260, 0, 1)}>
+					{DOTS.map((d, i) => (
+						<circle key={i} cx={d.x.toFixed(1)} cy={d.y.toFixed(1)} r={0.9} className="fm-dot" />
+					))}
+				</g>
+				{px != null && py != null && (
+					<g pointerEvents="none">
+						<circle cx={px} cy={py} r={10} fill="none" stroke="var(--live)" strokeWidth={2} className="geopick-ring" />
+						<circle cx={px} cy={py} r={4} fill="var(--live)" />
+						<line x1={px - 16} y1={py} x2={px + 16} y2={py} stroke="var(--live)" strokeWidth={1.5} />
+						<line x1={px} y1={py - 16} x2={px} y2={py + 16} stroke="var(--live)" strokeWidth={1.5} />
+					</g>
+				)}
+			</svg>
+			<div className="fm-zoom">
+				<button onClick={() => zoomBy(1 / 1.4)} title="Zoom out" aria-label="Zoom out">
+					<Minus size={12} />
+				</button>
+				<button onClick={() => zoomBy(1.4)} title="Zoom in" aria-label="Zoom in">
+					<Plus size={12} />
+				</button>
+				<button onClick={() => setView({ ...VB })} title="Reset view" aria-label="Reset view">
+					<RotateCcw size={12} />
+				</button>
+			</div>
+		{lat != null && lng != null && (
+			<span className="fm-note geopick-coords">
+				{lat.toFixed(4)}, {lng.toFixed(4)}
+			</span>
+		)}
 		</div>
 	);
 }
