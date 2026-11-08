@@ -9,9 +9,11 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -116,6 +118,7 @@ const (
 // image layers and in-flight build cache are never pulled out from under it.
 func (a *Agent) diskGCLoop(ctx context.Context) {
 	a.sweepWorkspaces()
+	a.sweepBoundedCache()
 	a.maybePruneDisk(ctx)
 	t := time.NewTicker(diskSweepInterval)
 	defer t.Stop()
@@ -125,6 +128,7 @@ func (a *Agent) diskGCLoop(ctx context.Context) {
 			return
 		case <-t.C:
 			a.sweepWorkspaces()
+			a.sweepBoundedCache()
 			a.maybePruneDisk(ctx)
 		}
 	}
@@ -157,6 +161,61 @@ func (a *Agent) sweepWorkspaces() {
 	}
 }
 
+// sweepBoundedCache enforces Config.CacheMaxBytes on the _cache tree. Files
+// are evicted oldest-mtime-first; every resident is a rebuildable cache entry
+// (language caches, _toolcache downloads, _actions checkouts), so removal is
+// always safe — a miss just costs a re-download or recompile. Skipped while a
+// job is active so an in-flight build never loses its warm cache mid-step.
+func (a *Agent) sweepBoundedCache() {
+	limit := a.cfg.CacheMaxBytes
+	if limit <= 0 || a.active.Load() > 0 {
+		return
+	}
+	root := filepath.Join(a.cfg.WorkRoot, "_cache")
+	type entry struct {
+		path string
+		size int64
+		mod  time.Time
+	}
+	var files []entry
+	var total int64
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		files = append(files, entry{path, info.Size(), info.ModTime()})
+		total += info.Size()
+		return nil
+	})
+	if err != nil || total <= limit {
+		return
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].mod.Before(files[j].mod) })
+	var freed int64
+	for _, f := range files {
+		if total <= limit {
+			break
+		}
+		if err := os.Remove(f.path); err != nil {
+			continue
+		}
+		total -= f.size
+		freed += f.size
+	}
+	if freed > 0 {
+		a.log.Info("cache bound: evicted oldest entries",
+			zap.Int64("freed_bytes", freed), zap.Int64("remaining_bytes", total),
+			zap.Int64("cap_bytes", limit))
+	}
+}
+
 func (a *Agent) maybePruneDisk(ctx context.Context) {
 	if a.executor() != "docker" {
 		return // host mode has no daemon to prune
@@ -170,6 +229,9 @@ func (a *Agent) maybePruneDisk(ctx context.Context) {
 		return
 	}
 	if a.active.Load() > 0 {
+		a.log.Warn("disk pressure: jobs active, docker prune deferred",
+			zap.Int64("free_bytes", free), zap.Int64("total_bytes", total),
+			zap.Float64("min_free_pct", pct))
 		return
 	}
 	a.log.Warn("disk pressure: pruning docker",
@@ -192,7 +254,9 @@ func (a *Agent) maybePruneDisk(ctx context.Context) {
 		a.log.Info("disk prune", zap.Strings("args", args), zap.String("out", tailStr(strings.TrimSpace(string(out)), 200)))
 	}
 	if free2, _ := diskSpace(a.cfg.WorkRoot); free2 > free {
-		a.log.Info("disk prune complete", zap.Int64("free_before", free), zap.Int64("free_after", free2))
+		a.log.Info("disk prune complete",
+			zap.Int64("reclaimed_bytes", free2-free),
+			zap.Int64("free_before", free), zap.Int64("free_after", free2))
 	}
 }
 
