@@ -811,10 +811,12 @@ func (b *envBuilder) pathLines() string {
 }
 
 // render returns the env-file content for a step plus the vars that must ride
-// `docker exec -e` instead: docker's --env-file parser treats every line as
-// KEY=value, so multi-line values would corrupt the file. Secrets keep to the
-// file (single-line by convention); multi-line values are visible in the
-// container's inspect output, matching GitHub's own visibility.
+// `-e` args instead: docker's --env-file parser treats every line as
+// KEY=value, so multi-line values (pretty-printed service-account JSON, PEM
+// keys, heredoc exports) would corrupt the file. Values with spaces but no
+// newline are safe — docker keeps everything after the first `=` verbatim.
+// Extra vars are visible in the container's inspect output, matching GitHub's
+// own visibility for env.
 func (b *envBuilder) render(step StepSpec) (string, map[string]string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -829,6 +831,9 @@ func (b *envBuilder) render(step StepSpec) (string, map[string]string) {
 			extra[k] = v
 			return
 		}
+		// A later layer resolved this key to a file-safe value: drop any
+		// earlier extra entry or the stale `-e` arg would override it.
+		delete(extra, k)
 		fmt.Fprintf(&out, "%s=%s\n", k, v)
 	}
 	for k, v := range b.jobEnv {

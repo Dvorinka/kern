@@ -137,6 +137,34 @@ func TestEnvBuilderRender(t *testing.T) {
 	}
 }
 
+func TestEnvBuilderRenderWhitespaceAndPrecedence(t *testing.T) {
+	// Single-line values with spaces (minified or inline JSON) are valid
+	// env-file content — docker keeps everything after the first `=`.
+	claim := &Claim{}
+	claim.Job.Env = map[string]string{"JOB_MULTI": "j1\nj2", "SHARED": "job-env"}
+	e := newEnvBuilder(claim, map[string]string{
+		"SA_JSON": `{"type": "service_account", "project_id": "x"}`,
+		"SHARED":  "sec1\nsec2",
+	})
+	step := StepSpec{Env: map[string]string{"SHARED": "step-wins", "PEM": "-----BEGIN KEY-----\nabc\n-----END KEY-----\n"}}
+	content, extra := e.render(step)
+
+	if !strings.Contains(content, `SA_JSON={"type": "service_account", "project_id": "x"}`) {
+		t.Errorf("single-line spaced value must stay in the env file:\n%s", content)
+	}
+	if strings.Contains(content, "PEM=") || extra["PEM"] != "-----BEGIN KEY-----\nabc\n-----END KEY-----" {
+		t.Errorf("PEM key must ride -e with newlines preserved: %q %v", content, extra["PEM"])
+	}
+	// SHARED resolves multi-line in secrets but single-line in step.Env:
+	// the later layer wins, so the stale extra entry must be dropped.
+	if !strings.Contains(content, "SHARED=step-wins") {
+		t.Errorf("env file missing step-level SHARED:\n%s", content)
+	}
+	if _, ok := extra["SHARED"]; ok {
+		t.Errorf("stale extra would override the newer file value: %v", extra)
+	}
+}
+
 func TestCloneArgs(t *testing.T) {
 	pub := cloneArgs(ClaimRun{RepoURL: "https://github.com/o/r.git"}, "/ws")
 	if got := strings.Join(pub, " "); got != "clone --quiet --depth 1 -- https://github.com/o/r.git /ws" {
