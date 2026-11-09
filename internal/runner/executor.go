@@ -680,22 +680,32 @@ func (e *executor) jobEnv() map[string]string {
 		"TMPDIR":   e.tmpPath(),
 		// Actions resolve $HOME for tool state (setup-go GOPATH, npm config);
 		// images may carry no writable home for uid 1000 at all.
-		"HOME":              e.actionHomePath(),
-		"GITHUB_WORKSPACE":  e.wsPath(),
-		"GITHUB_REPOSITORY": defaultStr(e.claim.Run.RepoFullName, e.claim.Run.Project),
-		"GITHUB_SHA":        e.claim.Run.SHA,
-		"GITHUB_REF":        e.claim.Run.Ref,
-		"GITHUB_RUN_ID":     e.claim.Run.ID,
-		"GITHUB_RUN_NUMBER": itoa(e.claim.Run.Number),
-		"GITHUB_JOB":        e.claim.Job.Key,
+		"HOME":                    e.actionHomePath(),
+		"GITHUB_WORKSPACE":        e.wsPath(),
+		"GITHUB_REPOSITORY":       defaultStr(e.claim.Run.RepoFullName, e.claim.Run.Project),
+		"GITHUB_REPOSITORY_OWNER": repoOwner(e.claim.Run.RepoFullName),
+		"GITHUB_SHA":              e.claim.Run.SHA,
+		"GITHUB_REF":              e.claim.Run.Ref,
+		// ref_name/ref_type power the classic echo "version=${GITHUB_REF_NAME#v}"
+		// >> $GITHUB_OUTPUT release pattern — unset, it writes an empty output
+		// that reads back as a missing one (kern#247).
+		"GITHUB_REF_NAME":    refName(e.claim.Run.Ref),
+		"GITHUB_REF_TYPE":    refType(e.claim.Run.Ref),
+		"GITHUB_HEAD_REF":    e.claim.Run.HeadRef,
+		"GITHUB_RUN_ID":      e.claim.Run.ID,
+		"GITHUB_RUN_NUMBER":  itoa(e.claim.Run.Number),
+		"GITHUB_RUN_ATTEMPT": itoa(e.claim.Job.Attempt),
+		"GITHUB_JOB":         e.claim.Job.Key,
 		// Actions test GITHUB_ACTIONS to detect CI; gh and release actions
 		// read the event/workflow/actor triple.
-		"GITHUB_ACTIONS":    "true",
-		"GITHUB_EVENT_NAME": e.claim.Run.Event,
-		"GITHUB_WORKFLOW":   e.claim.Run.Workflow,
-		"GITHUB_ACTOR":      e.claim.Run.Actor,
-		"GITHUB_SERVER_URL": serverURL(e.claim.Run.RepoURL),
-		"GITHUB_API_URL":    apiURL(e.claim.Run.RepoURL),
+		"GITHUB_ACTIONS":          "true",
+		"GITHUB_EVENT_NAME":       e.claim.Run.Event,
+		"GITHUB_WORKFLOW":         e.claim.Run.Workflow,
+		"GITHUB_ACTOR":            e.claim.Run.Actor,
+		"GITHUB_SERVER_URL":       serverURL(e.claim.Run.RepoURL),
+		"GITHUB_API_URL":          apiURL(e.claim.Run.RepoURL),
+		"GITHUB_GRAPHQL_URL":      graphqlURL(e.claim.Run.RepoURL),
+		"GITHUB_TRIGGERING_ACTOR": e.claim.Run.Actor,
 		// @actions/cache (setup-node/setup-go cache:, actions/cache/*) speaks
 		// the GitHub cache-service protocol; point it at the job-scoped
 		// compat endpoint on the control plane.
@@ -721,10 +731,29 @@ func (e *executor) jobEnv() map[string]string {
 			env[k] = v
 		}
 	}
+	if b, _ := e.claim.Run.Source["base_ref"].(string); b != "" {
+		env["GITHUB_BASE_REF"] = b
+	}
 	if p := e.eventPath(); p != "" {
 		env["GITHUB_EVENT_PATH"] = p
 	}
 	return env
+}
+
+// repoOwner is the owner half of a full repository name ("" when absent).
+func repoOwner(fullName string) string {
+	owner, _, _ := strings.Cut(fullName, "/")
+	return owner
+}
+
+// graphqlURL mirrors GITHUB_GRAPHQL_URL — api.github.com/graphql for
+// github.com, /api/graphql on GHES-style hosts.
+func graphqlURL(repoURL string) string {
+	host := strings.TrimPrefix(serverURL(repoURL), "https://")
+	if host == "github.com" {
+		return "https://api.github.com/graphql"
+	}
+	return "https://" + host + "/api/graphql"
 }
 
 // dockerEnvArgs flattens jobEnv into sorted `-e K=V` docker create args.
