@@ -338,7 +338,10 @@ func parsePRTrigger(body []byte, event string) (*ghTrigger, string, string) {
 		return nil, "ignored", "head repository is gone (deleted fork?); nothing to check out"
 	}
 	trust := "pull_request"
-	if pr.Head.Repo.Fork || pr.Head.Repo.FullName != p.Repository.FullName {
+	// head.repo.fork only means the repository is itself a fork upstream —
+	// a same-repo branch PR in a fork-network repo must not be demoted.
+	// GitHub parity: only a different head repository is untrusted.
+	if pr.Head.Repo.FullName != p.Repository.FullName {
 		trust = "fork"
 	}
 	return &ghTrigger{

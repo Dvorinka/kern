@@ -397,6 +397,31 @@ func TestParsePRTriggerTrust(t *testing.T) {
 	}
 }
 
+func TestParsePRTriggerForkNetworkSameRepo(t *testing.T) {
+	// Dvorinka/cloudreve is itself a fork of cloudreve/cloudreve, so GitHub
+	// reports head.repo.fork=true even for same-repo branch PRs. Trust must
+	// key on the repository identity, not the fork flag.
+	body := []byte(`{
+		"action": "opened", "number": 11,
+		"pull_request": {
+			"title": "same-repo branch in a fork-network repo",
+			"author_association": "MEMBER",
+			"head": {"sha": "abc999", "ref": "port/upstream-watch",
+				"repo": {"full_name": "o/r", "clone_url": "https://github.com/o/r.git", "fork": true}},
+			"base": {"ref": "main", "sha": "base999"}
+		},
+		"sender": {"login": "dev"},
+		"repository": {"full_name": "o/r", "clone_url": "https://github.com/o/r.git", "default_branch": "main"}
+	}`)
+	tr, _, _ := parsePRTrigger(body, "pull_request")
+	if tr == nil {
+		t.Fatal("same-repo PR in fork-network repo rejected")
+	}
+	if tr.trust != "pull_request" {
+		t.Fatalf("trust = %q, want pull_request", tr.trust)
+	}
+}
+
 func TestParsePRTriggerFork(t *testing.T) {
 	body := []byte(`{
 		"action": "synchronize", "number": 9,
