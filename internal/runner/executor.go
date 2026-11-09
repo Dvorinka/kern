@@ -156,6 +156,11 @@ type executor struct {
 	// stopServices runs them once the service containers are gone.
 	portReleases []func()
 
+	// svcForwarders are the loopback port-forward containers started for
+	// host:container service remaps on bridge jobs; stopServices removes
+	// them alongside the service containers.
+	svcForwarders []string
+
 	// Service log streaming: docker logs -f per service folds into the
 	// active step's log under a service:<name> marker. currentStep is the
 	// last started step number; pending batches until a step exists.

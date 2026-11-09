@@ -84,17 +84,13 @@ jobs:
 	if len(got["cache"]) != 1 || got["cache"][0] != "6379" {
 		t.Fatalf("cache ports: %v", got["cache"])
 	}
-	if len(got["remap"]) != 1 || got["remap"][0] != "5432" {
+	if len(got["remap"]) != 1 || got["remap"][0] != "15432:5432" {
 		t.Fatalf("remap ports: %v", got["remap"])
 	}
-	found := false
 	for _, dg := range res.Diagnostics {
-		if dg.Level == "warning" && dg.Code == "services" && strings.Contains(dg.Message, "15432:5432") {
-			found = true
+		if dg.Code == "services" && strings.Contains(dg.Message, "15432") {
+			t.Fatalf("honoured remaps must not warn: %+v", dg)
 		}
-	}
-	if !found {
-		t.Fatalf("want host-remap warning, got %+v", res.Diagnostics)
 	}
 }
 
