@@ -210,6 +210,9 @@ func (a *Agent) sweepWorkspaceLinks() {
 		return
 	}
 	for _, e := range entries {
+		if e.Type()&os.ModeSymlink == 0 {
+			continue
+		}
 		path := filepath.Join("/github/workspaces", e.Name())
 		target, err := os.Readlink(path)
 		if err != nil {
