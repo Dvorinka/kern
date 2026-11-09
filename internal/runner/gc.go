@@ -120,6 +120,7 @@ func (a *Agent) diskGCLoop(ctx context.Context) {
 	a.sweepWorkspaces()
 	a.sweepBoundedCache()
 	a.sweepOrphanServices(ctx)
+	a.sweepWorkspaceLinks()
 	a.pruneDangling(ctx)
 	a.maybePruneDisk(ctx)
 	t := time.NewTicker(diskSweepInterval)
@@ -132,6 +133,7 @@ func (a *Agent) diskGCLoop(ctx context.Context) {
 			a.sweepWorkspaces()
 			a.sweepBoundedCache()
 			a.sweepOrphanServices(ctx)
+			a.sweepWorkspaceLinks()
 			a.pruneDangling(ctx)
 			a.maybePruneDisk(ctx)
 		}
@@ -197,6 +199,30 @@ func (a *Agent) jobActive(name string) bool {
 		return true
 	})
 	return active
+}
+
+// sweepWorkspaceLinks removes /github/workspaces/<job> symlinks whose target
+// work dir is gone — residue from jobs whose cleanup() never ran. Live links
+// are kept so a running job's docker CLI calls keep resolving.
+func (a *Agent) sweepWorkspaceLinks() {
+	entries, err := os.ReadDir("/github/workspaces")
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		path := filepath.Join("/github/workspaces", e.Name())
+		target, err := os.Readlink(path)
+		if err != nil {
+			continue
+		}
+		// Stat the work root, not workspace itself: checkout wipes and
+		// recreates workspace mid-job, and a sweep landing in that window
+		// must not pull the link from under a live job.
+		if _, err := os.Stat(filepath.Dir(target)); err != nil {
+			_ = os.Remove(path)
+			a.log.Info("workspace link sweep: removed stale link", zap.String("path", path))
+		}
+	}
 }
 
 // pruneDangling drops untagged image layers every sweep while idle —

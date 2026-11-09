@@ -181,12 +181,12 @@ func (e *executor) dockerActionRun(ctx context.Context, step StepSpec, image, en
 		"--tmpfs", "/tmp:rw,noexec,nosuid,size=512m",
 		"--memory", valueOr(e.cfg.JobMemory, "1g"),
 		"--cpus", valueOr(e.cfg.JobCPUs, "1"),
-		"-v", filepath.Join(e.workRoot(), "workspace") + ":" + containerWorkspace,
+		"-v", filepath.Join(e.workRoot(), "workspace") + ":" + e.wsContainer(),
 		"-v", e.cmdDir() + ":" + containerCmdDir,
 		"-v", filepath.Join(e.workRoot(), "actions") + ":" + containerActionsDir + ":ro",
 		"-v", home + ":" + containerActionHome,
 		"-v", cacheDir(e.cfg.WorkRoot) + ":" + containerCacheDir,
-		"-w", containerWorkspace,
+		"-w", e.wsContainer(),
 		"--env-file", e.stepEnvPath(step),
 		// Multi-line env values cannot ride the env file; mirror the
 		// docker exec path and pass them as -e args.
@@ -201,7 +201,7 @@ func (e *executor) dockerActionRun(ctx context.Context, step StepSpec, image, en
 	}
 	dargs = append(dargs,
 		"-e", "HOME="+containerActionHome,
-		"-e", "GITHUB_WORKSPACE="+containerWorkspace,
+		"-e", "GITHUB_WORKSPACE="+e.wsContainer(),
 		"-e", "GITHUB_ACTION_PATH="+env["GITHUB_ACTION_PATH"],
 		"-e", "GITHUB_ENV="+containerCmdDir+"/GITHUB_ENV",
 		"-e", "GITHUB_PATH="+containerCmdDir+"/PATH_LINES",

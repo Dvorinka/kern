@@ -212,7 +212,7 @@ func (e *executor) runStepBody(ctx context.Context, step StepSpec) (string, int,
 	} else {
 		execArgs := []string{"exec",
 			"--user", fmt.Sprintf("%d:%d", e.execUID(), e.execUID()),
-			"-w", containerWorkspace,
+			"-w", e.wsPath(),
 			"--env-file", e.stepEnvPath(step),
 		}
 		extraKeys := make([]string, 0, len(e.stepEnvExtra))
@@ -499,6 +499,7 @@ func (e *executor) baseContext() map[string]any {
 		"repository": e.claim.Run.RepoFullName, "job": e.claim.Job.Key,
 		"workflow": e.claim.Run.Workflow, "head_ref": e.claim.Run.HeadRef,
 		"head_sha": e.claim.Run.HeadSHA, "event": e.eventPayload,
+		"ref_name": refName(e.claim.Run.Ref), "ref_type": refType(e.claim.Run.Ref),
 	}
 	needs := e.claim.Job.Needs
 	if needs == nil {
@@ -577,6 +578,26 @@ func (e *executor) runnerCtxMap() map[string]any {
 		rc["workspace"] = e.wsPath()
 	}
 	return rc
+}
+
+// refName mirrors github.ref_name — the short branch or tag that triggered
+// the run. refs/pull/N/head maps to N/head; GitHub uses N/merge but KERN
+// checks out the head.
+func refName(ref string) string {
+	for _, p := range []string{"refs/heads/", "refs/tags/", "refs/pull/"} {
+		if strings.HasPrefix(ref, p) {
+			return strings.TrimPrefix(ref, p)
+		}
+	}
+	return ref
+}
+
+// refType mirrors github.ref_type.
+func refType(ref string) string {
+	if strings.HasPrefix(ref, "refs/tags/") {
+		return "tag"
+	}
+	return "branch"
 }
 
 func runnerContext(name string) map[string]any {

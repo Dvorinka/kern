@@ -245,6 +245,20 @@ func (e *executor) workRoot() string {
 	return filepath.Join(e.cfg.WorkRoot, sanitizeID(e.claim.Job.ID))
 }
 
+// wsContainer is the workspace path inside the job container. Privileged
+// jobs get a per-job path: docker CLI calls resolve `./` client-side, so a
+// compose bind becomes /github/workspaces/<job>/... — and the matching
+// host-side symlink lands on this job's work root. A single global
+// /github/workspace link races whenever concurrency > 1: a sibling job
+// rewrites it mid-run and the daemon mounts the wrong (or a wiped)
+// workspace.
+func (e *executor) wsContainer() string {
+	if e.privileged() {
+		return "/github/workspaces/" + sanitizeID(e.claim.Job.ID)
+	}
+	return containerWorkspace
+}
+
 // The helpers below resolve paths as executed code sees them: inside the job
 // container for the docker executor, on the host filesystem for the host
 // executor. The runner itself always uses the host paths (cmdDir, workRoot).
@@ -252,7 +266,7 @@ func (e *executor) wsPath() string {
 	if e.host {
 		return filepath.Join(e.workRoot(), "workspace")
 	}
-	return containerWorkspace
+	return e.wsContainer()
 }
 func (e *executor) cmdEnvPath() string {
 	if e.host {
@@ -502,7 +516,7 @@ func (e *executor) startContainer(ctx context.Context) error {
 	args = append(args,
 		"--memory", valueOr(e.cfg.JobMemory, "1g"),
 		"--cpus", valueOr(e.cfg.JobCPUs, "1"),
-		"-v", filepath.Join(workRoot, "workspace")+":"+containerWorkspace,
+		"-v", filepath.Join(workRoot, "workspace")+":"+e.wsContainer(),
 		"-v", cmdHome+":"+containerCmdDir,
 		"-v", scriptDir+":"+containerScriptDir+":ro",
 		"-v", actionsMount,
@@ -549,13 +563,21 @@ func (e *executor) startContainer(ctx context.Context) error {
 		// Written into the ephemeral container — the image stays untouched.
 		_ = exec.CommandContext(ctx, "docker", "exec", e.container, "sh", "-c",
 			`command -v sudo >/dev/null || { printf '#!/bin/sh\nexec "$@"\n' > /usr/local/bin/sudo && chmod +x /usr/local/bin/sudo; }`).Run()
-		// docker-compose `./` volumes resolve client-side to /github/workspace
-		// but the daemon mounts host-side. /github is a host dir bind-mounted
-		// into the runner; point its workspace link at this job's workspace so
-		// client paths land on the right host path. Race-free at concurrency 1.
+		// docker-compose `./` volumes resolve client-side to the workspace
+		// path but the daemon mounts host-side. /github is a host dir
+		// bind-mounted into the runner; point per-job links at this job's
+		// workspace so client paths land on the right host path at any
+		// concurrency. The legacy /github/workspace link stays for jobs
+		// still on the shared path.
 		if dirExists("/github") {
 			_ = os.Remove("/github/workspace")
 			_ = os.Symlink(filepath.Join(e.workRoot(), "workspace"), "/github/workspace")
+			wsLinks := filepath.Join("/github", "workspaces")
+			if err := os.MkdirAll(wsLinks, 0o755); err == nil {
+				link := filepath.Join(wsLinks, sanitizeID(e.claim.Job.ID))
+				_ = os.Remove(link)
+				_ = os.Symlink(filepath.Join(e.workRoot(), "workspace"), link)
+			}
 		}
 	}
 	return nil
@@ -809,6 +831,9 @@ func (e *executor) cleanup() {
 		e.reapOrphanContainers(ctx)
 	}
 	_ = os.RemoveAll(e.workRoot())
+	if !e.host && e.privileged() && dirExists("/github") {
+		_ = os.Remove(filepath.Join("/github", "workspaces", sanitizeID(e.claim.Job.ID)))
+	}
 }
 
 // containerIDs snapshots every container ID the daemon knows about.
