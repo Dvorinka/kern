@@ -26,6 +26,22 @@ Ordered by how many repos they touch.
 | `runs-on: ${{ inputs.runner }}` | Invico + Relay ployz-build | Resolved: trigger accepts `inputs` (`POST /projects/:p/workflows/:w/runs` body `inputs:{...}`, `kern runs trigger --inputs '{"runner":"windows-host"}'`); runs-on re-resolves at seed time against matrix + dispatch inputs. Missing input keeps the literal label — job stays queued (same as any unmatched label). Declared `on.workflow_dispatch.inputs` defaults are not evaluated — pass every input the workflow reads. |
 | Secrets/vars migration | all | Every repo's GitHub secrets must be re-created per project (`PUT /api/v1/secrets/:name?project=<id>` or the dashboard). The `secrets` expression context is live — `${{ secrets.X }}` resolves in env/if/run/with — so migration is purely a data-copy step. Cal's `ANDROID_KEYSTORE_*` trio is already populated. Repo `vars` migrate via `kern vars set NAME VALUE --project <slug>` (or the dashboard Variables card) — they are plaintext, not secrets. |
 
+## Fork & `pull_request` trust — the `pr_trust` escape hatch
+
+By design, `pull_request` and `fork` runs are sandboxed: no secrets, no
+`GITHUB_TOKEN`, no docker socket, host-executor runners refuse them. That
+is the correct default for code you do not control.
+
+For **same-repo** PRs (your own branches — the common case for the repos
+in this ledger), set project `pr_trust=trusted` to promote those runs to
+the trusted tier: secrets resolve, `GITHUB_TOKEN` is minted, docker lanes
+work. Fork PRs from outside contributors stay sandboxed regardless —
+`pr_trust` never downgrades or upgrades genuine forks.
+
+Set it in the project settings UI (**PR trust**), via
+`PUT /api/v1/projects/:slug/settings {"pr_trust":"trusted"}`, or
+`kern settings set pr_trust trusted --project <slug>`.
+
 ## Per-repo verdicts
 
 ✅ = ports as-is. ⚠️ = needs workflow tweaks or fleet labels. ❌ = has

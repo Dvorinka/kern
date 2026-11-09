@@ -246,6 +246,7 @@ export function ProjectDetailPage() {
 			api.get<{
 				self_heal: string;
 				fork_gate: string;
+				pr_trust?: string;
 				icon_path?: string;
 				notify_url?: string;
 				artifact_quota_mb?: string;
@@ -278,6 +279,10 @@ export function ProjectDetailPage() {
 	});
 	const setGate = useMutation({
 		mutationFn: (v: string) => api.put(`/projects/${slug}/settings`, { fork_gate: v }),
+		onSuccess: () => qc.invalidateQueries({ queryKey: ["project-settings", slug] }),
+	});
+	const setPrTrust = useMutation({
+		mutationFn: (v: string) => api.put(`/projects/${slug}/settings`, { pr_trust: v }),
 		onSuccess: () => qc.invalidateQueries({ queryKey: ["project-settings", slug] }),
 	});
 	const setNotify = useMutation({
@@ -421,6 +426,20 @@ export function ProjectDetailPage() {
 								<option value="off">off</option>
 								<option value="all">all</option>
 								<option value="first-time">first-time</option>
+							</select>
+						}
+					/>
+					<KV
+						k="PR trust"
+						v={
+							<select
+								className="rounded border border-[var(--line)] bg-transparent px-2 py-0.5 text-xs"
+								value={psettings?.pr_trust ?? "off"}
+								disabled={setPrTrust.isPending}
+								onChange={(e) => setPrTrust.mutate(e.target.value)}
+							>
+								<option value="off">off — sandboxed</option>
+								<option value="trusted">trusted — same-repo PRs get secrets/docker</option>
 							</select>
 						}
 					/>
