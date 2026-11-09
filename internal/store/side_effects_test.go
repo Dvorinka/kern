@@ -162,12 +162,12 @@ func TestMarkStaleRunnersOffline(t *testing.T) {
 		UPDATE runners SET last_heartbeat_at = now() - interval '5 minutes' WHERE id = $1`, stale.ID); err != nil {
 		t.Fatal(err)
 	}
-	n, err := s.MarkStaleRunnersOffline(ctx, time.Minute)
+	offline, err := s.MarkStaleRunnersOffline(ctx, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 {
-		t.Fatalf("marked %d offline, want 1", n)
+	if len(offline) != 1 || offline[0].ID != stale.ID {
+		t.Fatalf("offline = %+v, want [%s]", offline, stale.ID)
 	}
 	org, _ := s.FirstOrg(ctx)
 	list, err := s.Runners(ctx, org.ID)
