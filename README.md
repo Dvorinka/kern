@@ -106,6 +106,7 @@ Production-style deployment: `docker compose -f deployments/docker-compose.yml u
 | [docs/deploy.md](docs/deploy.md) | Production checklist, GitHub App, auto-update |
 | [docs/autoscaling.md](docs/autoscaling.md) | Runner scaling options + wake-on-demand controls |
 | [docs/backups.md](docs/backups.md) | Backup + restore runbook |
+| [docs/runbook.md](docs/runbook.md) | Operations runbook — symptom → check → fix |
 | [docs/remote-exec.md](docs/remote-exec.md) | `kern exec` remote execution offload |
 | [docs/production.md](docs/production.md) | Remaining gaps for enterprise readiness |
 | [plan.md](plan.md) | Milestone ledger |
