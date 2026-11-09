@@ -389,6 +389,43 @@ func TestRefNameAndType(t *testing.T) {
 	}
 }
 
+// kern#247: the release pattern echo "version=${GITHUB_REF_NAME#v}" >>
+// $GITHUB_OUTPUT wrote an empty output because ref_name was expression-only.
+func TestJobEnvGitHubContract(t *testing.T) {
+	e := &executor{
+		cfg: Config{WorkRoot: t.TempDir(), Name: "test"},
+		c:   &client{},
+		claim: &Claim{Run: ClaimRun{
+			Ref:          "refs/tags/v1.3.0",
+			RepoFullName: "o/r",
+			RepoURL:      "https://github.com/o/r.git",
+			Actor:        "dvorak",
+			HeadRef:      "feature/x",
+			Source:       map[string]any{"base_ref": "main"},
+		}},
+	}
+	env := e.jobEnv()
+	for k, want := range map[string]string{
+		"GITHUB_REF_NAME":         "v1.3.0",
+		"GITHUB_REF_TYPE":         "tag",
+		"GITHUB_HEAD_REF":         "feature/x",
+		"GITHUB_BASE_REF":         "main",
+		"GITHUB_REPOSITORY_OWNER": "o",
+		"GITHUB_RUN_ATTEMPT":      "0",
+		"GITHUB_TRIGGERING_ACTOR": "dvorak",
+		"GITHUB_GRAPHQL_URL":      "https://api.github.com/graphql",
+	} {
+		if env[k] != want {
+			t.Errorf("jobEnv[%s] = %q, want %q", k, env[k], want)
+		}
+	}
+	// No base_ref in Source → key absent (GitHub only sets it on PR runs).
+	e.claim.Run.Source = nil
+	if _, ok := e.jobEnv()["GITHUB_BASE_REF"]; ok {
+		t.Error("GITHUB_BASE_REF set without a PR base")
+	}
+}
+
 func TestPathExists(t *testing.T) {
 	dir := t.TempDir()
 	f := filepath.Join(dir, "marker")
