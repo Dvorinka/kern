@@ -6,6 +6,15 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 ## [Unreleased]
 
 ### Added
+- `kern-ubuntu` parity image now ships Playwright's full Ubuntu 24.04
+  dependency set (chromium, firefox, webkit + tools/fonts) and the
+  tauri release-lane packages (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`,
+  `libayatana-appindicator3-dev`, `librsvg2-dev`, `patchelf`,
+  `desktop-file-utils`, `minisign`, `qemu-user`, `shellcheck`,
+  `libev-dev`), so `playwright install --with-deps` and the per-job
+  `sudo apt-get install` steps resolve to no-ops instead of reinstalling
+  every run. Untrusted lanes could not satisfy these at all (read-only
+  rootfs, no privilege escalation); the libs must live in the image.
 - Critical-tier reclaim now also sweeps stale tool scratch dirs under
   the job temp root (`pytest-of-*`, `trivy-*`, `playwright-*` older than
   24h) — co-located fleets leak multi-GB residue in /tmp that docker
