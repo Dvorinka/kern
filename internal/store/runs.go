@@ -250,8 +250,15 @@ type RunFilter struct {
 	Status         string
 	Conclusion     string
 	IncludeCleared bool
-	Limit          int
-	Offset         int
+	// Ref matches the run ref exactly or as refs/heads/<ref> — `--branch main`
+	// and `--ref refs/pull/3/head` both work.
+	Ref string
+	// PR matches source.pr_number (webhook and manual PR dispatches).
+	PR string
+	// Workflow matches the workflow name or path (.github/workflows/ci.yml).
+	Workflow string
+	Limit    int
+	Offset   int
 }
 
 func (s *Store) Runs(ctx context.Context, f RunFilter) ([]Run, int, error) {
@@ -267,8 +274,12 @@ func (s *Store) Runs(ctx context.Context, f RunFilter) ([]Run, int, error) {
 		  AND ($2::text[] IS NULL OR r.status = ANY($2))
 		  AND ($3 = '' OR r.conclusion = $3)
 		  AND ($4::bool OR r.cleared_at IS NULL)
+		  AND ($7 = '' OR r.ref = $7 OR r.ref = 'refs/heads/' || $7)
+		  AND ($8 = '' OR r.source->>'pr_number' = $8)
+		  AND ($9 = '' OR w.name = $9 OR w.path = $9 OR w.path LIKE '%/' || $9)
 		ORDER BY r.created_at DESC
-		LIMIT $5 OFFSET $6`, f.ProjectID, statuses, f.Conclusion, f.IncludeCleared, limit, offset)
+		LIMIT $5 OFFSET $6`, f.ProjectID, statuses, f.Conclusion, f.IncludeCleared, limit, offset,
+		f.Ref, f.PR, f.Workflow)
 	if err != nil {
 		return nil, 0, err
 	}

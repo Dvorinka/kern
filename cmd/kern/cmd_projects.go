@@ -159,17 +159,13 @@ func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 	sub, rest := args[0], args[1:]
 	switch sub {
 	case "list":
-		opts, pos := parseFlags(rest, "status", "limit", "offset", "project")
+		opts, pos := parseFlags(rest, "status", "limit", "offset", "project", "ref", "pr", "workflow")
 		project := first(opts["project"], c.project)
 		q := url.Values{}
-		if v := first(opts["status"], ""); v != "" {
-			q.Set("status", v)
-		}
-		if v := opts["limit"]; v != "" {
-			q.Set("limit", v)
-		}
-		if v := opts["offset"]; v != "" {
-			q.Set("offset", v)
+		for _, k := range []string{"status", "limit", "offset", "ref", "pr", "workflow"} {
+			if v := opts[k]; v != "" {
+				q.Set(k, v)
+			}
 		}
 		if len(pos) > 0 {
 			project = pos[0]
