@@ -252,14 +252,21 @@ func (s *Server) respondWithClaim(c *gin.Context, claimed *store.ClaimedJob, run
 		}
 	}
 	// GITHUB_TOKEN: a per-run installation token scoped to this repository and
-	// narrowed by the workflow's permissions: ceiling. Same trust gate as
-	// secrets — fork and pull_request runs never see either credential.
+	// narrowed by the workflow's permissions: ceiling. Untrusted runs still
+	// get a token — GitHub parity gives fork PRs a read-only GITHUB_TOKEN so
+	// API-backed actions (paths-filter, github-script) work — but the ceiling
+	// is forced read-only and the workflow's permissions: block is ignored.
+	// Repository secrets remain eligible-trust only.
 	var githubToken string
-	if s.GH.App != nil && secretsEligibleTrust(claimed.Run.TrustLevel) {
+	if s.GH.App != nil {
 		if full, ok := claimed.Source["repo_full_name"].(string); ok && full != "" {
 			var perms map[string]string
-			if len(claimed.Job.Permissions) > 0 && string(claimed.Job.Permissions) != "null" {
-				_ = json.Unmarshal(claimed.Job.Permissions, &perms)
+			if secretsEligibleTrust(claimed.Run.TrustLevel) {
+				if len(claimed.Job.Permissions) > 0 && string(claimed.Job.Permissions) != "null" {
+					_ = json.Unmarshal(claimed.Job.Permissions, &perms)
+				}
+			} else {
+				perms = forkTokenPermissions
 			}
 			if tok, _, err := s.GH.App.RunToken(c.Request.Context(), full, perms); err == nil {
 				githubToken = tok
@@ -541,9 +548,19 @@ func (s *Server) cancelCheck(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"cancelled": cancelled})
 }
 
+// forkTokenPermissions is the forced GITHUB_TOKEN ceiling for untrusted
+// (fork/pull_request) runs. Read-only scopes let API-backed actions work
+// without letting untrusted code write to the repository.
+var forkTokenPermissions = map[string]string{
+	"contents":      "read",
+	"pull-requests": "read",
+	"issues":        "read",
+}
+
 // secretsEligibleTrust reports whether a run trust level may receive
-// repository secrets and the per-run GITHUB_TOKEN. fork and pull_request runs
-// are untrusted code and get neither; every other tier does.
+// repository secrets and a workflow-ceilinged GITHUB_TOKEN. fork and
+// pull_request runs are untrusted code: no secrets, and only the forced
+// read-only forkTokenPermissions ceiling on their token.
 func secretsEligibleTrust(level string) bool {
 	return level != "fork" && level != "pull_request"
 }
