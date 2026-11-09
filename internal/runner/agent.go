@@ -102,9 +102,13 @@ type Agent struct {
 	activeJobs sync.Map
 	// dockerFn stubs the daemon probe in tests; dockerOK caches the result —
 	// `docker version` is an exec, and labels() is built per registration.
-	dockerFn   func() bool
-	dockerOnce sync.Once
-	dockerOKV  bool
+	dockerFn func() bool
+	// envOverrides carries operator-managed env from heartbeats, merged
+	// into every job's base env (app values win over container defaults).
+	envMu        sync.RWMutex
+	envOverrides map[string]string
+	dockerOnce   sync.Once
+	dockerOKV    bool
 }
 
 func New(cfg Config, log *zap.Logger) *Agent {
@@ -305,6 +309,9 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 				continue
 			}
 			failures = 0
+			a.envMu.Lock()
+			a.envOverrides = resp.Env
+			a.envMu.Unlock()
 			if resp.Deregistered {
 				a.log.Info("runner deregistered; exiting")
 				if a.cancel != nil {
@@ -312,7 +319,10 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 				}
 				return
 			}
-			if resp.Update != nil && a.cfg.SelfUpdate && !a.updating.Load() {
+			// The server only offers an update when the runner opted in
+			// (env self-update or the operator auto_update toggle), so an
+			// offer alone is sufficient license to self-replace.
+			if resp.Update != nil && !a.updating.Load() {
 				go a.maybeSelfUpdate(ctx, resp.Update.Image, resp.Update.Version)
 			}
 		}
@@ -493,6 +503,9 @@ func (a *Agent) runSteps(ctx context.Context, log *zap.Logger, claim *Claim) (st
 	if err != nil {
 		return "", nil, err
 	}
+	a.envMu.RLock()
+	exec.runnerEnv = a.envOverrides
+	a.envMu.RUnlock()
 	defer exec.cleanup()
 
 	if err := exec.prepare(ctx); err != nil {

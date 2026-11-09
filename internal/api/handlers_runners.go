@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -63,9 +64,32 @@ func (s *Server) drainRunner(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true, "draining": req.Draining})
 }
 
+// validateRunnerEnv bounds the operator env override map: sane keys, no
+// control bytes, and a total size cap so a runaway map can't bloat every
+// heartbeat and job env.
+func validateRunnerEnv(env map[string]string) error {
+	total := 0
+	for k, v := range env {
+		if k == "" || len(k) > 128 || strings.ContainsAny(k, "\x00=\r\n") {
+			return fmt.Errorf("env key %q is invalid", k)
+		}
+		if strings.ContainsAny(v, "\x00\r\n") {
+			return fmt.Errorf("env value for %q contains control characters", k)
+		}
+		total += len(k) + len(v)
+	}
+	if total > 16*1024 {
+		return fmt.Errorf("env overrides exceed 16KB")
+	}
+	return nil
+}
+
 type runnerPatchRequest struct {
 	Icon         *string `json:"icon"`
 	WakeOnDemand *bool   `json:"wake_on_demand"`
+	// Env replaces the operator-managed env override map; nil leaves it
+	// unchanged, an empty object clears it.
+	Env *map[string]string `json:"env"`
 }
 
 // patchRunner edits runner presentation and fleet-policy fields: the
@@ -80,9 +104,20 @@ func (s *Server) patchRunner(c *gin.Context) {
 		return
 	}
 	var req runnerPatchRequest
-	if err := c.ShouldBindJSON(&req); err != nil || (req.Icon == nil && req.WakeOnDemand == nil) {
-		fail(c, http.StatusBadRequest, "invalid_body", "icon or wake_on_demand is required")
+	if err := c.ShouldBindJSON(&req); err != nil || (req.Icon == nil && req.WakeOnDemand == nil && req.Env == nil) {
+		fail(c, http.StatusBadRequest, "invalid_body", "icon, wake_on_demand or env is required")
 		return
+	}
+	if req.Env != nil {
+		if err := validateRunnerEnv(*req.Env); err != nil {
+			fail(c, http.StatusBadRequest, "invalid_body", err.Error())
+			return
+		}
+		if err := s.Store.SetRunnerEnv(c.Request.Context(), user.OrgID, id, *req.Env); err != nil {
+			s.internalError(c, err)
+			return
+		}
+		s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "runner.env", id.String())
 	}
 	if req.Icon != nil {
 		icon := strings.TrimSpace(*req.Icon)
@@ -149,6 +184,12 @@ func (s *Server) deleteRunner(c *gin.Context) {
 type enrollRequest struct {
 	Name       string `json:"name"`
 	TTLMinutes int    `json:"ttl_minutes"`
+	// Config is the desired runner configuration applied at registration:
+	// auto_update opt-in and operator env overrides.
+	Config *struct {
+		AutoUpdate *bool             `json:"auto_update"`
+		Env        map[string]string `json:"env"`
+	} `json:"config"`
 }
 
 // createEnrollToken mints a one-time runner enrollment token. The plaintext is
@@ -174,8 +215,13 @@ func (s *Server) createEnrollToken(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
+	cfg := store.RunnerEnrollConfig{}
+	if req.Config != nil {
+		cfg.AutoUpdate = req.Config.AutoUpdate
+		cfg.Env = req.Config.Env
+	}
 	rec, err := s.Store.CreateEnrollToken(c.Request.Context(), user.OrgID, &user.ID,
-		req.Name, hash, time.Now().Add(time.Duration(ttl)*time.Minute))
+		req.Name, hash, time.Now().Add(time.Duration(ttl)*time.Minute), cfg)
 	if err != nil {
 		s.internalError(c, err)
 		return

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"github.com/google/uuid"
@@ -75,7 +76,7 @@ const runnerCols = `id, org_id, name, hostname, os, arch, cpus, memory_bytes, di
 	version, status, draining, ephemeral, last_heartbeat_at, cpu_percent,
 	mem_used_bytes, disk_free_bytes, metrics_at, geo_lat, geo_lng, geo_city,
 	geo_country, geo_source, geo_ip, geo_updated_at, executor, created_at, icon, auto_update,
-	wake_on_demand`
+	wake_on_demand, env`
 
 func scanRunner(row pgx.Row) (Runner, error) {
 	var r Runner
@@ -84,7 +85,7 @@ func scanRunner(row pgx.Row) (Runner, error) {
 		&r.Ephemeral, &r.LastHeartbeatAt, &r.CPUPercent, &r.MemUsedBytes,
 		&r.DiskFreeBytes, &r.MetricsAt, &r.GeoLat, &r.GeoLng, &r.GeoCity,
 		&r.GeoCountry, &r.GeoSource, &r.GeoIP, &r.GeoUpdatedAt, &r.Executor, &r.CreatedAt,
-		&r.Icon, &r.AutoUpdate, &r.WakeOnDemand)
+		&r.Icon, &r.AutoUpdate, &r.WakeOnDemand, &r.Env)
 	return r, err
 }
 
@@ -130,6 +131,26 @@ func (s *Store) Runners(ctx context.Context, orgID uuid.UUID) ([]Runner, error) 
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// SetRunnerEnv replaces the operator-managed env override map delivered to
+// the runner on heartbeat and merged into every job's base env.
+func (s *Store) SetRunnerEnv(ctx context.Context, orgID, id uuid.UUID, env map[string]string) error {
+	if env == nil {
+		env = map[string]string{}
+	}
+	raw, err := json.Marshal(env)
+	if err != nil {
+		return err
+	}
+	tag, err := s.pool.Exec(ctx, `UPDATE runners SET env = $3 WHERE org_id = $1 AND id = $2`, orgID, id, raw)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // SetRunnerWakeOnDemand flips whether an external scaler may power this
