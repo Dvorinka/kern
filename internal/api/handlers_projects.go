@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -234,6 +235,20 @@ func (s *Server) listWorkflows(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"workflows": wfs})
 }
 
+// prNumberFromRef extracts the pull request number from refs/pull/N/head.
+func prNumberFromRef(ref string) (int, bool) {
+	rest, ok := strings.CutPrefix(ref, "refs/pull/")
+	if !ok {
+		return 0, false
+	}
+	numStr, ok := strings.CutSuffix(rest, "/head")
+	if !ok {
+		return 0, false
+	}
+	n, err := strconv.Atoi(numStr)
+	return n, err == nil && n > 0
+}
+
 type triggerRequest struct {
 	Event         string         `json:"event"`
 	Ref           string         `json:"ref"`
@@ -339,6 +354,27 @@ func (s *Server) triggerRun(c *gin.Context) {
 			} else {
 				s.Log.Warn("trigger workflow fetch failed; using stored version",
 					zap.String("sha", sha), zap.Error(verr))
+			}
+		}
+	}
+	// A manual dispatch against a PR ref must look like the webhook run it
+	// replaces: synthesize the pull_request payload fields from the API or
+	// payload-dependent actions (paths-filter, github-script reading
+	// github.event.pull_request.number) see number=null (#176).
+	if (req.Event == "pull_request" || req.Event == "pull_request_target") && p.RepoFullName != "" {
+		if num, ok := prNumberFromRef(req.Ref); ok {
+			if gh, gerr := s.githubClient(c.Request.Context(), p.RepoFullName); gerr == nil {
+				if pr, perr := gh.PullRequest(c.Request.Context(), p.RepoFullName, num); perr == nil {
+					source["pr_number"] = pr.Number
+					source["head_ref"] = pr.Head.Ref
+					source["head_sha"] = pr.Head.SHA
+					source["head_repo"] = pr.Head.RepoFullName
+					source["base_ref"] = pr.Base.Ref
+					source["base_sha"] = pr.Base.SHA
+				} else {
+					s.Log.Warn("trigger PR metadata fetch failed; event payload will lack pull_request fields",
+						zap.Int("pr", num), zap.Error(perr))
+				}
 			}
 		}
 	}
