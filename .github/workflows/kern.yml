@@ -9,6 +9,9 @@ on:
 jobs:
   go:
     runs-on: [self-hosted, linux, x64]
+    # KERN extension: dogfood builds jump the queue ahead of long-lived
+    # jobs (Android builds) on the shared fleet. Ignored by GitHub Actions.
+    priority: 100
     container:
       image: golang:1.26
     env:

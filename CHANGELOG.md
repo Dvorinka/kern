@@ -6,6 +6,14 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 ## [Unreleased]
 
 ### Added
+- `jobs.<id>.priority` (KERN extension): integer claim priority —
+  the queue serves higher values first (`priority` then `queued_at`), so
+  short urgent jobs can jump ahead of long builds on a shared fleet.
+  GitHub ignores the key, keeping the same file valid on both platforms.
+- `KERN_RUNNER_MEM_MIN_FREE_BYTES` memory claim gate (default 1 GiB,
+  `0` disables): the runner pauses job claims while host `MemAvailable`
+  sits below the floor, so a memory-saturated host does not claim work
+  destined to swap or OOM mid-step.
 - `kern optimize [dir]` — compiles each workflow against the live
   fleet and prints ranked suggestions: unclaimable `runs-on` labels
   (job waits forever), missing `priority` on PR pipelines, serial

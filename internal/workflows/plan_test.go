@@ -354,3 +354,29 @@ jobs:
 		}
 	}
 }
+
+func TestCompileJobPriority(t *testing.T) {
+	src := `on: push
+jobs:
+  fast:
+    runs-on: ubuntu-latest
+    priority: 100
+    steps:
+      - run: echo hi
+  slow:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo lo
+`
+	res, err := Compile(src, testCompiler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]int = map[string]int{}
+	for _, j := range res.Plan.Jobs {
+		got[j.JobID] = j.Priority
+	}
+	if got["fast"] != 100 || got["slow"] != 0 {
+		t.Fatalf("priorities = %v", got)
+	}
+}

@@ -117,6 +117,10 @@ type Job struct {
 	Defaults        *Defaults         `yaml:"defaults"`
 	Permissions     map[string]string `yaml:"permissions"`
 	Environment     any               `yaml:"environment"`
+	// Priority is a KERN extension: higher jobs are claimed first when a
+	// runner polls the queue. GitHub ignores the key, so the same file
+	// stays valid on both platforms.
+	Priority int `yaml:"priority"`
 }
 
 type Strategy struct {
