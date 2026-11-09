@@ -80,11 +80,13 @@ func compileService(d *diagnostics, path, name string, raw any) ServicePlan {
 	return sp
 }
 
-// compileServicePorts normalises services.<name>.ports to the container-side
-// port numbers. GitHub maps "host:container" onto the runner's localhost; KERN
-// shares the service's network namespace with the job container instead, so
-// the service's own port is the one reachable on localhost. Host-side
-// remapping (5433:5432) cannot be expressed that way and warns.
+// compileServicePorts normalises services.<name>.ports to "host:container"
+// or "container" entries (with any /proto suffix preserved on the last
+// number). GitHub maps the host side onto the runner's localhost; KERN
+// honours the remap — a loopback forwarder inside the job's netns on
+// bridge jobs, a real 127.0.0.1 publish on host-net jobs — so a portable
+// workflow keeps working unmodified. A leading IP part (1.2.3.4:host:cont)
+// is dropped: KERN always binds loopback inside the job's namespace.
 func compileServicePorts(d *diagnostics, path string, raw any) []string {
 	var entries []string
 	switch v := raw.(type) {
@@ -100,26 +102,55 @@ func compileServicePorts(d *diagnostics, path string, raw any) []string {
 		d.warnf("services", path, "service ports must be a string or list of strings")
 		return nil
 	}
+	validPort := func(s string) bool {
+		if n, err := strconv.Atoi(s); err != nil || n < 1 || n > 65535 {
+			return false
+		}
+		return true
+	}
 	var ports []string
 	for _, e := range entries {
 		e = strings.TrimSpace(e)
 		if e == "" {
 			continue
 		}
+		proto := ""
+		if i := strings.LastIndex(e, "/"); i >= 0 {
+			proto, e = e[i:], e[:i]
+		}
 		parts := strings.Split(e, ":")
-		container := strings.TrimSuffix(strings.TrimSuffix(parts[len(parts)-1], "/tcp"), "/udp")
-		if n, err := strconv.Atoi(container); err != nil || n < 1 || n > 65535 {
-			d.warnf("services", path, fmt.Sprintf("service port %q is not a plain port mapping and is ignored", e))
-			continue
-		}
-		if len(parts) >= 2 {
-			host := strings.TrimSuffix(strings.TrimSuffix(parts[len(parts)-2], "/tcp"), "/udp")
-			if host != container {
-				d.warnf("services", path, fmt.Sprintf(
-					"service port %q maps a different host port; on KERN the service port %s is what localhost exposes", e, container))
+		switch len(parts) {
+		case 1:
+			if !validPort(parts[0]) {
+				d.warnf("services", path, fmt.Sprintf("service port %q is not a plain port mapping and is ignored", e+proto))
+				continue
 			}
+			ports = append(ports, parts[0]+proto)
+		case 2:
+			if !validPort(parts[0]) || !validPort(parts[1]) {
+				d.warnf("services", path, fmt.Sprintf("service port %q is not a plain port mapping and is ignored", e+proto))
+				continue
+			}
+			if parts[0] == parts[1] {
+				ports = append(ports, parts[0]+proto)
+			} else {
+				ports = append(ports, parts[0]+":"+parts[1]+proto)
+			}
+		case 3:
+			// ip:host:container — the host-side IP is dropped; KERN binds
+			// the job's loopback either way.
+			if !validPort(parts[1]) || !validPort(parts[2]) {
+				d.warnf("services", path, fmt.Sprintf("service port %q is not a plain port mapping and is ignored", e+proto))
+				continue
+			}
+			if parts[1] == parts[2] {
+				ports = append(ports, parts[1]+proto)
+			} else {
+				ports = append(ports, parts[1]+":"+parts[2]+proto)
+			}
+		default:
+			d.warnf("services", path, fmt.Sprintf("service port %q is not a plain port mapping and is ignored", e+proto))
 		}
-		ports = append(ports, container)
 	}
 	return ports
 }

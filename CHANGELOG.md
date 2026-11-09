@@ -38,6 +38,13 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
   runs first — the baseline toolset GitHub's ubuntu image ships on PATH
   (curl/jq/git already live in the `kern-ubuntu` parity image). The
   provision is once per runner host and best-effort (#220).
+- `services.<name>.ports` host:container remaps are now honoured instead
+  of warned away — on bridge jobs a loopback forwarder container binds
+  the declared host port inside the job's netns; on trusted host-net
+  jobs the real `127.0.0.1:host:container` publish applies (#219).
+- `docs/runner-contract.md` — the job/service networking model, reserved
+  kern ports, health-gate semantics, and job-container hardening in one
+  place (#223).
 - Critical-tier disk reclaim: below `KERN_RUNNER_DISK_CRITICAL_FREE_PCT`
   (default 5) or `KERN_RUNNER_DISK_CRITICAL_FLOOR_BYTES` (default 2 GiB),
   whichever trips first, the idle runner also removes ledger-tracked
@@ -56,6 +63,10 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
   pull) now get a classified job error with the runner's live free
   space instead of a raw `no space left on device` string, and step
   errors are scanned for the same signatures during diagnosis (#209).
+- Control-plane postgres no longer publishes on host `:5432` — the api
+  reaches it over the compose network anyway, and a host-published
+  `:5432` collides with job services on hosts where jobs share the host
+  netns. Operator psql stays available on `127.0.0.1:55432` (#221).
 
 ## [v0.6.3] - 2026-11-09
 

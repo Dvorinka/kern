@@ -239,10 +239,12 @@ type ServicePlan struct {
 	// registry (services.<name>.credentials). The runner logs docker in with
 	// a throwaway config dir for the pull only — never persisted.
 	Credentials *RegistryCredentials `json:"credentials,omitempty"`
-	// Ports carries the service's container-side published ports. A service
-	// that declares ports shares the job container's network namespace, so
-	// localhost:<port> works exactly as it does on a GitHub VM runner; the
-	// service name also resolves to 127.0.0.1 inside the job.
+	// Ports carries normalised "host:container" or "container" entries. A
+	// service that declares ports shares the job container's network
+	// namespace, so localhost:<port> works as it does on a GitHub VM
+	// runner; host:container remaps are honoured (loopback forwarder on
+	// bridge jobs, real -p on host-net jobs) and the service name also
+	// resolves to 127.0.0.1 inside the job.
 	Ports []string `json:"ports,omitempty"`
 }
 
