@@ -536,6 +536,8 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			err = derr
 			break
 		}
+		s.Store.Audit(ctx, user.OrgID, &user.ID, "runner.drain",
+			fmt.Sprintf("%s draining=%t", target.ID, draining))
 		out = map[string]any{"runner": target.Name, "id": target.ID, "draining": draining}
 	case "kern_approve_run", "kern_cancel_run":
 		// Mirror the HTTP gates: cancel needs write scope, approve needs

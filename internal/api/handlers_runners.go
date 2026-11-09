@@ -60,7 +60,8 @@ func (s *Server) drainRunner(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
-	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "runner.drain", id.String())
+	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "runner.drain",
+		fmt.Sprintf("%s draining=%t", id, req.Draining))
 	c.JSON(http.StatusOK, gin.H{"ok": true, "draining": req.Draining})
 }
 

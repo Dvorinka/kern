@@ -282,5 +282,6 @@ func (s *Server) deleteToken(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
+	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "token.delete", id.String())
 	c.Status(http.StatusNoContent)
 }

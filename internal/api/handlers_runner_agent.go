@@ -90,6 +90,7 @@ func (s *Server) registerRunner(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
+	s.Store.Audit(c.Request.Context(), orgID, nil, "runner.register", runner.Name)
 	s.Log.Info("runner registered", zap.String("runner", runner.Name), zap.String("runner_id", runner.ID.String()))
 	if ip := clientIP(c); geoForRunner(runner, ip) {
 		go s.resolveRunnerGeo(runner.ID, ip)
