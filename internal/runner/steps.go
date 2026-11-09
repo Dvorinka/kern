@@ -386,16 +386,23 @@ func (e *executor) renderScript(step StepSpec) (string, string, error) {
 		pipefail = "set -e\n" // pipefail is a bashism
 	}
 	cmdEnv, scriptBase := e.cmdEnvPath(), e.scriptDirPath()
+	if e.host && runtime.GOOS == "windows" {
+		// Windows paths carry backslashes that POSIX shells collapse inside
+		// the wrapper (export GITHUB_PATH=C:\kern\... arrives as C:kern...).
+		// Forward slashes are valid for every consumer on Windows.
+		cmdEnv = filepath.ToSlash(cmdEnv)
+		scriptBase = filepath.ToSlash(scriptBase)
+	}
 	wrapper := "#!" + shell + "\n" +
 		pipefail +
-		"if [ -f " + cmdEnv + "/PATH_LINES ]; then\n" +
-		"  while IFS= read -r p; do export PATH=\"$p:$PATH\"; done < " + cmdEnv + "/PATH_LINES\n" +
+		"if [ -f " + shellQuote(cmdEnv+"/PATH_LINES") + " ]; then\n" +
+		"  while IFS= read -r p; do export PATH=\"$p:$PATH\"; done < " + shellQuote(cmdEnv+"/PATH_LINES") + "\n" +
 		"fi\n" +
-		"export GITHUB_ENV=" + cmdEnv + "/GITHUB_ENV\n" +
-		"export GITHUB_PATH=" + cmdEnv + "/PATH_LINES\n" +
-		"export GITHUB_OUTPUT=" + cmdEnv + "/GITHUB_OUTPUT\n" +
-		"export GITHUB_STEP_SUMMARY=" + cmdEnv + "/STEP_SUMMARY\n" +
-		"export GITHUB_STATE=" + cmdEnv + "/GITHUB_STATE\n" +
+		"export GITHUB_ENV=" + shellQuote(cmdEnv+"/GITHUB_ENV") + "\n" +
+		"export GITHUB_PATH=" + shellQuote(cmdEnv+"/PATH_LINES") + "\n" +
+		"export GITHUB_OUTPUT=" + shellQuote(cmdEnv+"/GITHUB_OUTPUT") + "\n" +
+		"export GITHUB_STEP_SUMMARY=" + shellQuote(cmdEnv+"/STEP_SUMMARY") + "\n" +
+		"export GITHUB_STATE=" + shellQuote(cmdEnv+"/GITHUB_STATE") + "\n" +
 		"cd " + shellQuote(e.wsPath()) + "\n"
 	if wd := strings.TrimSpace(step.WorkingDirectory); wd != "" {
 		wrapper += "cd " + shellQuote(wd) + "\n"
