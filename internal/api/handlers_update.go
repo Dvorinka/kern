@@ -23,24 +23,25 @@ import (
 // ok:false. It never becomes a banner that claims an update exists.
 
 type updateInfo struct {
-	OK            bool      `json:"ok"`
-	Current       string    `json:"current"`
-	Latest        string    `json:"latest"`
-	URL           string    `json:"url"`
-	PublishedAt   time.Time `json:"published_at,omitempty"`
-	Available     bool      `json:"available"`
-	CheckedAt     time.Time `json:"checked_at"`
-	Repo          string    `json:"repo"`
-	Err           string    `json:"error,omitempty"`
-	AutoUpdate    string    `json:"auto_update"`
-	ManifestOK    bool      `json:"manifest_ok"`
-	ManifestError string    `json:"manifest_error,omitempty"`
-	GitSHA        string    `json:"git_sha,omitempty"`
-	RunnerImage   string    `json:"runner_image,omitempty"`
-	ApplyBlock    string    `json:"apply_block,omitempty"`
-	Updater       string    `json:"updater"`
-	UpdaterError  string    `json:"updater_error,omitempty"`
-	UpdaterAt     time.Time `json:"updater_at,omitempty"`
+	OK            bool                     `json:"ok"`
+	Current       string                   `json:"current"`
+	Latest        string                   `json:"latest"`
+	URL           string                   `json:"url"`
+	PublishedAt   time.Time                `json:"published_at,omitempty"`
+	Available     bool                     `json:"available"`
+	CheckedAt     time.Time                `json:"checked_at"`
+	Repo          string                   `json:"repo"`
+	Err           string                   `json:"error,omitempty"`
+	AutoUpdate    string                   `json:"auto_update"`
+	ManifestOK    bool                     `json:"manifest_ok"`
+	ManifestError string                   `json:"manifest_error,omitempty"`
+	GitSHA        string                   `json:"git_sha,omitempty"`
+	RunnerImage   string                   `json:"runner_image,omitempty"`
+	RunnerBins    map[string]update.Binary `json:"-"`
+	ApplyBlock    string                   `json:"apply_block,omitempty"`
+	Updater       string                   `json:"updater"`
+	UpdaterError  string                   `json:"updater_error,omitempty"`
+	UpdaterAt     time.Time                `json:"updater_at,omitempty"`
 }
 
 var updateCache struct {
@@ -243,6 +244,7 @@ func (s *Server) fetchRelease(ctx context.Context, repo string) updateInfo {
 	info.ManifestOK = true
 	info.GitSHA = parsed.GitSHA
 	info.RunnerImage = ref
+	info.RunnerBins = parsed.Binaries
 	return info
 }
 
@@ -379,23 +381,23 @@ func autoUpdateEnabled(raw json.RawMessage) bool {
 
 // offerRunnerUpdate returns the pinned image when this runner is the one
 // allowed to replace itself. The offer is omitted otherwise.
-func (s *Server) offerRunnerUpdate(ctx context.Context, runner store.Runner, optedIn bool, active int) (image, ver string, ok bool) {
+func (s *Server) offerRunnerUpdate(ctx context.Context, runner store.Runner, optedIn bool, active int) (image, ver string, bins map[string]update.Binary, ok bool) {
 	if runner.Draining {
-		return "", "", false
+		return "", "", nil, false
 	}
 	raw, err := s.Store.OrgSettings(ctx, runner.OrgID)
 	if err != nil || !autoUpdateEnabled(raw) {
-		return "", "", false
+		return "", "", nil, false
 	}
 	info := s.cachedRelease(ctx, s.releaseRepo(), false)
 	if !info.ManifestOK || info.RunnerImage == "" {
-		return "", "", false
+		return "", "", nil, false
 	}
 	if !update.RunnerShouldOffer(optedIn, active, runner.Draining, runner.Version, info.Latest) {
-		return "", "", false
+		return "", "", nil, false
 	}
 	if !runnerOffer.Allow(runner.ID.String(), runnerOfferHold) {
-		return "", "", false
+		return "", "", nil, false
 	}
-	return info.RunnerImage, info.Latest, true
+	return info.RunnerImage, info.Latest, info.RunnerBins, true
 }

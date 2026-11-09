@@ -12,6 +12,9 @@ jobs:
       matrix:
         goos: [linux, darwin]
         goarch: [amd64, arm64]
+        include:
+          - goos: windows
+            goarch: amd64
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -25,10 +28,11 @@ jobs:
         run: |
           set -e
           mkdir -p dist
+          ext=""; [ "$GOOS" = windows ] && ext=".exe"
           for cmd in kern kern-api kern-runner kern-migrate; do
             CGO_ENABLED=0 go build -trimpath \
               -ldflags "-s -w -X github.com/dvorinka/kern/internal/version.Version=$TAG" \
-              -o dist/$cmd ./cmd/${cmd#kern-}
+              -o dist/$cmd$ext ./cmd/${cmd#kern-}
           done
           tar czf kern-$TAG-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz -C dist .
           mv kern-*.tar.gz dist/
@@ -182,12 +186,23 @@ jobs:
             *) echo "runner image digest missing" >&2; exit 1 ;;
           esac
           python3 - <<'PY'
-          import json, os
+          import json, os, urllib.request
+          tag, repo = os.environ["TAG"], os.environ["REPO"]
+          base = f"https://github.com/{repo}/releases/download/{tag}"
+          sums = urllib.request.urlopen(f"{base}/SHA256SUMS").read().decode()
+          binaries = {}
+          for line in sums.strip().splitlines():
+              sha, fn = line.split(None, 1)
+              key = fn.removeprefix(f"kern-{tag}-").removesuffix(".tar.gz")
+              if key == fn:
+                  continue
+              binaries[key] = {"url": f"{base}/{fn}", "sha256": sha}
           doc = {
-              "version": os.environ["TAG"],
+              "version": tag,
               "git_sha": os.environ["SHA"],
               "runner_image": "ghcr.io/dvorinka/kern-runner",
               "runner_digest": os.environ["DIGEST"],
+              "binaries": binaries,
           }
           with open("kern-update.json", "wb") as f:
               f.write(json.dumps(doc, separators=(",", ":")).encode())

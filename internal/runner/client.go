@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/dvorinka/kern/internal/update"
 )
 
 // fh2bytes adapts a *os.File body for do(), which only understands []byte and
@@ -203,11 +205,17 @@ func (c *client) register(ctx context.Context, req map[string]any) (runnerID, to
 	return out.RunnerID, out.Token, nil
 }
 
+// updateOffer is the control plane's signed self-update offer: the pinned
+// runner image for container runners and the signed per-platform binaries
+// for host runners.
+type updateOffer struct {
+	Version  string                   `json:"version"`
+	Image    string                   `json:"image"`
+	Binaries map[string]update.Binary `json:"binaries"`
+}
+
 type heartbeatResponse struct {
-	Update *struct {
-		Version string `json:"version"`
-		Image   string `json:"image"`
-	} `json:"update"`
+	Update *updateOffer `json:"update"`
 	// Env carries operator-managed env overrides merged into every job's
 	// base env — app-set values win over container defaults.
 	Env map[string]string `json:"env"`
