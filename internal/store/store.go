@@ -177,6 +177,10 @@ type Job struct {
 	Permissions    json.RawMessage `json:"permissions"`
 	Environment    string          `json:"environment"`
 	EnvironmentURL string          `json:"environment_url"`
+	// Metrics holds per-job container resource peaks written by the runner
+	// at finish (cpu_pct_peak, mem_bytes_peak); '{}' for host executors and
+	// jobs finished before the runner sampled (#134).
+	Metrics json.RawMessage `json:"metrics"`
 	// QueueReason is advisory, computed at read time (never stored): why a
 	// queued job cannot be claimed, e.g. no online runner matches runs-on.
 	QueueReason string `json:"queue_reason,omitempty"`

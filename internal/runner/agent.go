@@ -5,6 +5,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -572,6 +573,7 @@ func (a *Agent) executeJob(ctx context.Context, claim *Claim) {
 	conclusion := "failure"
 	errMsg := ""
 	var outputs map[string]string
+	var metrics json.RawMessage
 	defer func() {
 		if r := recover(); r != nil {
 			errMsg = fmt.Sprintf("runner panic: %v", r)
@@ -579,14 +581,15 @@ func (a *Agent) executeJob(ctx context.Context, claim *Claim) {
 			log.Error("panic while executing job", zap.Any("panic", r))
 		}
 		fctx, fcancel := context.WithTimeout(context.Background(), 15*time.Second)
-		if err := a.c.finishJob(fctx, claim.Job.ID, conclusion, outputs, errMsg); err != nil {
+		if err := a.c.finishJob(fctx, claim.Job.ID, conclusion, outputs, errMsg, metrics); err != nil {
 			log.Error("finish job", zap.Error(err))
 		}
 		fcancel()
 	}()
 
-	result, outs, err := a.runSteps(jobCtx, log, claim)
+	result, outs, met, err := a.runSteps(jobCtx, log, claim)
 	outputs = outs
+	metrics = met
 	if err != nil {
 		errMsg = jobErrorHint(err.Error(), a.cfg.WorkRoot)
 		if jobCtx.Err() == context.DeadlineExceeded {
@@ -605,10 +608,10 @@ func (a *Agent) executeJob(ctx context.Context, claim *Claim) {
 }
 
 // runSteps executes the compiled step list and returns the conclusion plus job outputs.
-func (a *Agent) runSteps(ctx context.Context, log *zap.Logger, claim *Claim) (string, map[string]string, error) {
+func (a *Agent) runSteps(ctx context.Context, log *zap.Logger, claim *Claim) (status string, outs map[string]string, met json.RawMessage, err error) {
 	secrets, vars, blocked, err := a.c.jobSecrets(ctx, claim.Job.ID)
 	if err != nil {
-		return "", nil, fmt.Errorf("fetch secrets: %w", err)
+		return "", nil, nil, fmt.Errorf("fetch secrets: %w", err)
 	}
 	if blocked {
 		log.Info("run is untrusted; secrets withheld")
@@ -616,15 +619,20 @@ func (a *Agent) runSteps(ctx context.Context, log *zap.Logger, claim *Claim) (st
 
 	exec, err := newJobExecutor(a.cfg, a.c, claim, secrets, vars, log)
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	a.envMu.RLock()
 	exec.runnerEnv = a.envOverrides
 	a.envMu.RUnlock()
 	defer exec.cleanup()
+	defer func() {
+		if exec.metrics != nil {
+			met = exec.metrics.json()
+		}
+	}()
 
 	if err := exec.prepare(ctx); err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 
 	// GitHub's job-setup phase: every declared pre hook runs before the first
@@ -635,11 +643,11 @@ func (a *Agent) runSteps(ctx context.Context, log *zap.Logger, claim *Claim) (st
 	for _, step := range claim.Steps {
 		if ctx.Err() != nil {
 			_ = a.c.finishStep(context.Background(), claim.Job.ID, step.Number, "cancelled", 0, nil, nil)
-			return "cancelled", nil, ctx.Err()
+			return "cancelled", nil, nil, ctx.Err()
 		}
 		conclusion, stepErr := exec.runStep(ctx, step)
 		if stepErr != nil {
-			return "", nil, stepErr
+			return "", nil, nil, stepErr
 		}
 		switch conclusion {
 		case "failure":
@@ -670,7 +678,7 @@ func (a *Agent) runSteps(ctx context.Context, log *zap.Logger, claim *Claim) (st
 	if len(claim.Job.OutputsSpec) > 0 {
 		outputs = exec.evaluateOutputs(jobStatus)
 	}
-	return jobStatus, outputs, nil
+	return jobStatus, outputs, nil, nil
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) {

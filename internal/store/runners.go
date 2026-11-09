@@ -302,7 +302,7 @@ func (s *Store) RunnerActiveJobs(ctx context.Context, runnerID uuid.UUID) ([]Job
 		       j.image, j.matrix, j.env, j.if_condition, j.timeout_seconds, j.continue_on_error,
 		       j.fail_fast, j.priority, j.attempt, j.runner_id, j.queued_at, j.started_at, j.completed_at,
 		       j.lease_expires_at, j.error, j.outputs, j.outputs_spec, j.environment, j.environment_url,
-		       j.inputs, j.services, j.permissions
+		       j.inputs, j.services, j.permissions, j.metrics
 		FROM jobs j WHERE j.runner_id = $1 AND j.status = 'in_progress'`, runnerID)
 	if err != nil {
 		return nil, err

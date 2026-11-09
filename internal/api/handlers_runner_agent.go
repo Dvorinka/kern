@@ -566,6 +566,9 @@ type finishJobRequest struct {
 	Conclusion string            `json:"conclusion"`
 	Outputs    map[string]string `json:"outputs"`
 	Error      string            `json:"error"`
+	// Metrics is the runner's docker-stats peak sample; invalid JSON is
+	// dropped rather than failing the finish.
+	Metrics json.RawMessage `json:"metrics"`
 }
 
 func (s *Server) finishJob(c *gin.Context) {
@@ -586,7 +589,10 @@ func (s *Server) finishJob(c *gin.Context) {
 	}
 	// Job errors surface in the dashboard and status payloads; mask like logs.
 	req.Error = s.maskerForJob(c, job).Mask(req.Error)
-	updated, err := s.Store.FinishJob(c.Request.Context(), runner.ID, job.ID, req.Conclusion, req.Error, req.Outputs)
+	if len(req.Metrics) > 0 && !json.Valid(req.Metrics) {
+		req.Metrics = nil
+	}
+	updated, err := s.Store.FinishJob(c.Request.Context(), runner.ID, job.ID, req.Conclusion, req.Error, req.Outputs, req.Metrics)
 	if err != nil {
 		s.internalError(c, err)
 		return

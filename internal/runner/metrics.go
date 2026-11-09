@@ -1,10 +1,15 @@
 package runner
 
 import (
+	"context"
+	"encoding/json"
 	"os"
+	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 // heartbeatMetrics is the utilization snapshot sent with each heartbeat.
@@ -136,4 +141,95 @@ func memInfo() (total, available int64, ok bool) {
 		}
 	}
 	return total, available, total > 0
+}
+
+// --- per-job container metrics (#134) ---------------------------------------
+//
+// While a docker job runs, a goroutine polls `docker stats --no-stream`
+// every 15s and keeps the peaks; the JSON lands on jobs.metrics via the
+// finishJob payload. Host executors have no container — the field stays empty.
+
+type jobMetrics struct {
+	mu           sync.Mutex
+	CPUPeakPct   float64 `json:"cpu_pct_peak,omitempty"`
+	MemPeakBytes int64   `json:"mem_bytes_peak,omitempty"`
+}
+
+func (m *jobMetrics) observe(cpu float64, mem int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if cpu > m.CPUPeakPct {
+		m.CPUPeakPct = cpu
+	}
+	if mem > m.MemPeakBytes {
+		m.MemPeakBytes = mem
+	}
+}
+
+// json returns the metrics document, or nil when nothing was sampled.
+func (m *jobMetrics) json() json.RawMessage {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.CPUPeakPct == 0 && m.MemPeakBytes == 0 {
+		return nil
+	}
+	b, _ := json.Marshal(m)
+	return b
+}
+
+// startMetricsSampler polls docker stats for the job container until ctx
+// ends. First sample is immediate; misses are ignored (container may not be
+// up yet, or already gone at teardown).
+func (e *executor) startMetricsSampler(ctx context.Context) {
+	if e.host {
+		return
+	}
+	m := &jobMetrics{}
+	e.metrics = m
+	sample := func() {
+		out, err := exec.CommandContext(ctx, "docker", "stats", "--no-stream",
+			"--format", "{{.CPUPerc}} {{.MemUsage}}", e.container).Output()
+		if err != nil {
+			return
+		}
+		cpu, mem := parseDockerStats(string(out))
+		m.observe(cpu, mem)
+	}
+	sample()
+	go func() {
+		t := time.NewTicker(15 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				sample()
+			}
+		}
+	}()
+}
+
+// parseDockerStats reads "12.34% 123.4MiB / 1GiB" into (12.34, 129394278).
+func parseDockerStats(s string) (float64, int64) {
+	fields := strings.Fields(s)
+	if len(fields) < 2 {
+		return 0, 0
+	}
+	cpu, _ := strconv.ParseFloat(strings.TrimSuffix(fields[0], "%"), 64)
+	return cpu, parseHumanBytes(fields[1])
+}
+
+var humanScale = map[string]float64{
+	"B": 1, "KiB": 1 << 10, "MiB": 1 << 20, "GiB": 1 << 30, "TiB": 1 << 40,
+	"kB": 1e3, "MB": 1e6, "GB": 1e9, "TB": 1e12,
+}
+
+func parseHumanBytes(s string) int64 {
+	i := 0
+	for i < len(s) && (s[i] == '.' || (s[i] >= '0' && s[i] <= '9')) {
+		i++
+	}
+	v, _ := strconv.ParseFloat(s[:i], 64)
+	return int64(v * humanScale[s[i:]])
 }
