@@ -345,3 +345,45 @@ func TestRunnerContextSecretsEmptyWhenWithheld(t *testing.T) {
 		t.Errorf("withheld secret should resolve empty, got %v", env["TOKEN"])
 	}
 }
+
+func TestWSContainerPerJobForPrivileged(t *testing.T) {
+	cfg := Config{WorkRoot: t.TempDir()}
+	claim := &Claim{}
+	claim.Job.Image = "ubuntu:24.04"
+	claim.Job.ID = "job-1"
+
+	e, err := newJobExecutor(cfg, &client{}, claim, nil, nil, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := e.wsContainer(); got != containerWorkspace {
+		t.Errorf("untrusted wsContainer = %q, want %q", got, containerWorkspace)
+	}
+
+	claim.Run.TrustLevel = "trusted"
+	e2, err := newJobExecutor(cfg, &client{}, claim, nil, nil, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "/github/workspaces/job-1"
+	if got := e2.wsContainer(); got != want {
+		t.Errorf("trusted wsContainer = %q, want %q", got, want)
+	}
+}
+
+func TestRefNameAndType(t *testing.T) {
+	cases := []struct{ ref, name, typ string }{
+		{"refs/tags/v0.6.3", "v0.6.3", "tag"},
+		{"refs/heads/master", "master", "branch"},
+		{"refs/pull/242/head", "242/head", "branch"},
+		{"v0.6.3", "v0.6.3", "branch"},
+	}
+	for _, c := range cases {
+		if got := refName(c.ref); got != c.name {
+			t.Errorf("refName(%q) = %q, want %q", c.ref, got, c.name)
+		}
+		if got := refType(c.ref); got != c.typ {
+			t.Errorf("refType(%q) = %q, want %q", c.ref, got, c.typ)
+		}
+	}
+}
