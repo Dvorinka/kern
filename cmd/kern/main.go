@@ -51,6 +51,8 @@ Remote offload:
                         bundle the working tree, run on the fleet, stream logs
   ssh <job-id|run-id> [--job KEY] [-c CMD]
                         live shell into a running job's container
+  testbox [workflow] [--job KEY] [--env-file F]
+                        run a workflow job locally — no push, no server
 
 Settings:
   settings get
@@ -174,6 +176,9 @@ pull_request runs by number; --workflow matches name or path.
 `
 	case "ssh":
 		return `kern ssh <job-id|run-id> [--job KEY] [-c CMD] — live shell into a running job's container
+`
+	case "testbox":
+		return `kern testbox [workflow] [--job KEY] [--dir DIR] [--env-file F] — run a job locally in the docker executor
 `
 	case "doctor":
 		return `kern doctor — check CLI config, auth and control-plane reachability
@@ -339,6 +344,11 @@ func dispatch(c *cli, args []string) int {
 		sctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer stop()
 		err = c.cmdSSH(sctx, rest)
+	case "testbox":
+		// Local job execution needs no auth; same Ctrl-C budget as exec.
+		tctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		err = c.cmdTestbox(tctx, rest)
 	case "split":
 		err = c.cmdSplit(rest)
 	case "optimize":
