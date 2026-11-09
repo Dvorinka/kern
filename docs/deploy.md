@@ -157,7 +157,9 @@ commit status on the pushed SHA.
   ledger images unused >24h, workspaces >2h old, and halves the `_cache`
   floor.
   `KERN_RUNNER_PREPULL` (comma-separated images) keeps hot images local so
-  job pulls skip the registry.
+  job pulls skip the registry. Claims also pause while host `MemAvailable`
+  drops below `KERN_RUNNER_MEM_MIN_FREE_BYTES` (default `1 GiB`, `0`
+  disables) so a saturated host does not take doomed work.
 - Postgres lives in the `kern-db` volume — back it up with `docker exec
   <pg> pg_dump -U kern kern`. Autovacuum defaults are adequate at current
   scale; under heavy `jobs`/`steps` churn watch `pg_stat_user_tables`

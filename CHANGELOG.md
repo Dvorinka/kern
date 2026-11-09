@@ -6,6 +6,10 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 ## [Unreleased]
 
 ### Added
+- `KERN_RUNNER_MEM_MIN_FREE_BYTES` memory claim gate (default 1 GiB,
+  `0` disables): the runner pauses job claims while host `MemAvailable`
+  sits below the floor, so a memory-saturated host does not claim work
+  destined to swap or OOM mid-step.
 - `docs` CI job runs `docsync check` against a committed baseline —
   new docs-vs-code drift (env vars, paths, commands, routes) fails the
   build while the 80 known findings stay suppressed (#193).

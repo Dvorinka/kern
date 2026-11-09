@@ -84,11 +84,25 @@ func loadAvg1() (float64, bool) {
 
 // memUsed reports total minus available from /proc/meminfo.
 func memUsed() (int64, bool) {
-	data, err := os.ReadFile("/proc/meminfo")
-	if err != nil {
+	total, available, ok := memInfo()
+	if !ok {
 		return 0, false
 	}
-	var total, available int64
+	return (total - available) * 1024, true
+}
+
+// memAvailable reports MemAvailable from /proc/meminfo — the kernel's
+// estimate of memory a new allocation can use without swapping.
+func memAvailable() (int64, bool) {
+	_, available, ok := memInfo()
+	return available * 1024, ok
+}
+
+func memInfo() (total, available int64, ok bool) {
+	data, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0, 0, false
+	}
 	for _, line := range strings.Split(string(data), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 2 {
@@ -102,8 +116,5 @@ func memUsed() (int64, bool) {
 			available = kb
 		}
 	}
-	if total == 0 {
-		return 0, false
-	}
-	return (total - available) * 1024, true
+	return total, available, total > 0
 }

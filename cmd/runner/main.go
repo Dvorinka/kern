@@ -52,6 +52,7 @@ Environment only:
   KERN_RUNNER_DISK_MIN_FREE_PCT  prune docker + pause claims when work-root fs free drops below % (default 10, 0=off)
   KERN_RUNNER_DISK_CRITICAL_FREE_PCT  escalate reclaim under critical pressure (default 5, 0=off)
   KERN_RUNNER_DISK_CRITICAL_FLOOR_BYTES  absolute floor that also marks critical (default 2GiB, 0=off)
+  KERN_RUNNER_MEM_MIN_FREE_BYTES  pause claims while host MemAvailable below floor (default 1GiB, 0=off)
   KERN_RUNNER_CACHE_MAX_BYTES    cap the persistent _cache tree, evicting oldest first (default 8GiB, 0=off)
   KERN_ACTIONS_GIT_BASE     git base URL for remote actions (default: the run's
                             repo host, or https://github.com)
@@ -341,6 +342,11 @@ func agentConfig(o options) runner.Config {
 		cfg.DiskCriticalFloorBytes, _ = strconv.ParseInt(v, 10, 64)
 	} else {
 		cfg.DiskCriticalFloorBytes = 2 << 30
+	}
+	if v := os.Getenv("KERN_RUNNER_MEM_MIN_FREE_BYTES"); v != "" {
+		cfg.MemMinFreeBytes, _ = strconv.ParseInt(v, 10, 64)
+	} else {
+		cfg.MemMinFreeBytes = 1 << 30
 	}
 	cfg.Executor = os.Getenv("KERN_RUNNER_EXECUTOR")
 	if cfg.Executor == "" {

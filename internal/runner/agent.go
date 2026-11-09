@@ -64,6 +64,12 @@ type Config struct {
 	// (KERN_RUNNER_DISK_MIN_FREE_PCT, default 10). Zero disables both;
 	// the stale-workspace sweep always runs.
 	DiskMinFreePct float64
+	// MemMinFreeBytes pauses job claims while host MemAvailable drops
+	// below this floor (KERN_RUNNER_MEM_MIN_FREE_BYTES, default 1 GiB).
+	// A job claimed under memory pressure is a job the kernel may
+	// OOM-kill mid-step — and on shared hosts it starves neighbours.
+	// Zero disables the gate.
+	MemMinFreeBytes int64
 	// DiskCriticalFreePct and DiskCriticalFloorBytes mark the critical
 	// reclaim tier — whichever trips first escalates beyond the docker
 	// prune: ledger images unused >24h, workspaces >2h, and the _cache
@@ -98,6 +104,8 @@ type Agent struct {
 	// diskPaused latches while the work-root filesystem is under pressure so
 	// the transition is logged once per episode, not once per worker tick.
 	diskPaused atomic.Bool
+	// memPaused latches while host memory is under the claim floor.
+	memPaused atomic.Bool
 	// retire latches once the ephemeral idle timeout fires; heartbeats carry
 	// it until the control plane confirms the row is gone. lastActivity is
 	// the unixnano of the last job completion (boot time until then). A
@@ -386,6 +394,12 @@ func (a *Agent) workerLoop(ctx context.Context, n int) {
 			sleepCtx(ctx, 30*time.Second)
 			continue
 		}
+		if a.memClaimPaused() {
+			// Host memory is at the floor — a claimed job would swap or
+			// OOM-kill. Wait for headroom rather than take doomed work.
+			sleepCtx(ctx, 15*time.Second)
+			continue
+		}
 		claim, err := a.c.claim(ctx, 25)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -456,6 +470,33 @@ func (a *Agent) diskClaimPaused() bool {
 		a.log.Warn("disk pressure: pausing job claims",
 			zap.Int64("free_bytes", free), zap.Int64("total_bytes", total),
 			zap.Float64("min_free_pct", a.cfg.DiskMinFreePct))
+	}
+	return true
+}
+
+// memAvailableFn stubs the memory probe in tests.
+var memAvailableFn = memAvailable
+
+// memClaimPaused reports whether claims should pause because host
+// MemAvailable is under Config.MemMinFreeBytes. The load gate covers CPU
+// saturation; this covers the other half of the incident shape — a heavy
+// build (Gradle-class) that pushes the host into swap and OOM-kills
+// whatever hits its cgroup ceiling first, job or neighbour.
+func (a *Agent) memClaimPaused() bool {
+	floor := a.cfg.MemMinFreeBytes
+	if floor <= 0 {
+		return false
+	}
+	avail, ok := memAvailableFn()
+	if !ok || avail >= floor {
+		if a.memPaused.CompareAndSwap(true, false) {
+			a.log.Info("memory pressure cleared: resuming claims")
+		}
+		return false
+	}
+	if a.memPaused.CompareAndSwap(false, true) {
+		a.log.Warn("memory pressure: pausing job claims",
+			zap.Int64("available_bytes", avail), zap.Int64("floor_bytes", floor))
 	}
 	return true
 }
