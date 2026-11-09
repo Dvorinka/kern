@@ -250,7 +250,7 @@ func (s *Store) StepLogRef(ctx context.Context, jobID uuid.UUID, number int) (st
 }
 
 // FinishJob records the terminal state of a job and releases its lease.
-func (s *Store) FinishJob(ctx context.Context, runnerID, jobID uuid.UUID, conclusion, errMsg string, outputs map[string]string) (bool, error) {
+func (s *Store) FinishJob(ctx context.Context, runnerID, jobID uuid.UUID, conclusion, errMsg string, outputs map[string]string, metrics json.RawMessage) (bool, error) {
 	outputsJSON, err := json.Marshal(outputs)
 	if err != nil {
 		return false, err
@@ -268,9 +268,10 @@ func (s *Store) FinishJob(ctx context.Context, runnerID, jobID uuid.UUID, conclu
 			completed_at = now(),
 			lease_expires_at = NULL,
 			error = $4,
-			outputs = $5
+			outputs = $5,
+			metrics = COALESCE($6, metrics)
 		WHERE id = $1 AND runner_id = $2 AND status = 'in_progress'
-		RETURNING id`, jobID, runnerID, conclusion, errMsg, outputsJSON).Scan(&jobID)
+		RETURNING id`, jobID, runnerID, conclusion, errMsg, outputsJSON, metrics).Scan(&jobID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}

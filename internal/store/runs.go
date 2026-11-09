@@ -384,7 +384,7 @@ func (s *Store) jobsForRun(ctx context.Context, runID uuid.UUID, withSteps bool)
 		SELECT id, run_id, job_key, key, name, status, conclusion, needs, runs_on, image, matrix, env,
 		       if_condition, timeout_seconds, continue_on_error, fail_fast, priority, attempt, runner_id,
 		       queued_at, started_at, completed_at, lease_expires_at, error, outputs, outputs_spec,
-		       environment, environment_url, inputs, services, permissions
+		       environment, environment_url, inputs, services, permissions, metrics
 		FROM jobs WHERE run_id = $1 ORDER BY queued_at, key`, runID)
 	if err != nil {
 		return nil, err
@@ -443,7 +443,7 @@ func scanJob(row pgx.Row) (Job, error) {
 		&j.RunsOn, &j.Image, &j.Matrix, &j.Env, &j.IfCondition, &j.TimeoutSeconds,
 		&j.ContinueOnError, &j.FailFast, &j.Priority, &j.Attempt, &j.RunnerID, &j.QueuedAt,
 		&j.StartedAt, &j.CompletedAt, &j.LeaseExpiresAt, &j.Error, &j.Outputs, &j.OutputsSpec,
-		&j.Environment, &j.EnvironmentURL, &j.Inputs, &j.Services, &j.Permissions)
+		&j.Environment, &j.EnvironmentURL, &j.Inputs, &j.Services, &j.Permissions, &j.Metrics)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Job{}, ErrNotFound
 	}
@@ -456,7 +456,7 @@ func (s *Store) Job(ctx context.Context, id uuid.UUID) (Job, error) {
 		       j.image, j.matrix, j.env, j.if_condition, j.timeout_seconds, j.continue_on_error,
 		       j.fail_fast, j.priority, j.attempt, j.runner_id, j.queued_at, j.started_at, j.completed_at,
 		       j.lease_expires_at, j.error, j.outputs, j.outputs_spec, j.environment, j.environment_url,
-		       j.inputs, j.services, j.permissions
+		       j.inputs, j.services, j.permissions, j.metrics
 		FROM jobs j WHERE j.id = $1`, id))
 	if err != nil {
 		return Job{}, err

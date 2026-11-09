@@ -302,10 +302,10 @@ func (c *client) uploadSummary(ctx context.Context, jobID string, n int, data []
 	return nil
 }
 
-func (c *client) finishJob(ctx context.Context, jobID, conclusion string, outputs map[string]string, errMsg string) error {
+func (c *client) finishJob(ctx context.Context, jobID, conclusion string, outputs map[string]string, errMsg string, metrics json.RawMessage) error {
 	path := "/api/v1/runners/jobs/" + url.PathEscape(jobID) + "/finish"
 	return c.do(ctx, http.MethodPost, path, map[string]any{
-		"conclusion": conclusion, "outputs": outputs, "error": errMsg,
+		"conclusion": conclusion, "outputs": outputs, "error": errMsg, "metrics": metrics,
 	}, nil)
 }
 

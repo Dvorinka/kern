@@ -98,6 +98,9 @@ type executor struct {
 
 	jobID     string
 	container string
+	// metrics accumulates docker stats peaks while the job container runs;
+	// nil on the host executor and before the sampler starts (#134).
+	metrics *jobMetrics
 	// shell is the in-container interpreter; bash when present, sh otherwise
 	// (GitHub runners fall back the same way — e.g. alpine images).
 	shell string
@@ -371,6 +374,7 @@ func (e *executor) prepare(ctx context.Context) error {
 		e.goStop()
 		return fmt.Errorf("start container: %w", err)
 	}
+	e.startMetricsSampler(ctx)
 	if err := e.startServices(ctx); err != nil {
 		e.goStop()
 		return fmt.Errorf("start services: %w", err)
