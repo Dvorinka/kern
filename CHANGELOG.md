@@ -5,6 +5,38 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 
 ## [Unreleased]
 
+## [0.7.8] - 2026-11-09
+
+### Added
+- Host-runner self-update: binary-installed runners replace their own
+  executable when the signed update manifest advertises a newer release
+  (`KERN_RUNNER_UPDATE=1`), including Windows builds — the release matrix
+  now ships `kern.exe`.
+- Per-runtime Node provisioning for JavaScript actions: `node24` actions
+  run on Node v24.22.2 instead of the single v20.18.1 pin; `node12`/`node16`
+  keep the v20 fallback. Distributions are fetched lazily per release under
+  `<work-root>/_node/<release>` with `SHASUMS256.txt` verification.
+- `GET /projects/:project/workflows` returns each workflow's latest-version
+  compile `diagnostics`; the secrets page surfaces a persistent `ghcr-token`
+  card with remediation steps while the warning exists and `GHCR_TOKEN` is
+  absent.
+
+### Fixed
+- GHCR authentication guidance end to end: workflow lint warns when a
+  registry login uses the GitHub token (`ghcr-token` diagnostic), run
+  diagnosis reports the `ghs_*` installation-token denial, and
+  `docs/porting.md` documents the `GHCR_TOKEN` convention — GitHub App
+  tokens cannot push to GHCR regardless of granted scopes.
+- `kern.yml` no longer sets `jobs.<id>.priority` — a KERN-only key that
+  GitHub Actions rejects during workflow validation, which produced 0s
+  `jobs:[]` failures on push and tag events while PR runs passed.
+
+### Removed
+- `.github/workflows/ci.yml` — duplicate of the KERN CI lanes; KERN CI
+  covers go/web/docs fleet-side.
+
+## [0.7.7] - 2026-11-09
+
 ### Added
 - `GITHUB_REF_NAME`, `GITHUB_REF_TYPE`, `GITHUB_HEAD_REF`, `GITHUB_BASE_REF`
   (PR runs), `GITHUB_RUN_ATTEMPT`, `GITHUB_REPOSITORY_OWNER`,
