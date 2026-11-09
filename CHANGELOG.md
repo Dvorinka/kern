@@ -6,6 +6,10 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 ## [Unreleased]
 
 ### Added
+- Runner pauses job claims while the work-root filesystem is below
+  `KERN_RUNNER_DISK_MIN_FREE_PCT` — the same threshold that drives the
+  docker reclaim sweep, now also a claim gate so a full runner stops
+  taking jobs it can only fail (#210).
 - `kern runners list` shows a VERSION column per runner and prints a fleet
   version histogram when runners disagree — the drift view from #181 without
   opening the UI (#181).
@@ -27,6 +31,10 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
   Per-file eviction corrupted atomic trees: go stamps module files with
   uniformly old mtimes, so the sweep shredded `gomod` first and builds
   failed on missing `.go`/`.s` files under intact-looking dirs (#211).
+- Prepare/checkout failures that die before any step (ENOSPC, image
+  pull) now get a classified job error with the runner's live free
+  space instead of a raw `no space left on device` string, and step
+  errors are scanned for the same signatures during diagnosis (#209).
 
 ## [v0.6.3] - 2026-11-09
 
