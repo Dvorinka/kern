@@ -1,5 +1,5 @@
-import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
-import { LogOut } from "lucide-react";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { LogOut, Menu, Search, X } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
@@ -53,7 +53,11 @@ export function Layout() {
 	const qc = useQueryClient();
 	const nav = useNavigate();
 	const [palette, setPalette] = useState(false);
+	const [menu, setMenu] = useState(false);
+	const loc = useLocation();
 	const [theme, setTheme] = useState(document.documentElement.dataset.theme === "ink" ? "ink" : "paper");
+
+	useEffect(() => setMenu(false), [loc.pathname]);
 
 	const { data: meta } = useQuery({
 		queryKey: ["meta"],
@@ -136,6 +140,27 @@ export function Layout() {
 
 	const initial = (user.name || user.email || "?").trim()[0]?.toUpperCase() ?? "?";
 
+	const navLinks = (onNavigate?: () => void) =>
+		NAV.map((n) => (
+			<NavLink
+				key={n.to}
+				to={n.to}
+				end={n.end}
+				onClick={onNavigate}
+				className={({ isActive }) => (isActive ? "on" : "")}
+			>
+				{n.label}
+				{n.to === "/runs" && (overview?.overview.jobs_running ?? 0) > 0 && (
+					<i className="nlv" title={`${overview!.overview.jobs_running} running`} />
+				)}
+				{badges.has(n.to) && (
+					<span className={cn("ct", badges.get(n.to)!.err && "err")}>
+						{badges.get(n.to)!.n}
+					</span>
+				)}
+			</NavLink>
+		));
+
 	return (
 		<div className="flex h-full flex-col">
 			<header className="hdr">
@@ -154,28 +179,27 @@ export function Layout() {
 					</NavLink>
 				</div>
 				<nav className="navp" aria-label="Main">
-					{NAV.map((n) => (
-						<NavLink
-							key={n.to}
-							to={n.to}
-							end={n.end}
-							className={({ isActive }) => (isActive ? "on" : "")}
-						>
-							{n.label}
-							{n.to === "/runs" && (overview?.overview.jobs_running ?? 0) > 0 && (
-								<i className="nlv" title={`${overview!.overview.jobs_running} running`} />
-							)}
-							{badges.has(n.to) && (
-								<span className={cn("ct", badges.get(n.to)!.err && "err")}>
-									{badges.get(n.to)!.n}
-								</span>
-							)}
-						</NavLink>
-					))}
+					{navLinks()}
 				</nav>
 				<div className="hdrr">
-					<button className="find" onClick={() => setPalette(true)}>
-						Search runs and projects
+					<button
+						className="mbtn"
+						aria-label={menu ? "Close menu" : "Open menu"}
+						aria-expanded={menu}
+						onClick={() => setMenu((m) => !m)}
+					>
+						{menu ? <X size={17} /> : <Menu size={17} />}
+					</button>
+					<button
+						className="find"
+						aria-label="Search runs and projects"
+						onClick={() => {
+							setMenu(false);
+							setPalette(true);
+						}}
+					>
+						<Search size={15} />
+						<span className="find-l">Search runs and projects</span>
 						<kbd>⌘K</kbd>
 					</button>
 					<NotificationsBell />
@@ -196,7 +220,13 @@ export function Layout() {
 						<LogOut size={13} />
 					</button>
 				</div>
+				{menu && (
+					<nav className="mmenu" aria-label="Main menu">
+						{navLinks(() => setMenu(false))}
+					</nav>
+				)}
 			</header>
+			{menu && <div className="mscrim" onClick={() => setMenu(false)} />}
 			<main className="console-bg min-w-0 flex-1 overflow-y-auto">
 				<div className="mx-auto max-w-[1360px] px-[22px] pb-16 pt-[18px]">
 					<Outlet />
@@ -295,7 +325,7 @@ function CommandK({ onClose }: { onClose: () => void }) {
 			onClick={onClose}
 		>
 			<div
-				className="panel w-[520px] overflow-hidden"
+				className="panel ckpanel overflow-hidden"
 				onClick={(e) => e.stopPropagation()}
 				onKeyDown={(e) => {
 					if (e.key === "Escape") onClose();
