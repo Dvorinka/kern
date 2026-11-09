@@ -597,6 +597,15 @@ func (e *executor) jobEnv() map[string]string {
 		// Same trick for Playwright: `npx playwright install` lands browsers
 		// in the persistent cache so the next job skips a ~15min download.
 		"PLAYWRIGHT_BROWSERS_PATH": e.cachePath() + "/ms-playwright",
+		// pnpm's `store path` is cwd-sensitive: at a package-less repo root
+		// it reports <root>/node_modules/.pnpm-store while `pnpm install`
+		// inside a sub-package uses <root>/.pnpm-store — setup-node's
+		// cache-save then validates a path that never existed and fails the
+		// job's post hook (#175). pnpm_config_store_dir (pnpm's own env
+		// prefix; npm_config_store_dir is ignored) pins one absolute store
+		// dir so every invocation agrees — and doubles as a warm cross-job
+		// store on the persistent cache mount.
+		"pnpm_config_store_dir": e.cachePath() + "/pnpm-store",
 		// RUNNER_TEMP must be exec-allowed: setup-* actions extract and run
 		// installers there, and the container's /tmp tmpfs is noexec.
 		"RUNNER_TEMP": e.tmpPath(),
