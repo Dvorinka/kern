@@ -6,6 +6,11 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 ## [Unreleased]
 
 ### Added
+- `runner.offline` outbound alert: when the stale-runner sweep flips a
+  runner offline, the control plane enqueues a notification event on the
+  org's `notify_url` (slack format honoured; `notify_runner_offline=off`
+  in org settings disables it). One delivery per transition, retried via
+  the same queue as `run.completed` (#181).
 - `docs` CI job runs `docsync check` against a committed baseline —
   new docs-vs-code drift (env vars, paths, commands, routes) fails the
   build while the 80 known findings stay suppressed (#193).
