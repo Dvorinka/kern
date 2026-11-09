@@ -229,10 +229,48 @@ func checkSummary(run store.Run, jobs []store.Job) string {
 		}
 	}
 	s := b.String()
+	diag := firstFailureDiagnosis(jobs)
+	if diag != "" {
+		// Reserve room for the diagnosis: truncate the table, never the
+		// finding itself.
+		if len(s)+len(diag) > 6000 {
+			s = s[:6000-len(diag)]
+		}
+		s += diag
+	}
 	if len(s) > 6000 {
 		return s[:6000]
 	}
 	return s
+}
+
+// firstFailureDiagnosis renders the first failing step's diagnosis for the
+// check-run summary — kind, summary and suggestion only. The detail field
+// carries log content and stays private, matching publicDiagnosisOf.
+func firstFailureDiagnosis(jobs []store.Job) string {
+	for _, j := range jobs {
+		for _, st := range j.Steps {
+			if st.Conclusion != "failure" || len(st.Diagnosis) == 0 {
+				continue
+			}
+			var d struct {
+				Kind       string `json:"kind"`
+				Summary    string `json:"summary"`
+				Suggestion string `json:"suggestion"`
+			}
+			if json.Unmarshal(st.Diagnosis, &d) != nil || d.Kind == "" {
+				continue
+			}
+			var b strings.Builder
+			fmt.Fprintf(&b, "\n**Failure — %s / %s:** `%s` — %s",
+				j.JobKey, st.Name, d.Kind, mdCell(d.Summary))
+			if d.Suggestion != "" {
+				fmt.Fprintf(&b, "\n%s", mdCell(d.Suggestion))
+			}
+			return b.String()
+		}
+	}
+	return ""
 }
 
 func mdCell(s string) string {
