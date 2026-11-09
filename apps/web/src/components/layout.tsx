@@ -272,9 +272,10 @@ function CommandK({ onClose }: { onClose: () => void }) {
 
 	const items = useMemo(() => {
 		const needle = q.trim().toLowerCase();
-		const out: { label: string; sub: string; to: string; sq: string }[] = [];
+		const out: { key: string; label: string; sub: string; to: string; sq: string }[] = [];
 		for (const p of PAGES) {
-			if (!needle || p.label.toLowerCase().includes(needle)) out.push({ ...p, sq: "ok" });
+			if (!needle || p.label.toLowerCase().includes(needle))
+				out.push({ key: `page:${p.to}`, ...p, sq: "ok" });
 		}
 		for (const r of runners?.runners ?? []) {
 			if (
@@ -282,6 +283,7 @@ function CommandK({ onClose }: { onClose: () => void }) {
 				`${r.name} ${r.hostname} ${r.labels.join(" ")}`.toLowerCase().includes(needle)
 			) {
 				out.push({
+					key: `runner:${r.id}`,
 					label: r.name,
 					sub: `runner · ${r.status}${r.active_jobs ? ` · ${r.active_jobs} jobs` : ""}`,
 					to: "/runners",
@@ -291,7 +293,13 @@ function CommandK({ onClose }: { onClose: () => void }) {
 		}
 		for (const p of projects?.projects ?? []) {
 			if (!needle || `${p.name} ${p.slug}`.toLowerCase().includes(needle)) {
-				out.push({ label: p.name, sub: `project · ${p.slug}`, to: `/projects/${p.slug}`, sq: "ok" });
+				out.push({
+					key: `project:${p.id}`,
+					label: p.name,
+					sub: `project · ${p.slug}`,
+					to: `/projects/${p.slug}`,
+					sq: "ok",
+				});
 			}
 		}
 		for (const r of runs?.runs ?? []) {
@@ -299,6 +307,7 @@ function CommandK({ onClose }: { onClose: () => void }) {
 				`${r.workflow_name} #${r.run_number} ${r.project_slug} ${r.commit_message}`.toLowerCase();
 			if (!needle || hay.includes(needle)) {
 				out.push({
+					key: `run:${r.id}`,
 					label: `${r.workflow_name} #${r.run_number}`,
 					sub: r.commit_message || r.project_slug,
 					to: `/runs/${r.id}`,
@@ -358,7 +367,7 @@ function CommandK({ onClose }: { onClose: () => void }) {
 					)}
 					{items.map((it, i) => (
 						<button
-							key={it.to}
+							key={it.key}
 							onClick={() => go(it.to)}
 							onMouseEnter={() => setSel(i)}
 							className={cn("ckit", i === sel && "s")}
