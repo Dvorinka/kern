@@ -29,7 +29,7 @@ func (s *Store) ScheduledWorkflows(ctx context.Context) ([]ScheduledWorkflow, er
 		FROM workflows w
 		JOIN workflow_versions v ON v.workflow_id = w.id AND v.valid
 		JOIN projects p ON p.id = w.project_id
-		WHERE v.parsed->'triggers' ? 'schedule'
+		WHERE v.parsed->'triggers' ? 'schedule' AND NOT w.disabled
 		ORDER BY w.id, v.created_at DESC`)
 	if err != nil {
 		return nil, err

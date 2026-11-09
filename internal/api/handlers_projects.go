@@ -415,3 +415,39 @@ func gitHead(dir string) string {
 	}
 	return strings.TrimSpace(string(out))
 }
+
+// setWorkflowDisabled toggles the per-workflow run gate. Disabled workflows
+// keep versions and history; webhook, schedule, dispatch and rerun all refuse
+// to start runs until re-enabled.
+func (s *Server) setWorkflowDisabled(c *gin.Context) {
+	user, _ := currentUser(c)
+	p, err := s.Store.Project(c.Request.Context(), user.OrgID, c.Param("project"))
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	workflowID, err := uuid.Parse(c.Param("workflowID"))
+	if err != nil {
+		fail(c, http.StatusBadRequest, "invalid_id", "workflow id must be a uuid")
+		return
+	}
+	wf, err := s.Store.WorkflowByID(c.Request.Context(), workflowID)
+	if err != nil || wf.ProjectID != p.ID {
+		fail(c, http.StatusNotFound, "not_found", "workflow not found in this project")
+		return
+	}
+	var req struct {
+		Disabled bool `json:"disabled"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "invalid_body", "invalid body")
+		return
+	}
+	if err := s.Store.SetWorkflowDisabled(c.Request.Context(), wf.ID, req.Disabled); err != nil {
+		s.internalError(c, err)
+		return
+	}
+	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "workflow.set_disabled", wf.ID.String())
+	wf.Disabled = req.Disabled
+	c.JSON(http.StatusOK, gin.H{"workflow": wf})
+}

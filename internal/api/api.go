@@ -200,6 +200,7 @@ func (s *Server) buildRouter() *gin.Engine {
 		auth.GET("/projects/:project/source/resolve", s.resolveSource)
 		auth.GET("/projects/:project/workflows", s.listWorkflows)
 		write.POST("/projects/:project/workflows/:workflowID/runs", s.triggerRun)
+		write.PATCH("/projects/:project/workflows/:workflowID", s.setWorkflowDisabled)
 		admin.GET("/github-app/manifest", s.githubAppManifest)
 		admin.GET("/github-app/callback", s.githubAppCallback)
 		auth.GET("/github-app/status", s.githubAppStatus)

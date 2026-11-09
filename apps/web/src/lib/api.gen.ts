@@ -253,7 +253,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Current user */
+        /** Current user and preferences */
         get: {
             parameters: {
                 query?: never;
@@ -271,6 +271,10 @@ export interface paths {
                     content: {
                         "application/json": {
                             user?: components["schemas"]["User"];
+                            /** @description Per-user UI preferences (e.g. `theme`: `paper`|`ink`) */
+                            prefs?: {
+                                [key: string]: unknown;
+                            };
                         };
                     };
                 };
@@ -278,6 +282,56 @@ export interface paths {
             };
         };
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/me/prefs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Replace the caller's preference object (max 8 KiB) */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        prefs: {
+                            [key: string]: unknown;
+                        };
+                    };
+                };
+            };
+            responses: {
+                /** @description Stored preferences */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            prefs?: {
+                                [key: string]: unknown;
+                            };
+                        };
+                    };
+                };
+                400: components["responses"]["Error"];
+                401: components["responses"]["Error"];
+            };
+        };
         post?: never;
         delete?: never;
         options?: never;
@@ -999,6 +1053,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{project}/icons": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Discovered project icon candidates, best first */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Project slug or id */
+                    project: components["parameters"]["Project"];
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Icon candidates */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            icons?: string[];
+                            icon_path?: string;
+                            /** @enum {string} */
+                            source?: "local" | "github";
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/projects/{project}/workflows": {
         parameters: {
             query?: never;
@@ -1085,6 +1183,54 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/projects/{project}/workflows/{workflowID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Enable/disable a workflow (write) */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Project slug or id */
+                    project: components["parameters"]["Project"];
+                    workflowID: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        disabled: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description Updated workflow */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            workflow?: components["schemas"]["Workflow"];
+                        };
+                    };
+                };
+            };
+        };
         trace?: never;
     };
     "/projects/{project}/environments": {
@@ -1764,7 +1910,34 @@ export interface paths {
         };
         options?: never;
         head?: never;
-        patch?: never;
+        /** Edit runner presentation fields (admin) */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        /** @description Emoji or image URL/path; empty restores the default marker */
+                        icon: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Updated */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
         trace?: never;
     };
     "/secrets": {
@@ -3636,6 +3809,13 @@ export interface components {
             created_at?: string;
             /** Format: date-time */
             updated_at?: string;
+            disabled?: boolean;
+            diagnostics?: {
+                level?: string;
+                code?: string;
+                path?: string;
+                message?: string;
+            }[] | null;
         };
         Run: {
             /** Format: uuid */
@@ -3672,6 +3852,7 @@ export interface components {
             /** Format: date-time */
             last_seen_at?: string | null;
             draining?: boolean;
+            icon?: string;
             /** Format: date-time */
             created_at?: string;
         };

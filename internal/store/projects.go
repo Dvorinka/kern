@@ -102,15 +102,23 @@ func (s *Store) UpsertWorkflow(ctx context.Context, projectID uuid.UUID, path, n
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO workflows (project_id, path, name) VALUES ($1, $2, $3)
 		ON CONFLICT (project_id, path) DO UPDATE SET name = EXCLUDED.name, updated_at = now()
-		RETURNING id, project_id, path, name, created_at, updated_at`,
+		RETURNING id, project_id, path, name, created_at, updated_at, disabled`,
 		projectID, path, name).
-		Scan(&w.ID, &w.ProjectID, &w.Path, &w.Name, &w.CreatedAt, &w.UpdatedAt)
+		Scan(&w.ID, &w.ProjectID, &w.Path, &w.Name, &w.CreatedAt, &w.UpdatedAt, &w.Disabled)
 	return w, err
+}
+
+// SetWorkflowDisabled flips the run gate for a workflow. Sync never touches
+// the flag — a user's disable survives re-syncs.
+func (s *Store) SetWorkflowDisabled(ctx context.Context, id uuid.UUID, disabled bool) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE workflows SET disabled = $2, updated_at = now() WHERE id = $1`, id, disabled)
+	return err
 }
 
 func (s *Store) Workflows(ctx context.Context, projectID uuid.UUID) ([]Workflow, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT w.id, w.project_id, w.path, w.name, w.created_at, w.updated_at,
+		SELECT w.id, w.project_id, w.path, w.name, w.created_at, w.updated_at, w.disabled,
 		       v.diagnostics
 		FROM workflows w
 		LEFT JOIN LATERAL (
@@ -126,7 +134,7 @@ func (s *Store) Workflows(ctx context.Context, projectID uuid.UUID) ([]Workflow,
 	out := []Workflow{}
 	for rows.Next() {
 		var w Workflow
-		if err := rows.Scan(&w.ID, &w.ProjectID, &w.Path, &w.Name, &w.CreatedAt, &w.UpdatedAt, &w.Diagnostics); err != nil {
+		if err := rows.Scan(&w.ID, &w.ProjectID, &w.Path, &w.Name, &w.CreatedAt, &w.UpdatedAt, &w.Disabled, &w.Diagnostics); err != nil {
 			return nil, err
 		}
 		out = append(out, w)
@@ -137,8 +145,8 @@ func (s *Store) Workflows(ctx context.Context, projectID uuid.UUID) ([]Workflow,
 func (s *Store) WorkflowByID(ctx context.Context, id uuid.UUID) (Workflow, error) {
 	var w Workflow
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, project_id, path, name, created_at, updated_at FROM workflows WHERE id = $1`, id).
-		Scan(&w.ID, &w.ProjectID, &w.Path, &w.Name, &w.CreatedAt, &w.UpdatedAt)
+		SELECT id, project_id, path, name, created_at, updated_at, disabled FROM workflows WHERE id = $1`, id).
+		Scan(&w.ID, &w.ProjectID, &w.Path, &w.Name, &w.CreatedAt, &w.UpdatedAt, &w.Disabled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Workflow{}, ErrNotFound
 	}
@@ -189,14 +197,14 @@ func (s *Store) LatestWorkflowVersion(ctx context.Context, projectID uuid.UUID, 
 	var w Workflow
 	var v WorkflowVersion
 	err := s.pool.QueryRow(ctx, `
-		SELECT w.id, w.project_id, w.path, w.name, w.created_at, w.updated_at,
+		SELECT w.id, w.project_id, w.path, w.name, w.created_at, w.updated_at, w.disabled,
 		       v.id, v.workflow_id, v.commit_sha, v.content, v.parsed, v.valid, v.diagnostics, v.created_at
 		FROM workflows w
 		JOIN workflow_versions v ON v.workflow_id = w.id
 		WHERE w.project_id = $1 AND w.path = $2
 		ORDER BY v.created_at DESC
 		LIMIT 1`, projectID, path).
-		Scan(&w.ID, &w.ProjectID, &w.Path, &w.Name, &w.CreatedAt, &w.UpdatedAt,
+		Scan(&w.ID, &w.ProjectID, &w.Path, &w.Name, &w.CreatedAt, &w.UpdatedAt, &w.Disabled,
 			&v.ID, &v.WorkflowID, &v.CommitSHA, &v.Content, &v.Parsed, &v.Valid, &v.Diagnostics, &v.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Workflow{}, WorkflowVersion{}, ErrNotFound

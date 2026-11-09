@@ -132,7 +132,7 @@ paths:
                   prefs:
                     type: object
                     additionalProperties: true
-                    description: Per-user UI preferences (e.g. `theme`: `paper`|`ink`)
+                    description: "Per-user UI preferences (e.g. `theme`: `paper`|`ink`)"
         "401": { $ref: "#/components/responses/Error" }
   /auth/me/prefs:
     put:
@@ -403,6 +403,30 @@ paths:
                 inputs: { type: object, additionalProperties: true }
       responses:
         "201": { description: Run created }
+  /projects/{project}/workflows/{workflowID}:
+    patch:
+      tags: [projects]
+      summary: Enable/disable a workflow (write)
+      parameters:
+        - { $ref: "#/components/parameters/Project" }
+        - { name: workflowID, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [disabled]
+              properties:
+                disabled: { type: boolean }
+      responses:
+        "200":
+          description: Updated workflow
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  workflow: { $ref: "#/components/schemas/Workflow" }
   /projects/{project}/environments:
     get:
       tags: [environments]
@@ -1183,6 +1207,17 @@ components:
         name: { type: string }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+        disabled: { type: boolean }
+        diagnostics:
+          type: array
+          nullable: true
+          items:
+            type: object
+            properties:
+              level: { type: string }
+              code: { type: string }
+              path: { type: string }
+              message: { type: string }
     Run:
       type: object
       properties:
