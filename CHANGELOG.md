@@ -6,6 +6,9 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 ## [Unreleased]
 
 ### Added
+- `docs/runbook.md` — operations runbook: symptom → check → fix tables for
+  webhook delivery failures, stuck queues, runner offline/drift, runner disk
+  pressure, Postgres maintenance, retention knobs and deploy/rollback (#192).
 - `kern completion <bash|zsh|fish>` prints a shell completion script
   covering the top-level commands and subcommand trees — source it from
   your shell rc to get tab completion (#189).
