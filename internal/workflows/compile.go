@@ -138,10 +138,6 @@ func compile(content string, c Compiler, depth int, calls *int, deps map[string]
 				d.errorf("reusable-caller", "jobs."+id+".strategy",
 					"strategy on reusable-workflow callers is not implemented by KERN yet")
 			}
-			if s, ok := job.Secrets.(string); job.Secrets != nil && !(ok && s == "inherit") {
-				d.errorf("reusable-caller", "jobs."+id+".secrets",
-					"explicit secrets maps on reusable-workflow callers are not implemented by KERN yet; use 'secrets: inherit'")
-			}
 			continue
 		}
 		if len(job.RunsOn) == 0 {
@@ -259,7 +255,7 @@ func compile(content string, c Compiler, depth int, calls *int, deps map[string]
 			deps[job.Uses] = content
 			compileCall(d, plan, callSpec{
 				id: id, name: job.Name, needs: []string(job.Needs),
-				ifCond: job.If, with: job.With,
+				ifCond: job.If, with: job.With, secrets: job.Secrets,
 			}, content, c, depth, calls, deps)
 			continue
 		}

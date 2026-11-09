@@ -47,11 +47,12 @@ func ValidateReusableRef(uses string) error {
 
 // callSpec carries the parsed caller side of a uses job.
 type callSpec struct {
-	id     string
-	name   string
-	needs  []string
-	ifCond string
-	with   map[string]any
+	id      string
+	name    string
+	needs   []string
+	ifCond  string
+	with    map[string]any
+	secrets any
 }
 
 // compileCall expands one jobs.<id>.uses caller into the plan. content is the
@@ -94,7 +95,38 @@ func compileCall(d *diagnostics, plan *Plan, spec callSpec, content string, c Co
 		d.errorf("reusable-inputs", "jobs."+spec.id+".with", ierr.Error())
 		return
 	}
-	expandCallInto(plan, res.Plan, called, spec, inputs, c)
+	secretsMap, serr := callSecretsMap(spec.secrets)
+	if serr != nil {
+		d.errorf("reusable-secrets", "jobs."+spec.id+".secrets", serr.Error())
+		return
+	}
+	expandCallInto(plan, res.Plan, called, spec, inputs, secretsMap, c)
+}
+
+// callSecretsMap normalizes a caller's jobs.<id>.secrets into the per-job
+// delivery spec stamped on expanded jobs: 'inherit' yields nil (the full
+// eligible set), an omitted secrets key yields an empty map (none — GitHub
+// passes no secrets unless asked), and a map yields called-name ->
+// caller-side expression or literal.
+func callSecretsMap(raw any) (map[string]string, error) {
+	if raw == nil {
+		return map[string]string{}, nil
+	}
+	if s, ok := raw.(string); ok {
+		if s == "inherit" {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("jobs.secrets must be 'inherit' or a map of secret names to expressions, got %q", s)
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("jobs.secrets must be 'inherit' or a map of secret names to expressions")
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = asString(v)
+	}
+	return out, nil
 }
 
 func hasEvent(wf *Workflow, name string) bool {
@@ -156,7 +188,12 @@ func resolveCallInputs(decls map[string]callInput, with map[string]any) (map[str
 }
 
 // expandCallInto folds a compiled called-workflow plan into the caller plan.
-func expandCallInto(plan *Plan, called *Plan, calledWf *Workflow, spec callSpec, inputs map[string]string, c Compiler) {
+// secretsMap is the caller's jobs.<id>.secrets spec; it is stamped on every
+// expanded job, overwriting deeper call specs — the top-level caller governs
+// what secrets enter the whole called subtree (ceiling: nested explicit maps
+// resolve against the full eligible set rather than the parent's delivered
+// set, matching pre-map behavior).
+func expandCallInto(plan *Plan, called *Plan, calledWf *Workflow, spec callSpec, inputs map[string]string, secretsMap map[string]string, c Compiler) {
 	prefix := spec.id + "_"
 	for _, jp := range called.Jobs {
 		needs := make([]string, 0, len(jp.Needs)+len(spec.needs))
@@ -174,6 +211,7 @@ func expandCallInto(plan *Plan, called *Plan, calledWf *Workflow, spec callSpec,
 		nj.Needs = needs
 		nj.If = combineIf(spec.ifCond, jp.If)
 		nj.Inputs = inputs
+		nj.SecretsMap = secretsMap
 		plan.Jobs = append(plan.Jobs, nj)
 	}
 	// The boundary waits on every called job so needs.<called>.outputs is
@@ -201,6 +239,8 @@ func expandCallInto(plan *Plan, called *Plan, calledWf *Workflow, spec callSpec,
 		Outputs:        outputs,
 		TimeoutSeconds: 600,
 		FailFast:       true,
+		// The boundary runs a trivial step; it never needs secrets.
+		SecretsMap: map[string]string{},
 		Steps: []StepPlan{{
 			Number: 1, ID: "__boundary", Name: "reusable workflow boundary", Run: "true",
 		}},

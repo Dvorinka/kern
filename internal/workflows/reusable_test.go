@@ -159,12 +159,14 @@ jobs:
     steps:
       - run: x
 `, "reusable-caller"},
-		{"secrets map", `on: push
+		{"secrets scalar", `on: push
 jobs:
   call:
     uses: ./.github/workflows/called.yml
-    secrets: {A: x}
-`, "reusable-caller"},
+    with:
+      who: bob
+    secrets: 42
+`, "reusable-secrets"},
 		{"local ref with @", `on: push
 jobs:
   call:
@@ -247,11 +249,85 @@ func TestReusableWorkflowSecretsInherit(t *testing.T) {
 			t.Fatalf("inherit must not diagnose: %+v", d)
 		}
 	}
-	// Called jobs run in the caller's project, so the per-job secrets
-	// endpoint already delivers the inherited set — nothing to thread.
+	// Called jobs run in the caller's project; 'inherit' stamps nil so the
+	// per-job secrets endpoint delivers the full eligible set.
 	for _, j := range res.Plan.Jobs {
+		if !strings.HasPrefix(j.JobID, "call_") {
+			continue
+		}
 		if j.JobID == "call_say" && len(j.Steps) == 0 {
 			t.Fatal("expanded job lost its steps")
+		}
+		if j.SecretsMap != nil {
+			t.Fatalf("inherit must leave SecretsMap nil, got %v", j.SecretsMap)
+		}
+	}
+}
+
+func TestReusableWorkflowSecretsMap(t *testing.T) {
+	src := strings.Replace(callerWorkflowYAML, "    uses:", `    secrets:
+      CALLED_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+      REGION: eu-west
+    uses:`, 1)
+	res := compileWith(t, src, map[string]string{
+		"./.github/workflows/called.yml": calledWorkflowYAML,
+	})
+	if !res.Valid {
+		t.Fatalf("explicit secrets map must compile: %+v", res.Diagnostics)
+	}
+	for _, j := range res.Plan.Jobs {
+		switch j.JobID {
+		case "call_say", "call_late":
+			if j.SecretsMap["CALLED_TOKEN"] != "${{ secrets.DEPLOY_TOKEN }}" ||
+				j.SecretsMap["REGION"] != "eu-west" || len(j.SecretsMap) != 2 {
+				t.Fatalf("%s secrets map = %v", j.JobID, j.SecretsMap)
+			}
+		case "call":
+			if j.SecretsMap == nil || len(j.SecretsMap) != 0 {
+				t.Fatalf("boundary must get an empty secrets map, got %v", j.SecretsMap)
+			}
+		case "prep", "after":
+			if j.SecretsMap != nil {
+				t.Fatalf("normal job %s must keep nil SecretsMap, got %v", j.JobID, j.SecretsMap)
+			}
+		}
+	}
+}
+
+func TestReusableWorkflowSecretsAbsentMeansNone(t *testing.T) {
+	res := compileWith(t, callerWorkflowYAML, map[string]string{
+		"./.github/workflows/called.yml": calledWorkflowYAML,
+	})
+	if !res.Valid {
+		t.Fatalf("diagnostics: %+v", res.Diagnostics)
+	}
+	for _, j := range res.Plan.Jobs {
+		if j.JobID == "call_say" || j.JobID == "call_late" {
+			if j.SecretsMap == nil || len(j.SecretsMap) != 0 {
+				t.Fatalf("omitted secrets must stamp an empty map on %s, got %v", j.JobID, j.SecretsMap)
+			}
+		}
+	}
+}
+
+func TestReusableWorkflowSecretsInvalid(t *testing.T) {
+	for _, bad := range []string{
+		"    secrets: 42\n",
+		"    secrets: [a, b]\n",
+		"    secrets: notinherit\n",
+	} {
+		src := strings.Replace(callerWorkflowYAML, "    uses:", bad+"    uses:", 1)
+		res := compileWith(t, src, map[string]string{
+			"./.github/workflows/called.yml": calledWorkflowYAML,
+		})
+		found := false
+		for _, d := range res.Diagnostics {
+			if d.Code == "reusable-secrets" {
+				found = true
+			}
+		}
+		if res.Valid || !found {
+			t.Fatalf("secrets %q must fail with reusable-secrets, valid=%v diags=%+v", bad, res.Valid, res.Diagnostics)
 		}
 	}
 }

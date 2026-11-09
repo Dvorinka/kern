@@ -181,6 +181,7 @@ func (o *Orchestrator) StartRun(ctx context.Context, p store.CreateRunParams) (s
 			Inputs:          inputs,
 			Services:        serviceSeeds(jp.Services),
 			Permissions:     jp.Permissions,
+			SecretsMap:      jp.SecretsMap,
 			NeedsDocker:     jobNeedsDocker(jp.Steps),
 		}
 		for _, sp := range jp.Steps {
