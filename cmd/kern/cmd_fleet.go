@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -450,7 +451,7 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 
 func (c *cli) cmdSecrets(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: kern secrets list|set|delete [--project S]")
+		return fmt.Errorf("usage: kern secrets list|set|delete [--project S]\n       kern secrets set NAME [--value V] — omit --value to be prompted, or pipe via --value -")
 	}
 	if err := c.requireAuth(); err != nil {
 		return err
@@ -486,7 +487,19 @@ func (c *cli) cmdSecrets(ctx context.Context, args []string) error {
 			return err
 		}
 		value := opts["value"]
-		if value == "" {
+		switch {
+		case value == "-":
+			data, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				return fmt.Errorf("read secret from stdin: %w", err)
+			}
+			value = strings.TrimSuffix(string(data), "\n")
+			if value == "" {
+				return fmt.Errorf("empty secret on stdin")
+			}
+		case value != "":
+			fmt.Fprintln(os.Stderr, "kern: warning: --value exposes the secret in shell history and the process list; prefer --value - with stdin")
+		default:
 			v, err := readPassword("secret value: ")
 			if err != nil {
 				return err
