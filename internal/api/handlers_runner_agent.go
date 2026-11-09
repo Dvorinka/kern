@@ -272,7 +272,11 @@ func (s *Server) respondWithClaim(c *gin.Context, claimed *store.ClaimedJob, run
 	c.JSON(http.StatusOK, gin.H{
 		"job": gin.H{
 			"id": claimed.Job.ID, "run_id": claimed.Job.RunID, "key": claimed.Job.Key,
-			"name": claimed.Job.Name, "attempt": claimed.Attempt, "image": s.jobImageFor(runner, claimed.Job.Image),
+			// Job-scoped cache credential: steps receive it as
+			// ACTIONS_RUNTIME_TOKEN so @actions/cache works without ever
+			// exposing the runner's broad token to job code.
+			"cache_token": s.cacheJobToken(claimed.Job.ID),
+			"name":        claimed.Job.Name, "attempt": claimed.Attempt, "image": s.jobImageFor(runner, claimed.Job.Image),
 			"env": claimed.Job.Env, "matrix": claimed.Job.Matrix, "runs_on": claimed.Job.RunsOn,
 			"timeout_seconds": claimed.Job.TimeoutSeconds, "continue_on_error": claimed.Job.ContinueOnError,
 			"outputs_spec": claimed.Job.OutputsSpec,

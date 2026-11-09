@@ -46,6 +46,7 @@ type Server struct {
 	ghRepoApp map[string]uuid.UUID      // repo -> github_apps.id (probe cache)
 	geoSelfMu sync.Mutex                // serializes the control-plane self-lookup
 	metrics   *kernMetrics
+	ghCache   *ghCacheState
 }
 
 func New(cfg *config.Config, st *store.Store, orch *orchestrator.Orchestrator, blobStore blobs.Store,
@@ -67,10 +68,11 @@ func New(cfg *config.Config, st *store.Store, orch *orchestrator.Orchestrator, b
 		GH:     &github.Resolver{App: app, PAT: github.New(cfg.GitHub.APIBaseURL, cfg.GitHub.StatusToken)},
 		Geo:    geoip.New(cfg.GeoIPURL),
 		ghApps: make(map[uuid.UUID]*github.App), ghRepoApp: make(map[string]uuid.UUID),
-		metrics: newKernMetrics(),
+		metrics: newKernMetrics(), ghCache: newGHCacheState(),
 	}
 	s.wireCommitStatus()
 	s.Engine = s.buildRouter()
+	s.sweepGHCacheUploads()
 	return s
 }
 
@@ -277,6 +279,21 @@ func (s *Server) buildRouter() *gin.Engine {
 		runner.GET("/runners/jobs/:jobID/cache/restore", s.cacheRestore)
 		runner.PUT("/runners/jobs/:jobID/cache/:key", s.cacheSave)
 	}
+
+	// GitHub cache-service v1 protocol — what @actions/cache (and the
+	// cache: option of setup-node/setup-go) speaks when ACTIONS_CACHE_URL
+	// points here. Auth accepts the runner token or the per-job kc1 token
+	// minted at claim time.
+	ghc := api.Group("", s.requireCacheClient())
+	ghc.GET("/runners/jobs/:jobID/ghcache/_apis/artifactcache/cache", s.ghCacheLookup)
+	ghc.GET("/runners/jobs/:jobID/ghcache/_apis/artifactcache/caches", s.ghCacheList)
+	ghc.POST("/runners/jobs/:jobID/ghcache/_apis/artifactcache/caches", s.ghCacheReserve)
+	ghc.PATCH("/runners/jobs/:jobID/ghcache/_apis/artifactcache/caches/:cacheID", s.ghCacheUpload)
+	ghc.POST("/runners/jobs/:jobID/ghcache/_apis/artifactcache/caches/:cacheID", s.ghCacheCommit)
+
+	// Unauthenticated but HMAC-signed: archiveLocation downloads cannot carry
+	// the runner bearer token.
+	api.GET("/cache-dl/:token", s.ghCacheDownload)
 
 	auth.GET("/artifacts", s.listArtifacts)
 	auth.GET("/artifacts/:id/download", s.getArtifact)

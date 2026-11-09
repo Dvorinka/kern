@@ -623,11 +623,16 @@ func (e *executor) jobEnv() map[string]string {
 		"GITHUB_ACTOR":      e.claim.Run.Actor,
 		"GITHUB_SERVER_URL": serverURL(e.claim.Run.RepoURL),
 		"GITHUB_API_URL":    apiURL(e.claim.Run.RepoURL),
-		"RUNNER_OS":         runnerGOOS(),
-		"RUNNER_ARCH":       runnerArch(),
-		"RUNNER_NAME":       e.cfg.Name,
-		"KERN":              "true",
-		"CI":                "true",
+		// @actions/cache (setup-node/setup-go cache:, actions/cache/*) speaks
+		// the GitHub cache-service protocol; point it at the job-scoped
+		// compat endpoint on the control plane.
+		"ACTIONS_CACHE_URL":     strings.TrimRight(e.c.base, "/") + "/api/v1/runners/jobs/" + e.jobID + "/ghcache/",
+		"ACTIONS_RUNTIME_TOKEN": valueOr(e.claim.Job.CacheToken, e.c.token),
+		"RUNNER_OS":             runnerGOOS(),
+		"RUNNER_ARCH":           runnerArch(),
+		"RUNNER_NAME":           e.cfg.Name,
+		"KERN":                  "true",
+		"CI":                    "true",
 		// The workspace is cloned by the runner (uid 0) but steps run as
 		// jobUID — tell git the tree is safe so VCS stamping works.
 		"GIT_CONFIG_COUNT":   "1",
