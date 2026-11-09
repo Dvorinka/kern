@@ -194,7 +194,9 @@ func (s *Server) buildRouter() *gin.Engine {
 		admin.DELETE("/github-app/:id", s.deleteGitHubApp)
 
 		auth.GET("/runs", s.listRuns)
+		auth.GET("/runs/day-counts", s.dayCounts)
 		auth.GET("/runs/:id", s.getRun)
+		auth.GET("/jobs", s.queuedJobs)
 		write.POST("/runs/:id/cancel", s.cancelRun)
 		admin.POST("/runs/:id/approve", s.approveRun)
 		write.POST("/runs/:id/rerun", s.rerunRun)
