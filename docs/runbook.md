@@ -73,6 +73,10 @@ Symptoms: jobs die with `ENOSPC` mid-step, `docker` errors, runner GC warnings.
   (default 5) or `KERN_RUNNER_DISK_CRITICAL_FLOOR_BYTES` (default 2 GiB),
   whichever trips first — the runner additionally drops ledger images unused
   >24h, workspaces >2h, and evicts `_cache` to half its cap. Still idle-gated.
+- `KERN_RUNNER_MEM_MIN_FREE_BYTES` (default 1 GiB, `0` disables) pauses
+  claims while host `MemAvailable` sits below the floor — a job claimed
+  under memory pressure would swap or OOM mid-step and starve neighbours
+  on shared hosts.
 - `KERN_RUNNER_IMAGE_MAX_AGE` GCs pulled job images; `KERN_RUNNER_PREPULL`
   keeps hot images local.
 - Manual: `docker system df` then `docker image prune` / `docker builder prune`

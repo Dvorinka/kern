@@ -176,6 +176,7 @@ func (o *Orchestrator) StartRun(ctx context.Context, p store.CreateRunParams) (s
 			TimeoutSeconds:  jp.TimeoutSeconds,
 			ContinueOnError: jp.ContinueOnError,
 			FailFast:        jp.FailFast,
+			Priority:        jp.Priority,
 			OutputsSpec:     jp.Outputs,
 			Environment:     jp.Environment,
 			EnvironmentURL:  jp.EnvironmentURL,

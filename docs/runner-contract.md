@@ -63,6 +63,14 @@ Everything else on the host's loopback/interface space is fair game for
 kern-managed jobs are serialized by the runner's port lock, and
 non-kern containers squatting a port are an operator concern.
 
+## Claim ordering
+
+`jobs.<id>.priority` (integer, default `0`, KERN extension) — the
+runner claim query orders by `priority DESC, queued_at`, so a queued job
+with a higher number is claimed before lower-priority jobs. Use it to
+keep short urgent work (e.g. this repo's dogfood CI) ahead of long
+builds on a shared fleet. GitHub ignores the key.
+
 ## Job container hardening (untrusted tiers)
 
 uid 1000, `--cap-drop ALL`, `no-new-privileges`, `--read-only`, `/tmp` and

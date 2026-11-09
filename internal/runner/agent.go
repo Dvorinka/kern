@@ -64,6 +64,12 @@ type Config struct {
 	// (KERN_RUNNER_DISK_MIN_FREE_PCT, default 10). Zero disables both;
 	// the stale-workspace sweep always runs.
 	DiskMinFreePct float64
+	// MemMinFreeBytes pauses job claims while host MemAvailable drops
+	// below this floor (KERN_RUNNER_MEM_MIN_FREE_BYTES, default 1 GiB).
+	// A job claimed under memory pressure is a job the kernel may
+	// OOM-kill mid-step — and on shared hosts it starves neighbours.
+	// Zero disables the gate.
+	MemMinFreeBytes int64
 	// DiskCriticalFreePct and DiskCriticalFloorBytes mark the critical
 	// reclaim tier — whichever trips first escalates beyond the docker
 	// prune: ledger images unused >24h, workspaces >2h, and the _cache
@@ -98,6 +104,8 @@ type Agent struct {
 	// diskPaused latches while the work-root filesystem is under pressure so
 	// the transition is logged once per episode, not once per worker tick.
 	diskPaused atomic.Bool
+	// memPaused latches while host memory is under the claim floor.
+	memPaused atomic.Bool
 	// retire latches once the ephemeral idle timeout fires; heartbeats carry
 	// it until the control plane confirms the row is gone. lastActivity is
 	// the unixnano of the last job completion (boot time until then). A
@@ -386,6 +394,12 @@ func (a *Agent) workerLoop(ctx context.Context, n int) {
 			sleepCtx(ctx, 30*time.Second)
 			continue
 		}
+		if a.memClaimPaused() {
+			// Host memory is at the floor — a claimed job would swap or
+			// OOM-kill. Wait for headroom rather than take doomed work.
+			sleepCtx(ctx, 15*time.Second)
+			continue
+		}
 		claim, err := a.c.claim(ctx, 25)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -460,6 +474,33 @@ func (a *Agent) diskClaimPaused() bool {
 	return true
 }
 
+// memAvailableFn stubs the memory probe in tests.
+var memAvailableFn = memAvailable
+
+// memClaimPaused reports whether claims should pause because host
+// MemAvailable is under Config.MemMinFreeBytes. The load gate covers CPU
+// saturation; this covers the other half of the incident shape — a heavy
+// build (Gradle-class) that pushes the host into swap and OOM-kills
+// whatever hits its cgroup ceiling first, job or neighbour.
+func (a *Agent) memClaimPaused() bool {
+	floor := a.cfg.MemMinFreeBytes
+	if floor <= 0 {
+		return false
+	}
+	avail, ok := memAvailableFn()
+	if !ok || avail >= floor {
+		if a.memPaused.CompareAndSwap(true, false) {
+			a.log.Info("memory pressure cleared: resuming claims")
+		}
+		return false
+	}
+	if a.memPaused.CompareAndSwap(false, true) {
+		a.log.Warn("memory pressure: pausing job claims",
+			zap.Int64("available_bytes", avail), zap.Int64("floor_bytes", floor))
+	}
+	return true
+}
+
 // jobErrorHint annotates runner-side failure signatures that never reach a
 // step — prepare, checkout and image-pull errors land in the job error as
 // raw text (#209). ENOSPC gets the live free-space reading so the operator
@@ -473,22 +514,30 @@ func jobErrorHint(msg, workRoot string) string {
 		msg, free/(1<<20), total/(1<<20))
 }
 
+// loadAvg1Fn and cpusVisibleFn stub the host probes in tests.
+var (
+	loadAvg1Fn    = loadAvg1
+	cpusVisibleFn = cpusVisible
+)
+
 // overLoaded reports whether the claim gate is engaged: loadavg1 above
 // MaxLoadPerCPU per CPU means the host is saturated and new work would only
-// slow the jobs already running.
+// slow the jobs already running. The CPU count comes from /proc/cpuinfo —
+// the same kernel that publishes loadavg — not the container's cpuset.
 func (a *Agent) overLoaded() bool {
 	if a.cfg.MaxLoadPerCPU <= 0 {
 		return false
 	}
-	load, ok := loadAvg1()
+	load, ok := loadAvg1Fn()
 	if !ok {
 		return false
 	}
-	if load <= a.cfg.MaxLoadPerCPU*float64(runtime.NumCPU()) {
+	cpus := cpusVisibleFn()
+	if load <= a.cfg.MaxLoadPerCPU*float64(cpus) {
 		return false
 	}
 	a.log.Warn("load gate: host saturated, pausing claims",
-		zap.Float64("loadavg1", load), zap.Float64("gate", a.cfg.MaxLoadPerCPU*float64(runtime.NumCPU())))
+		zap.Float64("loadavg1", load), zap.Float64("gate", a.cfg.MaxLoadPerCPU*float64(cpus)))
 	return true
 }
 
