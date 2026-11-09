@@ -121,6 +121,53 @@ func TestReadActionMeta(t *testing.T) {
 	}
 }
 
+func TestMissingActionEntrypoints(t *testing.T) {
+	write := func(dir, name, body string) {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// node action missing its main entrypoint — the paths-filter failure mode.
+	dir := t.TempDir()
+	write(dir, "action.yml", "runs:\n  using: node20\n  main: dist/index.js\n  post: dist/post.js\n")
+	write(dir, "dist/post.js", "// post\n")
+	missing := missingActionEntrypoints(dir)
+	if len(missing) != 1 || missing[0] != "dist/index.js" {
+		t.Fatalf("missing = %v, want [dist/index.js]", missing)
+	}
+	write(dir, "dist/index.js", "// main\n")
+	if missing := missingActionEntrypoints(dir); len(missing) != 0 {
+		t.Fatalf("complete tree reported missing: %v", missing)
+	}
+
+	// composite actions declare no entry files — never reported missing.
+	comp := t.TempDir()
+	write(comp, "action.yml", "runs:\n  using: composite\n  steps:\n    - run: echo hi\n      shell: bash\n")
+	if missing := missingActionEntrypoints(comp); len(missing) != 0 {
+		t.Fatalf("composite reported missing: %v", missing)
+	}
+
+	// docker action building from Dockerfile requires the file; named images do not.
+	dkr := t.TempDir()
+	write(dkr, "action.yml", "runs:\n  using: docker\n  image: Dockerfile\n")
+	if missing := missingActionEntrypoints(dkr); len(missing) != 1 || missing[0] != "Dockerfile" {
+		t.Fatalf("docker missing = %v, want [Dockerfile]", missing)
+	}
+	write(dkr, "Dockerfile", "FROM alpine\n")
+	if missing := missingActionEntrypoints(dkr); len(missing) != 0 {
+		t.Fatalf("docker tree reported missing: %v", missing)
+	}
+	img := t.TempDir()
+	write(img, "action.yml", "runs:\n  using: docker\n  image: alpine:3.20\n")
+	if missing := missingActionEntrypoints(img); len(missing) != 0 {
+		t.Fatalf("image-based docker action reported missing: %v", missing)
+	}
+}
+
 func TestMetaStepsParse(t *testing.T) {
 	m := metaWith("    - id: a\n      run: echo hi\n      shell: bash\n      env:\n        X: \"1\"\n")
 	cs := m.Runs.Steps[0]

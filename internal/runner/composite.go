@@ -196,6 +196,81 @@ func readActionMeta(dir string) (*actions.Meta, error) {
 	return nil, fmt.Errorf("no action.yml in %s", dir)
 }
 
+// populateAction fills base with the action repository at the requested ref,
+// preferring the SHA-keyed persistent cache over a direct shallow clone.
+func (e *executor) populateAction(ctx context.Context, base string, r actions.RemoteRef) error {
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		return err
+	}
+	repoURL := e.actionRepoBase() + "/" + r.Owner + "/" + r.Repo
+	fetched := false
+	if sha := e.resolveActionSHA(ctx, repoURL, r.Ref); sha != "" {
+		if err := e.fetchViaActionCache(ctx, repoURL, r, sha, base); err != nil {
+			e.log.Debug("action cache path failed, fetching directly",
+				zap.String("repo", repoURL), zap.Error(err))
+		} else {
+			fetched = true
+		}
+	}
+	if !fetched {
+		git := func(args ...string) error {
+			cmd := exec.CommandContext(ctx, "git", append([]string{"-C", base}, args...)...)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("git %s: %s", strings.Join(args, " "), tailStr(string(out), 300))
+			}
+			return nil
+		}
+		if err := git("init", "-q"); err != nil {
+			return err
+		}
+		if err := git("remote", "add", "origin", repoURL); err != nil {
+			return err
+		}
+		// fetch by name works for branches and tags; GitHub also serves
+		// reachable commit SHAs, which covers pinned actions.
+		if err := git("fetch", "--depth", "1", "origin", r.Ref); err != nil {
+			return fmt.Errorf("ref %s not fetchable from %s (public https only)", r.Ref, repoURL)
+		}
+		if err := git("checkout", "-q", "FETCH_HEAD"); err != nil {
+			return err
+		}
+	}
+	_ = os.RemoveAll(filepath.Join(base, ".git"))
+	return nil
+}
+
+// missingActionEntrypoints lists the entry files action.yml declares that are
+// absent from dir — node actions need main (and pre/post when set), docker
+// actions need a Dockerfile when no image is given. Composite actions declare
+// no entry files.
+func missingActionEntrypoints(dir string) []string {
+	meta, err := readActionMeta(dir)
+	if err != nil {
+		return nil // readActionMeta reports this itself downstream
+	}
+	var missing []string
+	check := func(rel string) {
+		if rel == "" {
+			return
+		}
+		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(rel))); err != nil {
+			missing = append(missing, rel)
+		}
+	}
+	switch meta.Runs.Using {
+	case "node12", "node16", "node20", "node24":
+		check(meta.Runs.Main)
+		check(meta.Runs.Pre)
+		check(meta.Runs.Post)
+	case "docker":
+		if strings.EqualFold(strings.TrimSpace(meta.Runs.Image), "Dockerfile") {
+			check("Dockerfile")
+		}
+	}
+	return missing
+}
+
 // fetchAction clones an action repository at the requested ref into the job's
 // actions dir and returns the host and container paths of the action
 // directory. Fetches are memoised per job. Only public repositories over
@@ -210,42 +285,26 @@ func (e *executor) fetchAction(ctx context.Context, step StepSpec, r actions.Rem
 	base, ok := e.actionDirs[key]
 	if !ok {
 		base = filepath.Join(e.workRoot(), "actions", key)
-		if err := os.MkdirAll(base, 0o755); err != nil {
-			return "", "", err
-		}
-		repoURL := e.actionRepoBase() + "/" + r.Owner + "/" + r.Repo
-		fetched := false
-		if sha := e.resolveActionSHA(ctx, repoURL, r.Ref); sha != "" {
-			if err := e.fetchViaActionCache(ctx, repoURL, r, sha, base); err != nil {
-				e.log.Debug("action cache path failed, fetching directly",
-					zap.String("repo", repoURL), zap.Error(err))
-			} else {
-				fetched = true
+		// A partial copy once shipped action trees missing their entrypoint
+		// (node ran, dist/index.js did not). Verify entry files after fetch
+		// and retry once on a clean dir before giving up.
+		for attempt := 0; attempt < 2; attempt++ {
+			if attempt > 0 {
+				_ = os.RemoveAll(base)
 			}
-		}
-		if !fetched {
-			git := func(args ...string) error {
-				cmd := exec.CommandContext(ctx, "git", append([]string{"-C", base}, args...)...)
-				out, err := cmd.CombinedOutput()
-				if err != nil {
-					return fmt.Errorf("git %s: %s", strings.Join(args, " "), tailStr(string(out), 300))
-				}
-				return nil
-			}
-			if err := git("init", "-q"); err != nil {
+			if err := e.populateAction(ctx, base, r); err != nil {
 				return "", "", err
 			}
-			if err := git("remote", "add", "origin", repoURL); err != nil {
-				return "", "", err
+			missing := missingActionEntrypoints(filepath.Join(base, filepath.FromSlash(r.Path)))
+			if len(missing) == 0 {
+				break
 			}
-			// fetch by name works for branches and tags; GitHub also serves
-			// reachable commit SHAs, which covers pinned actions.
-			if err := git("fetch", "--depth", "1", "origin", r.Ref); err != nil {
-				return "", "", fmt.Errorf("ref %s not fetchable from %s (public https only)", r.Ref, repoURL)
+			if attempt == 1 {
+				return "", "", fmt.Errorf("action %s/%s@%s fetched incomplete (missing %s)",
+					r.Owner, r.Repo, r.Ref, strings.Join(missing, ", "))
 			}
-			if err := git("checkout", "-q", "FETCH_HEAD"); err != nil {
-				return "", "", err
-			}
+			e.log.Debug("action fetch incomplete; retrying",
+				zap.String("repo", r.Owner+"/"+r.Repo), zap.Strings("missing", missing))
 		}
 		e.actionDirs[key] = base
 	}
