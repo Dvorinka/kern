@@ -355,10 +355,10 @@ func (e *executor) prepare(ctx context.Context) error {
 	// when no JS action runs first (GitHub's ubuntu image ships node on
 	// PATH). Best-effort — a failed download degrades to on-demand
 	// provisioning inside JS actions.
-	if err := e.ensureNode(ctx); err != nil {
+	if err := e.ensureNode(ctx, "node20"); err != nil {
 		e.log.Warn("baseline node provision failed; JS actions will retry", zap.Error(err))
 	} else {
-		e.enc.persistPaths([]string{e.nodeBinDir()})
+		e.enc.persistPaths([]string{e.nodeBinDir("node20")})
 	}
 	if !e.privileged() {
 		if err := e.ensureEgress(ctx); err != nil {

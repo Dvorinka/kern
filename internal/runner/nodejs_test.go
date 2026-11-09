@@ -9,7 +9,14 @@ import (
 
 func TestContainerNodeDir(t *testing.T) {
 	e := &executor{}
-	if got := e.nodeBinDir(); got != "/kern/node/v20.18.1/bin" {
+	if got := e.nodeBinDir("node20"); got != "/kern/node/v20.18.1/bin" {
+		t.Fatal(got)
+	}
+	if got := e.nodeBinDir("node24"); got != "/kern/node/v24.22.2/bin" {
+		t.Fatal(got)
+	}
+	// Deprecated runtimes retarget onto the node20 pin, matching GitHub.
+	if got := e.nodeBinDir("node16"); got != "/kern/node/v20.18.1/bin" {
 		t.Fatal(got)
 	}
 }
@@ -52,7 +59,7 @@ runs:
 }
 
 func TestNodeArchive(t *testing.T) {
-	archive, err := nodeArchive()
+	archive, err := nodeArchive("v20.18.1")
 	if err != nil {
 		t.Skipf("unsupported host: %v", err)
 	}
