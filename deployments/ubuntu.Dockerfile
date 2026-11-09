@@ -39,6 +39,20 @@ RUN mkdir -p /etc/apt/keyrings \
 # git-lfs needs its smudge filter registered for checkouts that use it.
 RUN git lfs install --system || true
 
+# GitHub-hosted runner images ship Chrome; chromedp/headless-Chrome workloads
+# (PDF rendering, browser smoke lanes) resolve it via CHROME_BIN or the
+# default PATH lookup and fail without it (#149). Recommends stay on — the
+# font packages matter for non-ASCII document rendering. No official arm64
+# .deb exists, so arm64 keeps the browserless image; arm64 jobs that need
+# Chrome must pin their own container image.
+RUN if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
+      apt-get update \
+      && wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -O /tmp/chrome.deb \
+      && apt-get install -y /tmp/chrome.deb \
+      && rm -f /tmp/chrome.deb \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
+
 # Job steps run as an unprivileged uid unless the run is trusted; the workspace
 # and tool caches are mounted from the host, so keep the default umask friendly.
 RUN chmod -R a+rwX /usr/local/bin /opt 2>/dev/null || true
