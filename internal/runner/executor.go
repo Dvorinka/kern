@@ -555,6 +555,16 @@ func (e *executor) startContainer(ctx context.Context) error {
 			args = append(args, "-v", filepath.Join(workRoot, "home")+":"+home)
 		}
 	}
+	// Pre-provisioned Android SDK (ops-installed under WorkRoot/_android-sdk
+	// with a .complete marker — GitHub images ship one, bare ubuntu does
+	// not). Mounted for every job; harmless for non-Android work.
+	if sdk := filepath.Join(e.cfg.WorkRoot, "_android-sdk"); dirExists(filepath.Join(sdk, ".complete")) {
+		args = append(args,
+			"-v", sdk+":/opt/android-sdk",
+			"-e", "ANDROID_HOME=/opt/android-sdk",
+			"-e", "ANDROID_SDK_ROOT=/opt/android-sdk",
+		)
+	}
 	args = append(args, jobCAMount()...)
 	args = append(args, caEnv()...)
 	if eventPath != "" {
