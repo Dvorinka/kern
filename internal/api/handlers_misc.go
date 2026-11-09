@@ -34,12 +34,14 @@ func (s *Server) overview(c *gin.Context) {
 	failures, _ := s.Store.RecentFailures(ctx, 5)
 	cacheEntries, cacheBytes, _ := s.Store.CacheStats(ctx)
 	whfCount, whfErr, _ := s.Store.WebhookFailureSummary(ctx, 24*time.Hour)
+	unmatched, _ := s.Store.UnmatchedQueuedJobs(ctx)
 	c.JSON(http.StatusOK, gin.H{
-		"overview": o,
-		"series":   series,
-		"failures": failures,
-		"cache":    gin.H{"entries": cacheEntries, "bytes": cacheBytes},
-		"webhooks": gin.H{"failed_24h": whfCount, "last_error": whfErr},
+		"overview":         o,
+		"series":           series,
+		"failures":         failures,
+		"cache":            gin.H{"entries": cacheEntries, "bytes": cacheBytes},
+		"webhooks":         gin.H{"failed_24h": whfCount, "last_error": whfErr},
+		"unmatched_queued": len(unmatched),
 	})
 }
 
@@ -66,6 +68,9 @@ func (s *Server) prometheus(c *gin.Context) {
 	writeMetric("kern_job_queue_seconds_avg", "Average queue wait over 24h", "gauge", o.AvgQueueSeconds)
 	writeMetric("kern_job_queue_seconds_p95", "p95 queue wait over 24h", "gauge", o.P95QueueSeconds)
 	writeMetric("kern_run_seconds_avg", "Average run duration", "gauge", o.AvgRunSeconds)
+	if unmatched, err := s.Store.UnmatchedQueuedJobs(ctx); err == nil {
+		writeMetric("kern_jobs_unmatched", "Queued jobs no online runner can claim", "gauge", float64(len(unmatched)))
+	}
 
 	// Store-backed series. A failure on an optional query degrades to the
 	// series being absent rather than failing the whole scrape.

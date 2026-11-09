@@ -524,6 +524,51 @@ func (s *Store) SetJobSkipped(ctx context.Context, jobID uuid.UUID, reason strin
 	return tx.Commit(ctx)
 }
 
+// UnmatchedJob is a queued job that no online runner can ever claim.
+type UnmatchedJob struct {
+	JobID  uuid.UUID `json:"job_id"`
+	RunID  uuid.UUID `json:"run_id"`
+	RunsOn []string  `json:"runs_on"`
+}
+
+// UnmatchedQueuedJobs lists queued jobs that would starve silently: the
+// label subset check from ClaimJob finds no online, non-draining runner in
+// the job's org whose labels cover runs_on (plus the implicit
+// self-hosted/kern pair), or the only matches are host executors the run's
+// trust tier forbids. Capacity is deliberately not part of the predicate —
+// a job matching a busy runner is queueing, not starvation.
+func (s *Store) UnmatchedQueuedJobs(ctx context.Context) ([]UnmatchedJob, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT j.id, j.run_id, j.runs_on
+		FROM jobs j
+		JOIN workflow_runs r ON r.id = j.run_id
+		JOIN projects p ON p.id = r.project_id
+		WHERE j.status = 'queued'
+		  AND r.status IN ('queued', 'in_progress')
+		  AND NOT EXISTS (
+			SELECT 1 FROM runners rn
+			WHERE rn.org_id = p.org_id
+			  AND rn.status = 'online'
+			  AND NOT rn.draining
+			  AND j.runs_on <@ (rn.labels || ARRAY['self-hosted', 'kern'])
+			  AND (rn.executor <> 'host' OR r.trust_level NOT IN ('fork', 'pull_request'))
+		  )
+		ORDER BY j.queued_at`)
+	if err != nil {
+		return nil, fmt.Errorf("unmatched queued jobs: %w", err)
+	}
+	defer rows.Close()
+	var out []UnmatchedJob
+	for rows.Next() {
+		var u UnmatchedJob
+		if err := rows.Scan(&u.JobID, &u.RunID, &u.RunsOn); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
 // JobRunID resolves the run for a job (used by log streaming and cancellation checks).
 func (s *Store) JobRunID(ctx context.Context, jobID uuid.UUID) (uuid.UUID, string, error) {
 	var runID uuid.UUID

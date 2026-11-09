@@ -76,17 +76,19 @@ type step struct {
 }
 
 type job struct {
-	ID         string `json:"id"`
-	JobKey     string `json:"job_key"`
-	Key        string `json:"key"`
-	Name       string `json:"name"`
-	Status     string `json:"status"`
-	Conclusion string `json:"conclusion"`
-	RunnerID   string `json:"runner_id"`
-	RunnerName string `json:"runner_name"`
-	Attempt    int    `json:"attempt"`
-	Error      string `json:"error"`
-	Steps      []step `json:"steps"`
+	ID          string   `json:"id"`
+	JobKey      string   `json:"job_key"`
+	Key         string   `json:"key"`
+	Name        string   `json:"name"`
+	Status      string   `json:"status"`
+	Conclusion  string   `json:"conclusion"`
+	RunnerID    string   `json:"runner_id"`
+	RunnerName  string   `json:"runner_name"`
+	Attempt     int      `json:"attempt"`
+	Error       string   `json:"error"`
+	QueueReason string   `json:"queue_reason"`
+	RunsOn      []string `json:"runs_on"`
+	Steps       []step   `json:"steps"`
 }
 
 type runDetail struct {

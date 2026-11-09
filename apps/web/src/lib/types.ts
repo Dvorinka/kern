@@ -141,6 +141,7 @@ export interface Job {
 	outputs: Record<string, string> | null;
 	environment: string;
 	environment_url: string;
+	queue_reason?: string;
 	steps?: Step[];
 }
 

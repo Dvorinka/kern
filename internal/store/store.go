@@ -177,7 +177,10 @@ type Job struct {
 	Permissions    json.RawMessage `json:"permissions"`
 	Environment    string          `json:"environment"`
 	EnvironmentURL string          `json:"environment_url"`
-	Steps          []Step          `json:"steps,omitempty"`
+	// QueueReason is advisory, computed at read time (never stored): why a
+	// queued job cannot be claimed, e.g. no online runner matches runs-on.
+	QueueReason string `json:"queue_reason,omitempty"`
+	Steps       []Step `json:"steps,omitempty"`
 }
 
 // InputsMap decodes the job's workflow_call inputs.

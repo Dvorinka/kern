@@ -410,6 +410,9 @@ func (c *cli) showRun(ctx context.Context, id string) error {
 			line += fmt.Sprintf("  attempt %d", j.Attempt)
 		}
 		fmt.Println(line)
+		if j.QueueReason != "" {
+			fmt.Printf("      → queued: %s (runs-on: %s)\n", j.QueueReason, strings.Join(j.RunsOn, ", "))
+		}
 		for _, st := range j.Steps {
 			mark := " "
 			switch st.Conclusion {

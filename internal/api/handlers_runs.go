@@ -119,6 +119,20 @@ func (s *Server) getRun(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
+	// Advisory only: a diagnostic failure must not take the run page down.
+	if unmatched, err := s.Store.UnmatchedQueuedJobs(c.Request.Context()); err == nil {
+		starved := make(map[uuid.UUID]bool, len(unmatched))
+		for _, u := range unmatched {
+			if u.RunID == run.ID {
+				starved[u.JobID] = true
+			}
+		}
+		for i := range jobs {
+			if starved[jobs[i].ID] {
+				jobs[i].QueueReason = "no online runner matches runs-on labels"
+			}
+		}
+	}
 	version, err := s.Store.WorkflowVersion(c.Request.Context(), run.WorkflowVersionID)
 	if err != nil {
 		s.internalError(c, err)

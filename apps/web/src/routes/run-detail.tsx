@@ -233,9 +233,16 @@ function StepsPanel({
 				<div className="steps">
 					{steps.length === 0 && (
 						<div className="px-4 py-3 text-[11px] text-[var(--faint)]">
-							{job.status === "waiting_approval"
-								? "Waiting for deployment approval."
-								: "No steps yet."}
+							{job.queue_reason
+								? `Queued: ${job.queue_reason} (runs-on: ${job.runs_on.join(", ")}).`
+								: job.status === "waiting_approval"
+									? "Waiting for deployment approval."
+									: "No steps yet."}
+						</div>
+					)}
+					{job.queue_reason && steps.length > 0 && (
+						<div className="px-4 py-2 text-[11px] text-[var(--warn)]">
+							Re-queued: {job.queue_reason} (runs-on: {job.runs_on.join(", ")}).
 						</div>
 					)}
 					{steps.map((s) => (
