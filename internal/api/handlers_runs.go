@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -35,10 +36,48 @@ func (s *Server) listRuns(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"runs": runs, "total": total})
 }
 
-func (s *Server) getRun(c *gin.Context) {
-	id, err := uuid.Parse(c.Param("id"))
+// runIDParam resolves the :id route param — a full UUID or an unambiguous
+// hex prefix (the short ids `kern runs list` prints). Writes the error
+// response and returns false when the id is invalid, unknown, or ambiguous.
+func (s *Server) runIDParam(c *gin.Context) (uuid.UUID, bool) {
+	raw := strings.ToLower(c.Param("id"))
+	if id, err := uuid.Parse(raw); err == nil {
+		return id, true
+	}
+	if len(raw) < 4 || len(raw) > 32 {
+		fail(c, http.StatusBadRequest, "invalid_id", "run id must be a uuid or an 8+ char prefix")
+		return uuid.Nil, false
+	}
+	for _, r := range raw {
+		if !strings.ContainsRune("0123456789abcdef", r) {
+			fail(c, http.StatusBadRequest, "invalid_id", "run id must be a uuid or an 8+ char prefix")
+			return uuid.Nil, false
+		}
+	}
+	cands, err := s.Store.RunPrefix(c.Request.Context(), raw)
 	if err != nil {
-		fail(c, http.StatusBadRequest, "invalid_id", "run id must be a uuid")
+		s.internalError(c, err)
+		return uuid.Nil, false
+	}
+	switch len(cands) {
+	case 0:
+		fail(c, http.StatusNotFound, "not_found", "run not found")
+	case 1:
+		return cands[0].ID, true
+	default:
+		ids := make([]string, 0, len(cands))
+		for _, r := range cands {
+			ids = append(ids, r.ID.String()[:8])
+		}
+		fail(c, http.StatusBadRequest, "ambiguous_id",
+			"prefix matches multiple runs: "+strings.Join(ids, ", ")+" — use a longer prefix")
+	}
+	return uuid.Nil, false
+}
+
+func (s *Server) getRun(c *gin.Context) {
+	id, ok := s.runIDParam(c)
+	if !ok {
 		return
 	}
 	run, err := s.Store.Run(c.Request.Context(), id)
@@ -80,9 +119,8 @@ func (s *Server) getRun(c *gin.Context) {
 }
 
 func (s *Server) cancelRun(c *gin.Context) {
-	id, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		fail(c, http.StatusBadRequest, "invalid_id", "run id must be a uuid")
+	id, ok := s.runIDParam(c)
+	if !ok {
 		return
 	}
 	run, err := s.Store.CancelRun(c.Request.Context(), id)
@@ -99,9 +137,8 @@ func (s *Server) cancelRun(c *gin.Context) {
 // Rejecting is the existing cancel endpoint.
 func (s *Server) approveRun(c *gin.Context) {
 	user, _ := currentUser(c)
-	id, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		fail(c, http.StatusBadRequest, "invalid_id", "run id must be a uuid")
+	id, ok := s.runIDParam(c)
+	if !ok {
 		return
 	}
 	if err := s.Store.ApproveRunHold(c.Request.Context(), id); err != nil {
@@ -119,9 +156,8 @@ func (s *Server) approveRun(c *gin.Context) {
 
 func (s *Server) rerunRun(c *gin.Context) {
 	user, _ := currentUser(c)
-	id, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		fail(c, http.StatusBadRequest, "invalid_id", "run id must be a uuid")
+	id, ok := s.runIDParam(c)
+	if !ok {
 		return
 	}
 	orig, err := s.Store.Run(c.Request.Context(), id)

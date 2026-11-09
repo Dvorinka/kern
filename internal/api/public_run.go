@@ -18,9 +18,8 @@ import (
 // public_ci must be "on"; otherwise the response is the same 404 as a missing
 // run. Logs, env, scripts, and step specs stay on the authenticated route.
 func (s *Server) getPublicRun(c *gin.Context) {
-	id, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		fail(c, http.StatusBadRequest, "invalid_id", "run id must be a uuid")
+	id, ok := s.runIDParam(c)
+	if !ok {
 		return
 	}
 	run, err := s.Store.Run(c.Request.Context(), id)
