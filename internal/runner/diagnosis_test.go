@@ -20,6 +20,7 @@ func TestDiagnose(t *testing.T) {
 		{"shared lib", 127, "node: error while loading shared libraries: libatomic.so.1: cannot open shared object file\n", "", "missing_library", true},
 		{"timeout", 124, "", "step timed out after 30 seconds", "step_timeout", false},
 		{"permission", 1, "touch: cannot touch '/etc/x': Permission denied\n", "", "permission_denied", false},
+		{"ghcr install token", 1, "denied: permission_denied: installation not allowed to Write organization package\n", "", "ghcr_token", false},
 		{"network", 1, "curl: (6) Could not resolve host: api.example.com\n", "", "network", false},
 		{"disk", 1, "write failed: No space left on device\n", "", "disk_full", false},
 		{"disk in stepErr", 1, "", "prepare workspace: no space left on device", "disk_full", false},
