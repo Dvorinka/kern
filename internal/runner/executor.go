@@ -562,7 +562,7 @@ func (e *executor) startContainer(ctx context.Context) error {
 	// Pre-provisioned Android SDK (ops-installed under WorkRoot/_android-sdk
 	// with a .complete marker — GitHub images ship one, bare ubuntu does
 	// not). Mounted for every job; harmless for non-Android work.
-	if sdk := filepath.Join(e.cfg.WorkRoot, "_android-sdk"); dirExists(filepath.Join(sdk, ".complete")) {
+	if sdk := filepath.Join(e.cfg.WorkRoot, "_android-sdk"); pathExists(filepath.Join(sdk, ".complete")) {
 		args = append(args,
 			"-v", sdk+":/opt/android-sdk",
 			"-e", "ANDROID_HOME=/opt/android-sdk",
@@ -1064,6 +1064,11 @@ func seedDockerCLI(dir string) (string, error) {
 func dirExists(p string) bool {
 	st, err := os.Stat(p)
 	return err == nil && st.IsDir()
+}
+
+func pathExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 func itoa(n int) string { return fmt.Sprintf("%d", n) }
