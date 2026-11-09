@@ -56,8 +56,8 @@ jobs:
       - run: mkdir -p "$GOTMPDIR" "$GOCACHE" "$GOMODCACHE" "$GOPATH"
       - uses: actions/setup-go@v7
         with:
-          # docsync v0.1.0 requires go >= 1.27.1; GOTOOLCHAIN=local elsewhere
-          # in this fleet cannot auto-fetch it.
-          go-version: "1.27"
-      - run: go install github.com/Dvorinka/docsync/cmd/docsync@v0.1.0
+          go-version: "1.26"
+      # docsync v0.1.0 requires go >= 1.27.1; the project pins 1.26, so let
+      # the toolchain auto-fetch for this install only.
+      - run: GOTOOLCHAIN=auto go install github.com/Dvorinka/docsync/cmd/docsync@v0.1.0
       - run: docsync check --baseline .docsync-baseline.txt
