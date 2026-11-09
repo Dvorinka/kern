@@ -10,7 +10,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 
+	"github.com/dvorinka/kern/internal/github"
 	"github.com/dvorinka/kern/internal/store"
 )
 
@@ -158,6 +160,75 @@ func publicDiagnosisOf(raw json.RawMessage) *publicDiagnosis {
 		return nil
 	}
 	return &publicDiagnosis{Kind: d.Kind, Summary: d.Summary, Suggestion: d.Suggestion}
+}
+
+// postJobCheck upserts one check run for a single workflow job — the per-job
+// granularity GitHub renders on a pull request (#180). The check name mirrors
+// GitHub's "workflow / job" shape; ExternalID scopes it to run+job so a rerun
+// never rewrites a sibling run's job check. Failures are logged, never
+// propagated — a status post must not undo the state transition that
+// triggered it.
+func (s *Server) postJobCheck(ctx context.Context, run store.Run, job store.Job, state string) {
+	var src map[string]any
+	_ = json.Unmarshal(run.Source, &src)
+	repo, _ := src["repo_full_name"].(string)
+	if repo == "" || run.SHA == "" {
+		return
+	}
+	cl, err := s.githubClient(ctx, repo)
+	if err != nil {
+		s.Log.Warn("github client", zap.String("repo", repo), zap.Error(err))
+		return
+	}
+	status, conclusion := jobCheck(state, job)
+	name := job.Name
+	if name == "" {
+		name = job.Key
+	}
+	if err := cl.UpsertCheckRun(ctx, repo, github.CheckRun{
+		Name: "kern/" + run.WorkflowName + " / " + name, HeadSHA: run.SHA,
+		Status: status, Conclusion: conclusion,
+		DetailsURL: s.runPageURL(ctx, run),
+		ExternalID: run.ID.String() + "/" + job.Key,
+		Title:      name + ": " + jobCheckTitle(state, conclusion),
+		Summary:    "KERN job " + name + ".",
+	}); err != nil {
+		s.Log.Warn("job check run failed",
+			zap.String("repo", repo), zap.String("job", job.Key), zap.Error(err))
+	}
+}
+
+// jobCheck maps a stored job state onto Checks API status/conclusion.
+// Terminal states carry the stored conclusion; a completed job with no
+// conclusion is a store anomaly and reports neutral rather than failure.
+func jobCheck(state string, job store.Job) (status, conclusion string) {
+	switch state {
+	case "queued", "waiting", "waiting_approval":
+		return "queued", ""
+	case "in_progress":
+		return "in_progress", ""
+	case "skipped":
+		return "completed", "skipped"
+	case "cancelled":
+		return "completed", "cancelled"
+	default: // completed
+		switch job.Conclusion {
+		case "success", "failure", "cancelled", "skipped", "timed_out", "neutral", "action_required":
+			return "completed", job.Conclusion
+		case "":
+			return "completed", "neutral"
+		default:
+			return "completed", "failure"
+		}
+	}
+}
+
+// jobCheckTitle is the one-word outcome GitHub shows in the check row.
+func jobCheckTitle(state, conclusion string) string {
+	if conclusion != "" {
+		return conclusion
+	}
+	return state
 }
 
 // githubCheck maps a commit-status state onto the Checks API.

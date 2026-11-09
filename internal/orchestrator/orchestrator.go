@@ -49,6 +49,11 @@ type Orchestrator struct {
 	// PostStatus, when set, reports a run's GitHub commit status. It is called
 	// with "pending" at run creation and a terminal state on completion.
 	PostStatus func(ctx context.Context, run store.Run, state string)
+	// PostJobStatus, when set, reports one job's check-run state. Called when
+	// a job becomes claimable ("queued"), waits on approvals, or is skipped
+	// before a runner ever sees it — states the claim/finish path cannot
+	// report because no runner request carries them.
+	PostJobStatus func(ctx context.Context, run store.Run, job store.Job, state string)
 	// NotifySweep, when set, delivers due outbound notifications. It runs
 	// inside the leader-gated tick so exactly one replica sends at a time.
 	NotifySweep func(ctx context.Context)
@@ -70,6 +75,14 @@ const LeaderLockKey int64 = 0x4B45524E01 // "KERN" + version byte
 func (o *Orchestrator) reportStatus(ctx context.Context, run store.Run, state string) {
 	if o.PostStatus != nil {
 		o.PostStatus(ctx, run, state)
+	}
+}
+
+// reportJobStatus invokes PostJobStatus when configured; same error
+// semantics as reportStatus.
+func (o *Orchestrator) reportJobStatus(ctx context.Context, run store.Run, job store.Job, state string) {
+	if o.PostJobStatus != nil {
+		o.PostJobStatus(ctx, run, job, state)
 	}
 }
 
@@ -405,6 +418,7 @@ func (o *Orchestrator) AdvanceRun(ctx context.Context, runID uuid.UUID) error {
 		ok, evalErr := expressions.EvaluateCondition(job.IfCondition, ctxMap)
 		if evalErr != nil {
 			_ = o.Store.SetJobSkipped(ctx, job.ID, "if expression error: "+evalErr.Error())
+			o.reportJobStatus(ctx, run, job, "skipped")
 			continue
 		}
 		if !ok {
@@ -413,6 +427,7 @@ func (o *Orchestrator) AdvanceRun(ctx context.Context, runID uuid.UUID) error {
 				reason = "if: " + job.IfCondition + " evaluated to false"
 			}
 			_ = o.Store.SetJobSkipped(ctx, job.ID, reason)
+			o.reportJobStatus(ctx, run, job, "skipped")
 			continue
 		}
 		// Environment gate: every environment-named job leaves a deployment
@@ -443,12 +458,14 @@ func (o *Orchestrator) AdvanceRun(ctx context.Context, runID uuid.UUID) error {
 				if err := o.Store.SetJobWaitingApproval(ctx, job.ID); err != nil {
 					return err
 				}
+				o.reportJobStatus(ctx, run, job, "queued")
 				continue
 			}
 		}
 		if err := o.Store.SetJobQueued(ctx, job.ID); err != nil {
 			return err
 		}
+		o.reportJobStatus(ctx, run, job, "queued")
 	}
 
 	// Fail-fast: a failed matrix member cancels its still-pending siblings.
