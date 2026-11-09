@@ -120,6 +120,14 @@ func (e *executor) egressEnv() map[string]string {
 		"NO_PROXY": egressNoProxy(e.claim.Job.Services),
 		"no_proxy": egressNoProxy(e.claim.Job.Services),
 	}
+	// JVMs ignore the *_proxy env vars entirely — Gradle/Maven/Surefire
+	// downloads would go direct and die on the internal-only network.
+	// Hand the same proxy to java as system properties instead.
+	// nonProxyHosts wants '|' separators, not the env var's commas.
+	nonProxy := strings.ReplaceAll(env["NO_PROXY"], ",", "|")
+	env["JAVA_TOOL_OPTIONS"] = fmt.Sprintf(
+		"-Dhttp.proxyHost=%s -Dhttp.proxyPort=%d -Dhttps.proxyHost=%s -Dhttps.proxyPort=%d -Dhttp.nonProxyHosts=%s -Dhttps.nonProxyHosts=%s",
+		egressAlias, egressProxyPort, egressAlias, egressProxyPort, nonProxy, nonProxy)
 	return env
 }
 
