@@ -18,15 +18,25 @@ const RunnerImage = "ghcr.io/dvorinka/kern-runner"
 var (
 	shaRe    = regexp.MustCompile(`^[0-9a-f]{40}$`)
 	digestRe = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	sumRe    = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	targetRe = regexp.MustCompile(`^(linux|darwin|windows)-(amd64|arm64)$`)
 )
+
+// Binary is a signed per-platform runner tarball entry. Host runners —
+// which have no container to replace — consume these instead of the image.
+type Binary struct {
+	URL    string `json:"url"`
+	SHA256 string `json:"sha256"`
+}
 
 // Manifest is the exact document a release publishes as kern-update.json.
 // The signature covers those bytes, not a re-encoded form.
 type Manifest struct {
-	Version      string `json:"version"`
-	GitSHA       string `json:"git_sha"`
-	RunnerImage  string `json:"runner_image"`
-	RunnerDigest string `json:"runner_digest"`
+	Version      string            `json:"version"`
+	GitSHA       string            `json:"git_sha"`
+	RunnerImage  string            `json:"runner_image"`
+	RunnerDigest string            `json:"runner_digest"`
+	Binaries     map[string]Binary `json:"binaries,omitempty"`
 }
 
 // Verify checks the ed25519 signature and then the field rules.
@@ -55,6 +65,17 @@ func Parse(manifest []byte) (Manifest, error) {
 	}
 	if _, err := PullRef(m.RunnerImage, m.RunnerDigest); err != nil {
 		return Manifest{}, err
+	}
+	for target, b := range m.Binaries {
+		if !targetRe.MatchString(target) {
+			return Manifest{}, fmt.Errorf("binaries key %q must be <os>-<arch>", target)
+		}
+		if !strings.HasPrefix(b.URL, "https://") {
+			return Manifest{}, fmt.Errorf("binaries[%s] url must be https", target)
+		}
+		if !sumRe.MatchString(b.SHA256) {
+			return Manifest{}, fmt.Errorf("binaries[%s] sha256 must be 64 hex characters", target)
+		}
 	}
 	return m, nil
 }

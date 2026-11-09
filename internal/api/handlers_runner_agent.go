@@ -152,8 +152,8 @@ func (s *Server) runnerHeartbeat(c *gin.Context) {
 	if body.ActiveJobs > active {
 		active = body.ActiveJobs
 	}
-	if image, ver, ok := s.offerRunnerUpdate(c.Request.Context(), runner, body.SelfUpdate || runner.AutoUpdate, active); ok {
-		resp["update"] = gin.H{"version": ver, "image": image}
+	if image, ver, bins, ok := s.offerRunnerUpdate(c.Request.Context(), runner, body.SelfUpdate || runner.AutoUpdate, active); ok {
+		resp["update"] = gin.H{"version": ver, "image": image, "binaries": bins}
 	}
 	// Operator-managed env overrides ride every heartbeat; the agent merges
 	// them into each job's base env (app values win over container defaults).

@@ -123,3 +123,18 @@ func TestLeaseOneAtATime(t *testing.T) {
 		t.Fatal("empty id")
 	}
 }
+
+func TestManifestBinaries(t *testing.T) {
+	raw := []byte(`{"version":"v0.4.0","git_sha":"0123456789abcdef0123456789abcdef01234567","runner_image":"ghcr.io/dvorinka/kern-runner","runner_digest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","binaries":{"darwin-amd64":{"url":"https://github.com/x/releases/download/v0.4.0/kern-v0.4.0-darwin-amd64.tar.gz","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}`)
+	m, err := Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Binaries["darwin-amd64"].SHA256 != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+		t.Fatal("binary entry lost")
+	}
+	bad := []byte(`{"version":"v0.4.0","git_sha":"0123456789abcdef0123456789abcdef01234567","runner_image":"ghcr.io/dvorinka/kern-runner","runner_digest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","binaries":{"plan9-mips":{"url":"https://x","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}`)
+	if _, err := Parse(bad); err == nil {
+		t.Fatal("bad target must fail")
+	}
+}

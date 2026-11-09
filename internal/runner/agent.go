@@ -360,7 +360,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 			// (env self-update or the operator auto_update toggle), so an
 			// offer alone is sufficient license to self-replace.
 			if resp.Update != nil && !a.updating.Load() {
-				go a.maybeSelfUpdate(ctx, resp.Update.Image, resp.Update.Version)
+				go a.maybeSelfUpdate(ctx, resp.Update)
 			}
 			// Live-exec offers ride the heartbeat; one session per request,
 			// only for jobs this runner is actively executing (#132).
@@ -378,18 +378,24 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 	}
 }
 
-func (a *Agent) maybeSelfUpdate(ctx context.Context, image, ver string) {
-	if image == "" || time.Now().Unix() < a.nextUpdate.Load() {
+func (a *Agent) maybeSelfUpdate(ctx context.Context, offer *updateOffer) {
+	if offer.Image == "" || time.Now().Unix() < a.nextUpdate.Load() {
 		return
 	}
 	if !a.updating.CompareAndSwap(false, true) {
 		return
 	}
 	defer a.updating.Store(false)
-	a.log.Info("runner self-update", zap.String("version", ver), zap.String("image", image))
+	a.log.Info("runner self-update", zap.String("version", offer.Version), zap.String("image", offer.Image))
 	uctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
-	err := applySelfUpdate(uctx, image, func() bool { return a.active.Load() != 0 })
+	busy := func() bool { return a.active.Load() != 0 }
+	var err error
+	if inContainer() {
+		err = applySelfUpdate(uctx, offer.Image, busy)
+	} else {
+		err = applyBinaryUpdate(uctx, offer.Version, offer.Binaries, busy)
+	}
 	if err != nil {
 		a.log.Warn("self-update failed", zap.Error(err))
 		a.nextUpdate.Store(time.Now().Add(selfUpdateHold).Unix())
