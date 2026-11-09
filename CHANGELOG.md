@@ -10,6 +10,9 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
   `KERN_RUNNER_DISK_MIN_FREE_PCT` — the same threshold that drives the
   docker reclaim sweep, now also a claim gate so a full runner stops
   taking jobs it can only fail (#210).
+- `kern runners list` shows a VERSION column per runner and prints a fleet
+  version histogram when runners disagree — the drift view from #181 without
+  opening the UI (#181).
 - `docs/runbook.md` — operations runbook: symptom → check → fix tables for
   webhook delivery failures, stuck queues, runner offline/drift, runner disk
   pressure, Postgres maintenance, retention knobs and deploy/rollback (#192).
