@@ -169,7 +169,7 @@ func testboxClaim(res workflows.Result, job workflows.JobPlan, dir string) *runn
 	claim.Run.ID = runID
 	claim.Run.Event = "testbox"
 	claim.Run.Ref = "refs/heads/testbox"
-	claim.Run.Actor = os.Getenv("USER")
+	claim.Run.Actor = "testbox"
 	claim.Run.Workflow = res.Name
 	claim.Run.ProjectSlug = "testbox"
 	claim.Run.TrustLevel = "trusted"
