@@ -5,6 +5,15 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 
 ## [Unreleased]
 
+### Fixed
+- Web UI on phones: the 11-item nav no longer crushes into a 20px
+  scroll sliver — it collapses into a hamburger menu (badges included)
+  with a scrim, search becomes an icon that still opens ⌘K, and the
+  version chip hides under 560px so the header fits. Login page brand
+  now contrasts with the hero panel in both themes (was `--ink` on
+  `--ink`: invisible tile and wordmark), and the ⌘K palette no longer
+  overflows narrow viewports.
+
 ### Added
 - Project configuration variables — the GitHub `vars` expression context.
   `project_vars` store with plaintext values (configuration, not
