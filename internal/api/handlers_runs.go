@@ -2,6 +2,8 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -209,6 +211,31 @@ func (s *Server) rerunRun(c *gin.Context) {
 	orig, err := s.Store.Run(c.Request.Context(), id)
 	if err != nil {
 		s.internalError(c, err)
+		return
+	}
+	// Optional body switches to an in-place rerun of the finished run's jobs
+	// (gh rerun --failed / --job) instead of seeding a fresh run.
+	var req struct {
+		Failed bool     `json:"failed"`
+		Jobs   []string `json:"jobs"`
+	}
+	if err := json.NewDecoder(c.Request.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		fail(c, http.StatusBadRequest, "bad_body", "invalid JSON body")
+		return
+	}
+	if req.Failed || len(req.Jobs) > 0 {
+		n, err := s.Store.RerunJobs(c.Request.Context(), orig.ID, req.Jobs)
+		if err != nil {
+			fail(c, http.StatusConflict, "rerun_failed", err.Error())
+			return
+		}
+		s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "run.rerun_jobs", orig.ID.String())
+		run, err := s.Store.Run(c.Request.Context(), orig.ID)
+		if err != nil {
+			s.internalError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"run": run, "jobs": n})
 		return
 	}
 	var source map[string]any
