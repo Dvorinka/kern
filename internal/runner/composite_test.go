@@ -30,7 +30,7 @@ runs:
 		t.Fatal(err)
 	}
 	with := map[string]any{"WHO": "world", "extra": "x"}
-	inputs, undeclared, err := resolveInputs(m, with)
+	inputs, undeclared, err := resolveInputs(m, with, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestResolveInputsRequiredMissing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := resolveInputs(m, nil); err == nil {
+	if _, _, err := resolveInputs(m, nil, nil); err == nil {
 		t.Fatal("missing required input should error")
 	}
 }

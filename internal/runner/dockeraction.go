@@ -127,7 +127,7 @@ func (e *executor) runDockerAction(ctx context.Context, step StepSpec, meta *act
 		return "failure", 1
 	}
 	env := e.dockerActionEnv(step, meta, actionPath, nil)
-	inputs, _, ierr := resolveInputs(meta, step.With)
+	inputs, _, ierr := resolveInputs(meta, step.With, e.runnerContext())
 	if ierr != nil {
 		e.logStep(step, "KERN: "+ierr.Error())
 		return "failure", 1

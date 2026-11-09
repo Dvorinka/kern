@@ -39,7 +39,7 @@ runs:
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := inputEnv(m, map[string]any{"WHO": "kern", "extra": true})
+	env := inputEnv(m, map[string]any{"WHO": "kern", "extra": true}, nil)
 	if env["INPUT_WHO"] != "kern" {
 		t.Errorf("declared input: %v", env)
 	}
