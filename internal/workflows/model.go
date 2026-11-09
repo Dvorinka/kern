@@ -220,6 +220,13 @@ type JobPlan struct {
 	// this job — job-level when declared, else the workflow-level map. The
 	// control plane uses it to scope the per-run GITHUB_TOKEN.
 	Permissions map[string]string `json:"permissions,omitempty"`
+	// SecretsMap is the reusable-caller `jobs.<id>.secrets` spec stamped onto
+	// expanded jobs: nil delivers the full eligible secret set (normal jobs
+	// and 'secrets: inherit'), an empty non-nil map delivers none (the caller
+	// omitted secrets), otherwise called-name -> caller expression resolved
+	// server-side when the runner claims secrets. No omitempty: the
+	// nil/empty distinction is load-bearing.
+	SecretsMap map[string]string `json:"secrets_map"`
 }
 
 // ServicePlan is one service container beside the job.

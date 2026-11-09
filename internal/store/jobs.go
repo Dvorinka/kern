@@ -580,6 +580,31 @@ func (s *Store) JobRunID(ctx context.Context, jobID uuid.UUID) (uuid.UUID, strin
 	return runID, status, err
 }
 
+// JobSecretsMap returns the job's reusable-caller secrets spec: nil means
+// deliver the full eligible set (normal jobs, 'secrets: inherit', and rows
+// predating the column), an empty non-nil map means none, otherwise
+// called-name -> caller expression resolved by the API at fetch time.
+func (s *Store) JobSecretsMap(ctx context.Context, jobID uuid.UUID) (map[string]string, error) {
+	var raw []byte
+	err := s.pool.QueryRow(ctx, `SELECT secrets_map FROM jobs WHERE id = $1`, jobID).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("job secrets map: %w", err)
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var m map[string]string
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, fmt.Errorf("job secrets map: %w", err)
+	}
+	// jsonb 'null' unmarshals to a nil map — same "all secrets" verdict as a
+	// missing column; '{}' yields an empty non-nil map = none.
+	return m, nil
+}
+
 // RunStatus is a lightweight status read.
 func (s *Store) RunStatus(ctx context.Context, runID uuid.UUID) (string, string, error) {
 	var status, conclusion string

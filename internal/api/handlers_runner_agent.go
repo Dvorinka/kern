@@ -14,6 +14,7 @@ import (
 
 	"github.com/dvorinka/kern/internal/auth"
 	"github.com/dvorinka/kern/internal/blobs"
+	"github.com/dvorinka/kern/internal/expressions"
 	"github.com/dvorinka/kern/internal/orchestrator"
 	"github.com/dvorinka/kern/internal/secrets"
 	"github.com/dvorinka/kern/internal/store"
@@ -604,8 +605,38 @@ func (s *Server) jobSecrets(c *gin.Context) {
 			decryptInto(envRows)
 		}
 	}
+	// Reusable-workflow callers can narrow what the called jobs see via
+	// jobs.<id>.secrets: a map resolves each called name against the caller's
+	// secrets/vars context here, server-side, so raw caller values never
+	// leave the control plane under the wrong name. nil = full set,
+	// empty = none.
+	if sm, err := s.Store.JobSecretsMap(c.Request.Context(), job.ID); err != nil {
+		s.Log.Warn("job secrets map", zap.String("job", job.ID.String()), zap.Error(err))
+	} else if sm != nil {
+		sctx := map[string]any{
+			"secrets": stringAnyMap(out), "vars": stringAnyMap(vars),
+		}
+		filtered := make(map[string]string, len(sm))
+		for name, expr := range sm {
+			v := expr
+			if r, rerr := expressions.Interpolate(expr, sctx); rerr == nil {
+				v = r
+			}
+			filtered[name] = v
+		}
+		out = filtered
+	}
 	c.Header("Cache-Control", "no-store")
 	c.JSON(http.StatusOK, gin.H{"secrets": out, "vars": vars, "blocked": false})
+}
+
+// stringAnyMap widens map[string]string for the expressions context.
+func stringAnyMap(m map[string]string) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 // maskDiagnosis masks every string inside a step diagnosis JSON blob before
