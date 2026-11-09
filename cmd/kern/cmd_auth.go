@@ -286,6 +286,7 @@ func parseFlagsEx(args []string, bools []string, keys ...string) (map[string]str
 	isBool := map[string]bool{}
 	for _, k := range bools {
 		isBool[k] = true
+		known[k] = true
 	}
 	out := map[string]string{}
 	var pos []string

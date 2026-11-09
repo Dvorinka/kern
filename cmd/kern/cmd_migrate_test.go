@@ -69,3 +69,13 @@ func TestParseFlagsExBool(t *testing.T) {
 		t.Fatalf("--follow=false = %q", opts["follow"])
 	}
 }
+
+// Bool keys are registered flags too — a bool that fatalfs on sight is how
+// `kern runs rerun --failed` silently spawned full duplicate runs.
+func TestParseFlagsExBoolKnown(t *testing.T) {
+	opts, _ := parseFlagsEx([]string{"--failed", "--job", "build"},
+		[]string{"failed"}, "job")
+	if opts["failed"] != "true" || opts["job"] != "build" {
+		t.Fatalf("opts = %v", opts)
+	}
+}
