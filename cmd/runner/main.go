@@ -56,6 +56,9 @@ Environment only:
   KERN_RUNNER_CACHE_MAX_BYTES    cap the persistent _cache tree, evicting oldest first (default 8GiB, 0=off)
   KERN_ACTIONS_GIT_BASE     git base URL for remote actions (default: the run's
                             repo host, or https://github.com)
+  KERN_ACTIONS_PRESEED      comma-separated owner/repo@ref actions warmed into
+                            the _actions cache (default: built-in fleet set,
+                            off=disabled)
   KERN_JOB_CPUS / KERN_JOB_MEMORY   per-job container limits (unset CPUs share the host)
   KERN_RUNNER_EXECUTOR    docker|host — execution substrate (default: docker on
                           linux, host on darwin; host runs steps as local
@@ -325,6 +328,17 @@ func agentConfig(o options) runner.Config {
 		for _, p := range strings.Split(v, ",") {
 			if p = strings.TrimSpace(p); p != "" {
 				cfg.Prepull = append(cfg.Prepull, p)
+			}
+		}
+	}
+	// Unset seeds the built-in fleet set; an explicit list replaces it;
+	// "off" disables warming entirely.
+	if v := os.Getenv("KERN_ACTIONS_PRESEED"); v == "" {
+		cfg.ActionsPreseed = runner.DefaultActionsPreseed
+	} else if !strings.EqualFold(v, "off") {
+		for _, p := range strings.Split(v, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				cfg.ActionsPreseed = append(cfg.ActionsPreseed, p)
 			}
 		}
 	}

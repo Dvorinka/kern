@@ -333,6 +333,80 @@ func (e *executor) fetchAction(ctx context.Context, step StepSpec, r actions.Rem
 
 var actionCacheLocks sync.Map // cacheKey → *sync.Mutex
 
+// DefaultActionsPreseed is the remote-action set hot across the fleet's
+// workflows — setup-* plus the docker and release lanes — warmed into the
+// persistent cache so a cold runner's first jobs do not fetch them mid-step
+// (#183). KERN_ACTIONS_PRESEED replaces it; "off" disables seeding.
+var DefaultActionsPreseed = []string{
+	"actions/setup-node@v4",
+	"actions/setup-node@v6",
+	"actions/setup-node@v7",
+	"actions/setup-go@v5",
+	"actions/setup-go@v6",
+	"actions/setup-go@v7",
+	"actions/setup-python@v5",
+	"actions/setup-python@v7",
+	"actions/setup-java@v5",
+	"actions/setup-java@v6",
+	"actions/github-script@v7",
+	"docker/login-action@v3",
+	"docker/setup-buildx-action@v3",
+	"docker/build-push-action@v6",
+	"docker/metadata-action@v5",
+	"softprops/action-gh-release@v3",
+	"pnpm/action-setup@v6",
+	"android-actions/setup-android@v4",
+	"dtolnay/rust-toolchain@stable",
+	"swatinem/rust-cache@v2",
+	"golangci/golangci-lint-action@v9",
+	"gradle/actions/setup-gradle@v6",
+}
+
+// preseedActionsLoop warms the _actions cache at startup and hourly — a
+// moving tag's next SHA lands before a job needs it. Same content-addressed
+// path jobs use, so a preseeded entry and a job fetch are interchangeable.
+// Best effort: failures log and retry next tick, never blocking claims.
+func (a *Agent) preseedActionsLoop(ctx context.Context, seeds []string) {
+	a.preseedActions(ctx, seeds)
+	t := time.NewTicker(time.Hour)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			a.preseedActions(ctx, seeds)
+		}
+	}
+}
+
+func (a *Agent) preseedActions(ctx context.Context, seeds []string) {
+	base := strings.TrimRight(a.cfg.ActionsGitBase, "/")
+	if base == "" {
+		base = "https://github.com"
+	}
+	// A claimless executor carries the cache plumbing (WorkRoot + logger);
+	// resolveActionSHA and ensureActionCache touch nothing else.
+	ex := &executor{cfg: a.cfg, log: a.log}
+	for _, entry := range seeds {
+		r, err := actions.ParseRemote(entry)
+		if err != nil {
+			a.log.Warn("action preseed entry malformed", zap.String("entry", entry), zap.Error(err))
+			continue
+		}
+		repoURL := base + "/" + r.Owner + "/" + r.Repo
+		sha := ex.resolveActionSHA(ctx, repoURL, r.Ref)
+		if sha == "" {
+			a.log.Warn("action preseed resolve failed", zap.String("entry", entry))
+			continue
+		}
+		key := nonIDRe.ReplaceAllString(r.Owner+"__"+r.Repo+"__"+sha, "-")
+		if _, err := ex.ensureActionCache(ctx, repoURL, key, sha, r.Ref); err != nil {
+			a.log.Warn("action preseed fetch failed", zap.String("entry", entry), zap.Error(err))
+		}
+	}
+}
+
 func actionCacheRoot(workRoot string) string {
 	return filepath.Join(cacheDir(workRoot), "_actions")
 }

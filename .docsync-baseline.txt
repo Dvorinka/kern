@@ -2,6 +2,7 @@
 # findings listed here are suppressed by `docsync check --baseline`
 command_not_found|just dev
 env_missing_in_example|KERN_ACTIONS_GIT_BASE
+env_missing_in_example|KERN_ACTIONS_PRESEED
 env_missing_in_example|KERN_API_ORIGIN
 env_missing_in_example|KERN_API_URL
 env_missing_in_example|KERN_ARM64_IMAGE

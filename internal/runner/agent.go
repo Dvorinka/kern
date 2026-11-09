@@ -59,6 +59,11 @@ type Config struct {
 	// (KERN_RUNNER_PREPULL, comma-separated) so job pulls hit the local
 	// daemon instead of the registry.
 	Prepull []string
+	// ActionsPreseed lists owner/repo@ref remote actions warmed into the
+	// persistent _actions cache at startup and hourly
+	// (KERN_ACTIONS_PRESEED, comma-separated). Nil means the built-in
+	// fleet set; an explicit list replaces it.
+	ActionsPreseed []string
 	// DiskMinFreePct triggers a Docker reclaim sweep and pauses job claims
 	// when free space on the work-root filesystem drops below this percent
 	// (KERN_RUNNER_DISK_MIN_FREE_PCT, default 10). Zero disables both;
@@ -285,6 +290,13 @@ func (a *Agent) Run(ctx context.Context) error {
 				a.prepullLoop(ctx)
 			}()
 		}
+	}
+	if seeds := a.cfg.ActionsPreseed; len(seeds) > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			a.preseedActionsLoop(ctx, seeds)
+		}()
 	}
 	wg.Add(1)
 	go func() {
