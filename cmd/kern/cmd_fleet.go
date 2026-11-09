@@ -417,6 +417,14 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 				return fmt.Errorf("usage: kern settings set auto_update on|off")
 			}
 			body["auto_update"] = pos[1]
+		case "disk_alert_pct":
+			if path != "/settings" {
+				return fmt.Errorf("disk_alert_pct is an org setting")
+			}
+			if _, err := strconv.ParseFloat(pos[1], 64); err != nil {
+				return fmt.Errorf("usage: kern settings set disk_alert_pct <0-100>")
+			}
+			body["disk_alert_pct"] = pos[1]
 		case "runner_autostart":
 			if path != "/settings" {
 				return fmt.Errorf("runner_autostart is an org setting")

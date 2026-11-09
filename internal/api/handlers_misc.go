@@ -268,6 +268,7 @@ func (s *Server) getOrgSettings(c *gin.Context) {
 		"notify_secret_set": settingsValue(raw, "notify_secret", "") != "",
 		"notify_events":     settingsValue(raw, "notify_events", ""),
 		"notify_format":     settingsValue(raw, "notify_format", "kern"),
+		"disk_alert_pct":    settingsValue(raw, "disk_alert_pct", "10"),
 	})
 }
 
@@ -291,6 +292,7 @@ type orgSettingsRequest struct {
 	NotifySecret    *string `json:"notify_secret"`
 	NotifyEvents    *string `json:"notify_events"`
 	NotifyFormat    *string `json:"notify_format"`
+	DiskAlertPct    *string `json:"disk_alert_pct"`
 }
 
 var notifyConclusions = map[string]bool{
@@ -308,9 +310,9 @@ func validNotifyEvents(v string) bool {
 	return true
 }
 
-func orgSettingWrites(selfHeal, publicCI, autoUpdate, runnerAutostart, notifyURL, notifySecret, notifyEvents, notifyFormat *string) (map[string]string, string) {
-	if selfHeal == nil && publicCI == nil && autoUpdate == nil && runnerAutostart == nil && notifyURL == nil && notifySecret == nil && notifyEvents == nil && notifyFormat == nil {
-		return nil, "self_heal, public_ci, auto_update, runner_autostart, notify_url, notify_secret, notify_events or notify_format is required"
+func orgSettingWrites(selfHeal, publicCI, autoUpdate, runnerAutostart, notifyURL, notifySecret, notifyEvents, notifyFormat, diskAlertPct *string) (map[string]string, string) {
+	if selfHeal == nil && publicCI == nil && autoUpdate == nil && runnerAutostart == nil && notifyURL == nil && notifySecret == nil && notifyEvents == nil && notifyFormat == nil && diskAlertPct == nil {
+		return nil, "self_heal, public_ci, auto_update, runner_autostart, notify_url, notify_secret, notify_events, notify_format or disk_alert_pct is required"
 	}
 	out := map[string]string{}
 	if selfHeal != nil {
@@ -360,6 +362,13 @@ func orgSettingWrites(selfHeal, publicCI, autoUpdate, runnerAutostart, notifyURL
 		}
 		out["notify_format"] = *notifyFormat
 	}
+	if diskAlertPct != nil {
+		pct, err := strconv.ParseFloat(*diskAlertPct, 64)
+		if err != nil || pct < 0 || pct > 100 {
+			return nil, "disk_alert_pct must be a number between 0 and 100"
+		}
+		out["disk_alert_pct"] = *diskAlertPct
+	}
 	return out, ""
 }
 
@@ -370,7 +379,7 @@ func (s *Server) putOrgSettings(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_body", "self_heal, public_ci or auto_update is required")
 		return
 	}
-	writes, msg := orgSettingWrites(req.SelfHeal, req.PublicCI, req.AutoUpdate, req.RunnerAutostart, req.NotifyURL, req.NotifySecret, req.NotifyEvents, req.NotifyFormat)
+	writes, msg := orgSettingWrites(req.SelfHeal, req.PublicCI, req.AutoUpdate, req.RunnerAutostart, req.NotifyURL, req.NotifySecret, req.NotifyEvents, req.NotifyFormat, req.DiskAlertPct)
 	if msg != "" {
 		fail(c, http.StatusBadRequest, "invalid_body", msg)
 		return

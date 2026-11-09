@@ -2,10 +2,13 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -121,6 +124,9 @@ func (s *Server) runnerHeartbeat(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
+	if body.DiskFreeBytes != nil {
+		s.maybeAlertRunnerDisk(c.Request.Context(), runner, *body.DiskFreeBytes)
+	}
 	if ip := clientIP(c); geoForRunner(runner, ip) {
 		go s.resolveRunnerGeo(runner.ID, ip)
 	}
@@ -154,6 +160,56 @@ func (s *Server) runnerHeartbeat(c *gin.Context) {
 		resp["env"] = runner.Env
 	}
 	c.JSON(http.StatusOK, resp)
+}
+
+// maybeAlertRunnerDisk emits a runner.disk_pressure audit event when the
+// heartbeat free-space sample drops below the org's disk_alert_pct
+// threshold, and runner.disk_recovered once free space climbs back above
+// it. The runners.disk_alerted latch keeps it one event per episode.
+func (s *Server) maybeAlertRunnerDisk(ctx context.Context, r store.Runner, free int64) {
+	raw, err := s.Store.OrgSettings(ctx, r.OrgID)
+	if err != nil {
+		return
+	}
+	pct, _ := strconv.ParseFloat(settingsValue(raw, "disk_alert_pct", "10"), 64)
+	if pct <= 0 {
+		return
+	}
+	alert, clear, freePct := diskAlertEval(free, r.DiskBytes, pct, r.DiskAlerted)
+	switch {
+	case alert:
+		if err := s.Store.SetRunnerDiskAlerted(ctx, r.ID, true); err == nil {
+			s.Store.AuditMeta(ctx, r.OrgID, nil, "runner.disk_pressure", r.Name, map[string]any{
+				"disk_free_bytes": free, "disk_bytes": r.DiskBytes,
+				"free_pct": math.Round(freePct*10) / 10, "threshold_pct": pct,
+			})
+			s.Log.Warn("runner under disk pressure", zap.String("runner", r.Name),
+				zap.Int64("disk_free_bytes", free), zap.Float64("threshold_pct", pct))
+		}
+	case clear:
+		if err := s.Store.SetRunnerDiskAlerted(ctx, r.ID, false); err == nil {
+			s.Store.AuditMeta(ctx, r.OrgID, nil, "runner.disk_recovered", r.Name, map[string]any{
+				"disk_free_bytes": free, "free_pct": math.Round(freePct*10) / 10,
+			})
+		}
+	}
+}
+
+// diskAlertEval decides whether a heartbeat sample crosses the alert
+// threshold. Clearing needs +5 points of headroom so a runner hovering at
+// the line doesn't flap an event every heartbeat.
+func diskAlertEval(free, total int64, pct float64, alerted bool) (alert, clear bool, freePct float64) {
+	if total <= 0 {
+		return false, false, 0
+	}
+	freePct = float64(free) * 100 / float64(total)
+	switch {
+	case !alerted && freePct < pct:
+		return true, false, freePct
+	case alerted && freePct >= pct+5:
+		return false, true, freePct
+	}
+	return false, false, freePct
 }
 
 // claimJob long-polls for compatible work; it returns 204 when the wait expires.

@@ -19,6 +19,13 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 - `kern completion <bash|zsh|fish>` prints a shell completion script
   covering the top-level commands and subcommand trees — source it from
   your shell rc to get tab completion (#189).
+- Control plane emits a `runner.disk_pressure` audit event when a
+  heartbeat's free-space sample crosses below the org's
+  `disk_alert_pct` setting (default 10, matching the runner's own claim
+  gate) and `runner.disk_recovered` once free space climbs back above
+  it (+5 points of headroom so a runner hovering at the line doesn't
+  flap). Latched per runner — one event per episode, not per heartbeat
+  (#212).
 - `kern runs rerun <id> --failed` re-runs a finished run's failed and
   cancelled jobs in place (plus their dependents), and `--job KEY`
   re-runs a single job and its dependents — matching `gh run rerun`

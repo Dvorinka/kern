@@ -76,7 +76,7 @@ const runnerCols = `id, org_id, name, hostname, os, arch, cpus, memory_bytes, di
 	version, status, draining, ephemeral, last_heartbeat_at, cpu_percent,
 	mem_used_bytes, disk_free_bytes, metrics_at, geo_lat, geo_lng, geo_city,
 	geo_country, geo_source, geo_ip, geo_updated_at, executor, created_at, icon, auto_update,
-	wake_on_demand, env`
+	wake_on_demand, env, disk_alerted`
 
 func scanRunner(row pgx.Row) (Runner, error) {
 	var r Runner
@@ -85,7 +85,7 @@ func scanRunner(row pgx.Row) (Runner, error) {
 		&r.Ephemeral, &r.LastHeartbeatAt, &r.CPUPercent, &r.MemUsedBytes,
 		&r.DiskFreeBytes, &r.MetricsAt, &r.GeoLat, &r.GeoLng, &r.GeoCity,
 		&r.GeoCountry, &r.GeoSource, &r.GeoIP, &r.GeoUpdatedAt, &r.Executor, &r.CreatedAt,
-		&r.Icon, &r.AutoUpdate, &r.WakeOnDemand, &r.Env)
+		&r.Icon, &r.AutoUpdate, &r.WakeOnDemand, &r.Env, &r.DiskAlerted)
 	return r, err
 }
 
@@ -177,6 +177,13 @@ func (s *Store) SetRunnerAutoUpdate(ctx context.Context, orgID, id uuid.UUID, on
 		return ErrNotFound
 	}
 	return nil
+}
+
+// SetRunnerDiskAlerted latches the disk-pressure alert state used by the
+// heartbeat evaluator to emit one audit event per episode.
+func (s *Store) SetRunnerDiskAlerted(ctx context.Context, id uuid.UUID, alerted bool) error {
+	_, err := s.pool.Exec(ctx, `UPDATE runners SET disk_alerted = $2 WHERE id = $1`, id, alerted)
+	return err
 }
 
 func (s *Store) SetRunnerDraining(ctx context.Context, orgID, id uuid.UUID, draining bool) error {

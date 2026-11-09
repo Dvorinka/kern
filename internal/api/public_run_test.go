@@ -117,37 +117,60 @@ func TestOrgSettingWrites(t *testing.T) {
 	off := "off"
 	bad := "sometimes"
 	on := "on"
-	writes, msg := orgSettingWrites(&off, nil, nil, nil, nil, nil, nil, nil)
+	writes, msg := orgSettingWrites(&off, nil, nil, nil, nil, nil, nil, nil, nil)
 	if msg != "" || writes["self_heal"] != "off" || len(writes) != 1 {
 		t.Fatalf("self_heal only: %v %q", writes, msg)
 	}
-	writes, msg = orgSettingWrites(nil, &on, nil, nil, nil, nil, nil, nil)
+	writes, msg = orgSettingWrites(nil, &on, nil, nil, nil, nil, nil, nil, nil)
 	if msg != "" || writes["public_ci"] != "on" {
 		t.Fatalf("public only: %v %q", writes, msg)
 	}
-	writes, msg = orgSettingWrites(nil, nil, &on, nil, nil, nil, nil, nil)
+	writes, msg = orgSettingWrites(nil, nil, &on, nil, nil, nil, nil, nil, nil)
 	if msg != "" || writes["auto_update"] != "on" {
 		t.Fatalf("auto_update only: %v %q", writes, msg)
 	}
-	if _, msg = orgSettingWrites(nil, nil, nil, nil, nil, nil, nil, nil); msg == "" {
+	if _, msg = orgSettingWrites(nil, nil, nil, nil, nil, nil, nil, nil, nil); msg == "" {
 		t.Fatal("empty body must fail")
 	}
-	if _, msg = orgSettingWrites(&bad, nil, nil, nil, nil, nil, nil, nil); msg == "" {
+	if _, msg = orgSettingWrites(&bad, nil, nil, nil, nil, nil, nil, nil, nil); msg == "" {
 		t.Fatal("bad self_heal must fail")
 	}
-	if _, msg = orgSettingWrites(nil, &bad, nil, nil, nil, nil, nil, nil); msg == "" {
+	if _, msg = orgSettingWrites(nil, &bad, nil, nil, nil, nil, nil, nil, nil); msg == "" {
 		t.Fatal("bad public_ci must fail")
 	}
-	if _, msg = orgSettingWrites(nil, nil, &bad, nil, nil, nil, nil, nil); msg == "" {
+	if _, msg = orgSettingWrites(nil, nil, &bad, nil, nil, nil, nil, nil, nil); msg == "" {
 		t.Fatal("bad auto_update must fail")
 	}
 	url := "https://hooks.example.com/kern"
-	writes, msg = orgSettingWrites(nil, nil, nil, nil, &url, nil, nil, nil)
+	writes, msg = orgSettingWrites(nil, nil, nil, nil, &url, nil, nil, nil, nil)
 	if msg != "" || writes["notify_url"] != url {
 		t.Fatalf("notify_url: %v %q", writes, msg)
 	}
 	badURL := "ftp://nope"
-	if _, msg = orgSettingWrites(nil, nil, nil, nil, &badURL, nil, nil, nil); msg == "" {
+	if _, msg = orgSettingWrites(nil, nil, nil, nil, &badURL, nil, nil, nil, nil); msg == "" {
 		t.Fatal("non-http notify_url must fail")
+	}
+}
+
+func TestDiskAlertEval(t *testing.T) {
+	cases := []struct {
+		free, total int64
+		pct         float64
+		alerted     bool
+		wantAlert   bool
+		wantClear   bool
+	}{
+		{5 << 30, 80 << 30, 10, false, true, false},  // 6.4% free: fires
+		{5 << 30, 80 << 30, 10, true, false, false},  // already latched: quiet
+		{9 << 30, 80 << 30, 10, true, false, false},  // 11% — below clear headroom
+		{13 << 30, 80 << 30, 10, true, false, true},  // 16% >= 10+5: clears
+		{9 << 30, 80 << 30, 10, false, false, false}, // above threshold, no latch
+		{0, 0, 10, false, false, false},              // statfs failure
+	}
+	for i, c := range cases {
+		alert, clear, _ := diskAlertEval(c.free, c.total, c.pct, c.alerted)
+		if alert != c.wantAlert || clear != c.wantClear {
+			t.Errorf("case %d: diskAlertEval = %v,%v want %v,%v", i, alert, clear, c.wantAlert, c.wantClear)
+		}
 	}
 }
