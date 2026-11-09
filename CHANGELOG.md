@@ -48,3 +48,8 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
   Admin role + trusted runs only — fork/pull_request jobs are refused, and
   host executors have no container to enter. PTY framing is deliberately
   out of scope; full-screen programs will not render.
+- `kern testbox [workflow] [--job KEY] [--dir DIR] [--env-file F]` (#143):
+  runs one workflow job locally through the real docker executor — bundle
+  the working tree, execute inside an in-process shim of the runner API
+  (logs to stdout, artifacts to `.kern-testbox/artifacts`, caches always
+  miss). No control plane, no push; exit code follows the job conclusion.
