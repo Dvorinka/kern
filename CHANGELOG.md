@@ -52,4 +52,8 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
   runs one workflow job locally through the real docker executor — bundle
   the working tree, execute inside an in-process shim of the runner API
   (logs to stdout, artifacts to `.kern-testbox/artifacts`, caches always
+- `docs/retention.md` + `docs/airgap.md` (#142): operator pages for every
+  retention env var (log/cache/webhook/audit/notify TTLs, runner image and
+  cache budgets) and a sealed-network install path — mirrored ghcr images,
+  `_actions`/`_node` cache preseed, `KERN_ACTIONS_GIT_BASE`, self-update off.
   miss). No control plane, no push; exit code follows the job conclusion.
