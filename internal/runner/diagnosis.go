@@ -72,7 +72,10 @@ func diagnose(step StepSpec, exitCode int, logTail, stepErr string) *diagnosis {
 		}
 		return d
 	}
-	lower := strings.ToLower(logTail)
+	// stepErr is scanned alongside the log tail: runner-side failures
+	// (container create, workspace write, image pull) produce no log, so an
+	// ENOSPC or daemon error would otherwise fall through to script_failure.
+	lower := strings.ToLower(logTail + "\n" + stepErr)
 	switch {
 	case strings.Contains(stepErr, "timed out"):
 		return fail("step_timeout", "Step exceeded timeout-minutes and was killed",
