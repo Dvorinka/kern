@@ -1,3 +1,6 @@
+package api
+
+import "testing"
 
 func TestPrNumberFromRef(t *testing.T) {
 	for _, tc := range []struct {

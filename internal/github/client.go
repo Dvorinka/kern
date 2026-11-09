@@ -125,12 +125,12 @@ func (c *Client) HeadSHA(ctx context.Context, repo, ref string) (string, error) 
 // PullRequestInfo is the subset of GET /repos/{repo}/pulls/{n} needed to
 // rebuild a webhook-shaped event payload for a manually dispatched run.
 type PullRequestInfo struct {
-	Number   int
-	Title    string
+	Number    int
+	Title     string
 	UserLogin string
-	Head     struct {
-		Ref        string
-		SHA        string
+	Head      struct {
+		Ref          string
+		SHA          string
 		RepoFullName string
 	}
 	Base struct {
