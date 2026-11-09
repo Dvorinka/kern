@@ -49,6 +49,8 @@ Runs:
 Remote offload:
   exec <workflow> [--dir DIR] [--pull DIR] [--ref R] [--sha S]
                         bundle the working tree, run on the fleet, stream logs
+  ssh <job-id|run-id> [--job KEY] [-c CMD]
+                        live shell into a running job's container
 
 Settings:
   settings get
@@ -168,7 +170,10 @@ pull_request runs by number; --workflow matches name or path.
   deployments approve|reject <job-id>
 `
 	case "exec":
-		return `kern exec <run-id> [--job KEY] — interactive shell into a live job
+		return `kern exec <workflow> [--dir DIR] — run a workflow on the fleet from a local tree
+`
+	case "ssh":
+		return `kern ssh <job-id|run-id> [--job KEY] [-c CMD] — live shell into a running job's container
 `
 	case "doctor":
 		return `kern doctor — check CLI config, auth and control-plane reachability
@@ -328,6 +333,12 @@ func dispatch(c *cli, args []string) int {
 		ectx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer stop()
 		err = c.cmdExec(ectx, rest)
+	case "ssh":
+		// Same long-session budget as exec — a shell into a live job can
+		// outlast any request timeout.
+		sctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		err = c.cmdSSH(sctx, rest)
 	case "split":
 		err = c.cmdSplit(rest)
 	case "optimize":

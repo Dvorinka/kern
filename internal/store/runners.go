@@ -97,6 +97,15 @@ func (s *Store) RunnerByToken(ctx context.Context, tokenHash string) (Runner, er
 	return r, err
 }
 
+// Runner fetches one runner by id.
+func (s *Store) Runner(ctx context.Context, id uuid.UUID) (Runner, error) {
+	r, err := scanRunner(s.pool.QueryRow(ctx, `SELECT `+runnerCols+` FROM runners WHERE id = $1`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Runner{}, ErrNotFound
+	}
+	return r, err
+}
+
 // FleetSlots sums CPUs of online, non-draining runners whose labels can run
 // runsOn. A runner with cpus < 1 counts as one. Zero matching runners returns 0.
 func (s *Store) FleetSlots(ctx context.Context, orgID uuid.UUID, runsOn []string) (int, error) {

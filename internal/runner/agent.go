@@ -125,6 +125,11 @@ type Agent struct {
 	// the orphan sweep uses it to tell live kern-svc-*/kern-job-* containers
 	// from leaks left by crashed or restarted predecessors.
 	activeJobs sync.Map
+	// jobContainers maps an active job ID to its docker container name, set
+	// once prepare brings the container up (empty for host executors).
+	jobContainers sync.Map
+	// execSessions dedupes heartbeat-delivered exec offers by request ID.
+	execSessions sync.Map
 	// dockerFn stubs the daemon probe in tests; dockerOK caches the result —
 	// `docker version` is an exec, and labels() is built per registration.
 	dockerFn func() bool
@@ -356,6 +361,18 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 			// offer alone is sufficient license to self-replace.
 			if resp.Update != nil && !a.updating.Load() {
 				go a.maybeSelfUpdate(ctx, resp.Update.Image, resp.Update.Version)
+			}
+			// Live-exec offers ride the heartbeat; one session per request,
+			// only for jobs this runner is actively executing (#132).
+			for _, offer := range resp.Exec {
+				if _, dup := a.execSessions.LoadOrStore(offer.ID, struct{}{}); dup {
+					continue
+				}
+				if _, active := a.activeJobs.Load(offer.JobID); !active {
+					a.execSessions.Delete(offer.ID)
+					continue
+				}
+				go a.execSession(ctx, offer)
 			}
 		}
 	}
@@ -634,6 +651,16 @@ func (a *Agent) runSteps(ctx context.Context, log *zap.Logger, claim *Claim) (st
 	if err := exec.prepare(ctx); err != nil {
 		return "", nil, nil, err
 	}
+
+	// The container is up: publish its name so heartbeat-delivered exec
+	// requests can docker exec into it. Host executors store "" — their
+	// sessions are refused (no container boundary to enter).
+	container := ""
+	if !exec.host {
+		container = exec.container
+	}
+	a.jobContainers.Store(claim.Job.ID, container)
+	defer a.jobContainers.Delete(claim.Job.ID)
 
 	// GitHub's job-setup phase: every declared pre hook runs before the first
 	// step. Remote actions download now — the "prepare required actions" pass.

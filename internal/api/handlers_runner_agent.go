@@ -160,6 +160,13 @@ func (s *Server) runnerHeartbeat(c *gin.Context) {
 	if len(runner.Env) > 0 {
 		resp["env"] = runner.Env
 	}
+	// Pending live-exec requests for jobs leased to this runner ride the
+	// same heartbeat — the runner starts a session per entry (#132).
+	if err := s.Store.ExpireStaleExecs(c.Request.Context()); err == nil {
+		if execs, err := s.Store.PendingExecForRunner(c.Request.Context(), runner.ID); err == nil && len(execs) > 0 {
+			resp["exec"] = execs
+		}
+	}
 	c.JSON(http.StatusOK, resp)
 }
 
@@ -605,6 +612,8 @@ func (s *Server) finishJob(c *gin.Context) {
 		job.Conclusion = req.Conclusion
 		s.postJobCheck(c.Request.Context(), run, job, "completed")
 	}
+	// A finished job's container is going away; no exec session may outlive it.
+	_ = s.Store.FailExecsForJob(c.Request.Context(), job.ID, "job finished")
 	if err := s.Orch.AdvanceRun(c.Request.Context(), job.RunID); err != nil {
 		s.Log.Error("advance after job finish", zap.Error(err))
 	}

@@ -39,3 +39,12 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
   while a job container runs and reports peak CPU% and memory on
   `jobs.metrics` (migration 0029) via the finish payload. Host executors
   leave the field empty.
+- Live-job exec channel + `kern ssh` (#132, #133):
+  `POST /jobs/:id/exec` queues a command against an in_progress job; the
+  leasing runner picks it up on heartbeat and runs it inside the job
+  container (`docker exec -i`), streaming output to a session blob
+  (migration 0030). `kern ssh <job-id|run-id> [--job KEY] [-c CMD]` opens a
+  line-mode shell when `-c` is absent; stdin streams both directions.
+  Admin role + trusted runs only — fork/pull_request jobs are refused, and
+  host executors have no container to enter. PTY framing is deliberately
+  out of scope; full-screen programs will not render.
