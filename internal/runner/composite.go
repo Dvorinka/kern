@@ -306,6 +306,9 @@ func (e *executor) fetchAction(ctx context.Context, step StepSpec, r actions.Rem
 			e.log.Debug("action fetch incomplete; retrying",
 				zap.String("repo", r.Owner+"/"+r.Repo), zap.Strings("missing", missing))
 		}
+		// cp -a preserves the SHA cache dir's 0700 mode onto base; untrusted
+		// steps run as uid 1000 and cannot traverse it.
+		_ = os.Chmod(base, 0o755)
 		e.actionDirs[key] = base
 	}
 	host := filepath.Join(base, filepath.FromSlash(r.Path))
