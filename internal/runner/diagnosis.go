@@ -90,6 +90,13 @@ func diagnose(step StepSpec, exitCode int, logTail, stepErr string) *diagnosis {
 	case strings.Contains(lower, "no space left on device"):
 		return fail("disk_full", "The job container ran out of disk space",
 			"free disk on the runner host or raise the work-root quota")
+	case strings.Contains(lower, "installation not allowed to write"):
+		// GHCR refuses GitHub App installation tokens outright — the only
+		// GITHUB_TOKEN a KERN run can mint. The fix is a credential, not a
+		// retry: a PAT with write:packages stored as a project secret.
+		return fail("ghcr_token",
+			"GHCR denied the push — GITHUB_TOKEN is a GitHub App installation token, which GHCR rejects for package writes",
+			"create a classic PAT with write:packages, store it as a project secret (e.g. GHCR_TOKEN), and use it for docker login instead of GITHUB_TOKEN")
 	case strings.Contains(lower, "permission denied"):
 		return fail("permission_denied", "A file or operation returned permission denied",
 			"check file ownership in the workspace or run the command with the right user")

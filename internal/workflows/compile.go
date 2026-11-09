@@ -618,9 +618,41 @@ func validateStep(d *diagnostics, path string, s Step, seenIDs map[string]bool) 
 			}
 		}
 	}
+	if ghcrAuthedByGitHubToken(s) {
+		d.warnf("ghcr-token", path,
+			"this step authenticates to ghcr.io with GITHUB_TOKEN; GHCR rejects GitHub App installation tokens, so the push will fail — store a PAT secret (e.g. GHCR_TOKEN) and reference it instead")
+	}
 	if s.TimeoutMinutes < 0 {
 		d.errorf("step-timeout", path+".timeout-minutes", "timeout-minutes must not be negative")
 	}
+}
+
+// ghcrAuthedByGitHubToken reports whether a step pushes to GHCR using the
+// per-run GITHUB_TOKEN. KERN can only mint GitHub App installation tokens
+// (ghs_*), which GHCR refuses for package writes — the failure otherwise
+// surfaces only after a full release build. Patterns covered: docker
+// login-action/build-push-action wiring and shell `docker login`/goreleaser
+// env that points registry credentials at GITHUB_TOKEN.
+func ghcrAuthedByGitHubToken(s Step) bool {
+	usesGHCR := strings.Contains(fmt.Sprint(s.With), "ghcr.io") ||
+		strings.Contains(fmt.Sprint(s.Env), "ghcr.io") ||
+		strings.Contains(s.Run, "ghcr.io")
+	if !usesGHCR {
+		return false
+	}
+	usesToken := strings.Contains(fmt.Sprint(s.With), "GITHUB_TOKEN") ||
+		strings.Contains(fmt.Sprint(s.Env), "GITHUB_TOKEN") ||
+		strings.Contains(s.Run, "GITHUB_TOKEN") ||
+		strings.Contains(s.Uses, "github.token")
+	if !usesToken {
+		return false
+	}
+	lname := strings.ToLower(strings.SplitN(s.Uses, "@", 2)[0])
+	if lname == "docker/login-action" || lname == "docker/build-push-action" ||
+		strings.Contains(lname, "goreleaser") {
+		return true
+	}
+	return strings.Contains(s.Run, "docker login") || strings.Contains(fmt.Sprint(s.Env), "DOCKER_")
 }
 
 // detectCycle returns one cycle path, or nil when the graph is acyclic.

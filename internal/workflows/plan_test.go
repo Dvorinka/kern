@@ -380,3 +380,55 @@ jobs:
 		t.Fatalf("priorities = %v", got)
 	}
 }
+
+func TestCompileGHCRTokenWarning(t *testing.T) {
+	src := `on: push
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          push: true
+          tags: ghcr.io/x/y:latest
+`
+	res, err := Compile(src, testCompiler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, dg := range res.Diagnostics {
+		if dg.Code == "ghcr-token" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("want ghcr-token warning, got %+v", res.Diagnostics)
+	}
+
+	ok := `on: push
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_TOKEN }}
+`
+	res2, err := Compile(ok, testCompiler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dg := range res2.Diagnostics {
+		if dg.Code == "ghcr-token" {
+			t.Fatalf("PAT login must not warn, got %+v", res2.Diagnostics)
+		}
+	}
+}
