@@ -59,10 +59,10 @@ type Config struct {
 	// (KERN_RUNNER_PREPULL, comma-separated) so job pulls hit the local
 	// daemon instead of the registry.
 	Prepull []string
-	// DiskMinFreePct triggers a Docker reclaim sweep when free space on the
-	// work-root filesystem drops below this percent
-	// (KERN_RUNNER_DISK_MIN_FREE_PCT, default 10). Zero disables pressure
-	// pruning; the stale-workspace sweep always runs.
+	// DiskMinFreePct triggers a Docker reclaim sweep and pauses job claims
+	// when free space on the work-root filesystem drops below this percent
+	// (KERN_RUNNER_DISK_MIN_FREE_PCT, default 10). Zero disables both;
+	// the stale-workspace sweep always runs.
 	DiskMinFreePct float64
 	// Executor selects the job execution substrate: "docker" (default)
 	// runs steps in ephemeral containers; "host" runs them as local
@@ -87,6 +87,9 @@ type Agent struct {
 	active     atomic.Int32
 	updating   atomic.Bool
 	nextUpdate atomic.Int64
+	// diskPaused latches while the work-root filesystem is under pressure so
+	// the transition is logged once per episode, not once per worker tick.
+	diskPaused atomic.Bool
 	// retire latches once the ephemeral idle timeout fires; heartbeats carry
 	// it until the control plane confirms the row is gone. lastActivity is
 	// the unixnano of the last job completion (boot time until then). A
@@ -369,6 +372,12 @@ func (a *Agent) workerLoop(ctx context.Context, n int) {
 			sleepCtx(ctx, 5*time.Second)
 			continue
 		}
+		if a.diskClaimPaused() {
+			// The work-root filesystem is too full to write job workspaces —
+			// claiming now would just fail later in prepare or mid-step.
+			sleepCtx(ctx, 30*time.Second)
+			continue
+		}
 		claim, err := a.c.claim(ctx, 25)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -417,6 +426,43 @@ func (a *Agent) ephemeralLoop(ctx context.Context) {
 		a.retire.Store(true)
 		a.log.Info("ephemeral idle timeout; requesting deregistration", zap.Duration("idle", idle))
 	}
+}
+
+// diskSpaceFn stubs the filesystem probe in tests.
+var diskSpaceFn = diskSpace
+
+// diskClaimPaused reports whether claims should pause because the work-root
+// filesystem has less than Config.DiskMinFreePct free (#210). The same
+// threshold drives the docker reclaim sweep in diskGCLoop — a runner that
+// cannot write cannot execute jobs, and every claimed-then-failed job just
+// requeues on a fleet that may be equally full.
+func (a *Agent) diskClaimPaused() bool {
+	free, total := diskSpaceFn(a.cfg.WorkRoot)
+	if !diskUnderPressure(free, total, a.cfg.DiskMinFreePct) {
+		if a.diskPaused.CompareAndSwap(true, false) {
+			a.log.Info("disk pressure cleared: resuming claims")
+		}
+		return false
+	}
+	if a.diskPaused.CompareAndSwap(false, true) {
+		a.log.Warn("disk pressure: pausing job claims",
+			zap.Int64("free_bytes", free), zap.Int64("total_bytes", total),
+			zap.Float64("min_free_pct", a.cfg.DiskMinFreePct))
+	}
+	return true
+}
+
+// jobErrorHint annotates runner-side failure signatures that never reach a
+// step — prepare, checkout and image-pull errors land in the job error as
+// raw text (#209). ENOSPC gets the live free-space reading so the operator
+// can tell real exhaustion from a stale report.
+func jobErrorHint(msg, workRoot string) string {
+	if !strings.Contains(strings.ToLower(msg), "no space left on device") {
+		return msg
+	}
+	free, total := diskSpaceFn(workRoot)
+	return fmt.Sprintf("%s — runner disk full: %d MiB free of %d MiB on the work-root filesystem",
+		msg, free/(1<<20), total/(1<<20))
 }
 
 // overLoaded reports whether the claim gate is engaged: loadavg1 above
@@ -473,7 +519,7 @@ func (a *Agent) executeJob(ctx context.Context, claim *Claim) {
 	result, outs, err := a.runSteps(jobCtx, log, claim)
 	outputs = outs
 	if err != nil {
-		errMsg = err.Error()
+		errMsg = jobErrorHint(err.Error(), a.cfg.WorkRoot)
 		if jobCtx.Err() == context.DeadlineExceeded {
 			errMsg = "job timed out"
 		}

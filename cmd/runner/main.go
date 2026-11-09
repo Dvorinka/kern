@@ -49,7 +49,7 @@ Environment only:
   KERN_RUNNER_LOAD_GATE     pause claims while loadavg1 > n * cpu count (0=off)
   KERN_RUNNER_IMAGE_MAX_AGE GC pulled job images unused this long (default 168h, 0=off)
   KERN_RUNNER_PREPULL       comma-separated images to keep pulled (job pulls hit local cache)
-  KERN_RUNNER_DISK_MIN_FREE_PCT  prune docker when work-root fs free drops below % (default 10, 0=off)
+  KERN_RUNNER_DISK_MIN_FREE_PCT  prune docker + pause claims when work-root fs free drops below % (default 10, 0=off)
   KERN_RUNNER_CACHE_MAX_BYTES    cap the persistent _cache tree, evicting oldest first (default 8GiB, 0=off)
   KERN_ACTIONS_GIT_BASE     git base URL for remote actions (default: the run's
                             repo host, or https://github.com)
