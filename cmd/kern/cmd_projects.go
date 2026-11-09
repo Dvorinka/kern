@@ -286,19 +286,22 @@ func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 			fmt.Printf("run %s → %s\n", shortID(out.Run.ID), out.Run.Status)
 		}
 	case "logs":
-		id, err := strarg(rest, 0, "run id")
-		if err != nil {
-			return err
-		}
 		// -f is the depot/gh spelling of --follow.
-		norm := make([]string, 0, len(rest)-1)
-		for _, a := range rest[1:] {
+		norm := make([]string, 0, len(rest))
+		for _, a := range rest {
 			if a == "-f" {
 				a = "--follow"
 			}
 			norm = append(norm, a)
 		}
-		opts, _ := parseFlagsEx(norm, []string{"follow"}, "job", "step", "follow", "out")
+		opts, pos := parseFlagsEx(norm, []string{"follow"}, "job", "step", "follow", "out", "search", "project", "limit")
+		if opts["search"] != "" {
+			return c.searchLogs(ctx, opts["search"], first(pos...), opts["project"], opts["limit"])
+		}
+		id, err := strarg(pos, 0, "run id")
+		if err != nil {
+			return err
+		}
 		follow := opts["follow"]
 		if follow == "false" {
 			follow = ""
@@ -559,6 +562,56 @@ func (c *cli) runLogs(ctx context.Context, runID, jobFilter, stepFilter, follow,
 	}
 	if dir != "" {
 		fmt.Printf("wrote %d step logs to %s\n", len(targets), dir)
+	}
+	return nil
+}
+
+// searchLogs backs `kern logs --search` — the global step-log grep. runID
+// scopes to one run (short prefix or uuid), project to a project slug.
+func (c *cli) searchLogs(ctx context.Context, query, runID, project, limit string) error {
+	q := url.Values{"q": {query}}
+	if runID != "" {
+		q.Set("run", runID)
+	}
+	if project != "" {
+		q.Set("project", project)
+	}
+	if limit != "" {
+		q.Set("limit", limit)
+	}
+	var out struct {
+		Hits []struct {
+			RunID      string `json:"run_id"`
+			RunNumber  int    `json:"run_number"`
+			Project    string `json:"project"`
+			Workflow   string `json:"workflow"`
+			JobKey     string `json:"job_key"`
+			JobName    string `json:"job_name"`
+			StepNumber int    `json:"step_number"`
+			StepName   string `json:"step_name"`
+			Line       int    `json:"line"`
+			Text       string `json:"text"`
+		} `json:"hits"`
+		StepsScanned int  `json:"steps_scanned"`
+		Truncated    bool `json:"truncated"`
+	}
+	if err := c.api().get(ctx, "/logs/search", q, &out); err != nil {
+		return err
+	}
+	if c.json {
+		printJSON(out)
+		return nil
+	}
+	for _, h := range out.Hits {
+		fmt.Printf("%s #%d %s %s step %d:%d  %s\n",
+			shortID(h.RunID), h.RunNumber, first(h.JobKey, h.JobName),
+			h.StepName, h.StepNumber, h.Line, h.Text)
+	}
+	if len(out.Hits) == 0 {
+		fmt.Println("no matches")
+	}
+	if out.Truncated {
+		fmt.Printf("(truncated after %d step logs — narrow with --project or a run id)\n", out.StepsScanned)
 	}
 	return nil
 }

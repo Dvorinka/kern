@@ -637,3 +637,63 @@ func (s *Store) RunStatus(ctx context.Context, runID uuid.UUID) (string, string,
 	}
 	return status, conclusion, err
 }
+
+// LogSearchStep is one step whose log blob is a search candidate — enough
+// context to render a hit without a second round trip.
+type LogSearchStep struct {
+	StepID    uuid.UUID
+	Number    int
+	Name      string
+	LogRef    string
+	JobKey    string
+	JobName   string
+	RunID     uuid.UUID
+	RunNumber int
+	Workflow  string
+	Project   string
+}
+
+// SearchLogSteps lists steps that hold a log blob, newest runs first — the
+// candidate set for the log-search endpoint. project and run scope the
+// scan; limit caps candidates so a full retention corpus cannot pin the
+// search loop (#135).
+func (s *Store) SearchLogSteps(ctx context.Context, orgID uuid.UUID, project string, runID uuid.UUID, limit int) ([]LogSearchStep, error) {
+	q := `SELECT s.id, s.number, s.name, s.log_ref, j.key, j.name,
+		       r.id, r.run_number, w.name, p.slug
+		FROM steps s
+		JOIN jobs j ON j.id = s.job_id
+		JOIN workflow_runs r ON r.id = j.run_id
+		JOIN workflows w ON w.id = r.workflow_id
+		JOIN projects p ON p.id = r.project_id
+		WHERE p.org_id = $1 AND s.log_ref <> ''`
+	args := []any{orgID}
+	n := 2
+	if project != "" {
+		q += fmt.Sprintf(" AND p.slug = $%d", n)
+		args = append(args, project)
+		n++
+	}
+	if runID != uuid.Nil {
+		q += fmt.Sprintf(" AND r.id = $%d", n)
+		args = append(args, runID)
+		n++
+	}
+	q += fmt.Sprintf(" ORDER BY r.created_at DESC, j.key, s.number LIMIT $%d", n)
+	args = append(args, limit)
+	rows, err := s.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []LogSearchStep
+	for rows.Next() {
+		var st LogSearchStep
+		if err := rows.Scan(&st.StepID, &st.Number, &st.Name, &st.LogRef,
+			&st.JobKey, &st.JobName, &st.RunID, &st.RunNumber,
+			&st.Workflow, &st.Project); err != nil {
+			return nil, err
+		}
+		out = append(out, st)
+	}
+	return out, rows.Err()
+}
