@@ -254,3 +254,33 @@ func TestJobActive(t *testing.T) {
 		}
 	}
 }
+
+func TestSweepTmpStale(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	stale := filepath.Join(tmp, "pytest-of-root")
+	fresh := filepath.Join(tmp, "trivy-scan-1")
+	keep := filepath.Join(tmp, "gha-gocache")
+	for _, d := range []string{stale, fresh, keep} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := time.Now().Add(-48 * time.Hour)
+	for _, d := range []string{stale, keep} {
+		if err := os.Chtimes(d, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := &Agent{log: zap.NewNop()}
+	a.sweepTmpStale(24 * time.Hour)
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatal("stale pytest dir survived")
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Fatal("fresh trivy dir removed")
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Fatal("gha-gocache removed — operator path must stay")
+	}
+}

@@ -423,7 +423,48 @@ func cacheEvictionUnit(root, rel string) (string, bool) {
 const (
 	criticalImageAge     = 24 * time.Hour
 	criticalWorkspaceAge = 2 * time.Hour
+	criticalTmpAge       = 24 * time.Hour
 )
+
+// tmpStalePatterns are directory names under the job temp root that are
+// safe to delete when stale: test-tool scratch dirs, never workspaces or
+// operator paths. Anything not matching stays — especially gha-* and
+// kern-job-* trees a live job might still touch.
+var tmpStalePatterns = []string{"pytest-of-*", "trivy-*", "playwright-*"}
+
+// sweepTmpStale removes aged scratch dirs under os.TempDir() at the
+// critical horizon. Co-located runners (GHA fleets, test frameworks)
+// leave multi-gigabyte residue in /tmp that docker prune never sees.
+func (a *Agent) sweepTmpStale(age time.Duration) {
+	root := os.TempDir()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-age)
+	for _, e := range entries {
+		matched := false
+		for _, pat := range tmpStalePatterns {
+			if ok, _ := filepath.Match(pat, e.Name()); ok {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		path := filepath.Join(root, e.Name())
+		if err := os.RemoveAll(path); err != nil {
+			a.log.Warn("tmp sweep: remove failed", zap.String("path", path), zap.Error(err))
+			continue
+		}
+		a.log.Info("tmp sweep: removed stale scratch dir", zap.String("path", path))
+	}
+}
 
 func (a *Agent) maybePruneDisk(ctx context.Context) {
 	if a.executor() != "docker" {
@@ -452,6 +493,7 @@ func (a *Agent) maybePruneDisk(ctx context.Context) {
 		a.sweepImagesOlder(ctx, criticalImageAge)
 		a.sweepWorkspacesOlderThan(criticalWorkspaceAge)
 		a.sweepBoundedCacheTo(a.cfg.CacheMaxBytes / 2)
+		a.sweepTmpStale(criticalTmpAge)
 	}
 	a.log.Warn("disk pressure: pruning docker",
 		zap.Int64("free_bytes", free), zap.Int64("total_bytes", total),
