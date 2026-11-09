@@ -109,6 +109,7 @@ func run() int {
 	orch.Blobs = blobStore
 	srv := api.New(cfg, st, orch, blobStore, cipher, log)
 	orch.NotifySweep = srv.DeliverNotifyBatch
+	orch.RunnerOffline = srv.NotifyRunnersOffline
 
 	// The scheduler advances gated runs between job completions.
 	go schedulerLoop(ctx, cfg, orch, log)
