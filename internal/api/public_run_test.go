@@ -86,6 +86,33 @@ func TestGitHubCheckAndLink(t *testing.T) {
 	}
 }
 
+// The first failing step's masked diagnosis rides the check-run summary;
+// the private detail field never does (#136).
+func TestCheckSummaryFailureDiagnosis(t *testing.T) {
+	run := store.Run{WorkflowName: "CI", RunNumber: 2, Event: "push", SHA: "abc1234"}
+	jobs := []store.Job{{
+		JobKey: "build", Name: "build", Conclusion: "failure",
+		Steps: []store.Step{
+			{Number: 1, Name: "ok", Conclusion: "success"},
+			{Number: 2, Name: "test", Conclusion: "failure", Diagnosis: json.RawMessage(
+				`{"kind":"test_failure","summary":"2 tests failed","suggestion":"run go test ./...","detail":"log line"}`)},
+		},
+	}}
+	sum := checkSummary(run, jobs)
+	if !strings.Contains(sum, "test_failure") || !strings.Contains(sum, "2 tests failed") ||
+		!strings.Contains(sum, "run go test") || strings.Contains(sum, "log line") {
+		t.Fatal(sum)
+	}
+	// Failure without a diagnosis adds no section.
+	sum = checkSummary(run, []store.Job{{
+		JobKey: "b", Name: "b", Conclusion: "failure",
+		Steps: []store.Step{{Name: "x", Conclusion: "failure"}},
+	}})
+	if strings.Contains(sum, "Failure —") {
+		t.Fatal(sum)
+	}
+}
+
 func TestOrgSettingWrites(t *testing.T) {
 	off := "off"
 	bad := "sometimes"
