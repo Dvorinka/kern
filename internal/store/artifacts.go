@@ -182,3 +182,17 @@ func (s *Store) Artifacts(ctx context.Context, orgID uuid.UUID, runID *uuid.UUID
 	}
 	return out, rows.Err()
 }
+
+// ArtifactStats reports whole-scope totals for the artifacts page — the
+// list is a bounded window, the KPIs must not be.
+func (s *Store) ArtifactStats(ctx context.Context, orgID uuid.UUID, runID *uuid.UUID) (count int, bytes int64, largest int64, runs int, err error) {
+	err = s.pool.QueryRow(ctx, `
+		SELECT count(*), COALESCE(sum(a.size_bytes), 0), COALESCE(max(a.size_bytes), 0),
+		       count(DISTINCT a.run_id)
+		FROM artifacts a
+		JOIN workflow_runs r ON r.id = a.run_id
+		JOIN projects p ON p.id = r.project_id
+		WHERE p.org_id = $1 AND ($2::uuid IS NULL OR a.run_id = $2)`, orgID, runID).
+		Scan(&count, &bytes, &largest, &runs)
+	return count, bytes, largest, runs, err
+}

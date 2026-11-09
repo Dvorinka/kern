@@ -105,7 +105,15 @@ func (s *Server) listCache(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"entries": entries})
+	count, bytes, largest, projects, err := s.Store.CacheEntryStats(c.Request.Context(), user.OrgID)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"entries": entries,
+		"stats":   gin.H{"count": count, "bytes": bytes, "largest": largest, "projects": projects},
+	})
 }
 
 // deleteCache removes one entry and its archive. Manual eviction until

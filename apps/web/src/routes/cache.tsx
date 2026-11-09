@@ -10,7 +10,12 @@ export function CachePage() {
 	const qc = useQueryClient();
 	const { data, isLoading } = useQuery({
 		queryKey: ["cache"],
-		queryFn: () => api.get<{ entries: CacheEntry[] }>("/cache"),
+		// stats cover the whole store — the entry list is a bounded window
+		queryFn: () =>
+			api.get<{
+				entries: CacheEntry[];
+				stats: { count: number; bytes: number; largest: number; projects: number };
+			}>("/cache"),
 	});
 	const { data: projects } = useQuery({
 		queryKey: ["projects"],
@@ -23,7 +28,9 @@ export function CachePage() {
 
 	if (isLoading) return <Spinner />;
 	const entries = data?.entries ?? [];
-	const totalBytes = entries.reduce((n, e) => n + e.size_bytes, 0);
+	const stats = data?.stats;
+	const totalBytes = stats?.bytes ?? entries.reduce((n, e) => n + e.size_bytes, 0);
+	const entryCount = stats?.count ?? entries.length;
 	const largest = Math.max(...entries.map((e) => e.size_bytes), 1);
 	const slugOf = new Map((projects?.projects ?? []).map((p) => [p.id, p.slug]));
 	// entries unused for 7 days are evicted — count down honestly
@@ -35,14 +42,17 @@ export function CachePage() {
 		<>
 			<PageHeader mark="lint"
 				title="Cache"
-				sub={`${entries.length} entr${entries.length === 1 ? "y" : "ies"} · ${bytes(totalBytes)} stored · entries unused for 7 days are evicted`}
+				sub={`${entryCount} entr${entryCount === 1 ? "y" : "ies"} · ${bytes(totalBytes)} stored · entries unused for 7 days are evicted`}
 			/>
 			{entries.length > 0 && (
 				<div className="panel kpis mb-4">
 					<div className="kpi">
 						<div className="k">entries</div>
-						<div className="v">{entries.length}</div>
-						<div className="c">{new Set(entries.map((e) => e.project_id)).size} project{new Set(entries.map((e) => e.project_id)).size === 1 ? "" : "s"}</div>
+						<div className="v">{entryCount}</div>
+						<div className="c">
+							{stats?.projects ?? new Set(entries.map((e) => e.project_id)).size} project
+							{(stats?.projects ?? 0) === 1 ? "" : "s"}
+						</div>
 					</div>
 					<div className="kpi">
 						<div className="k">stored</div>
@@ -51,7 +61,7 @@ export function CachePage() {
 					</div>
 					<div className="kpi">
 						<div className="k">largest</div>
-						<div className="v">{bytes(largest)}</div>
+						<div className="v">{bytes(stats?.largest ?? largest)}</div>
 						<div className="c">single entry</div>
 					</div>
 					<div className="kpi">

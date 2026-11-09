@@ -324,21 +324,28 @@ func nilTime(t time.Time) *time.Time {
 
 // RunCounts returns per-tab totals for the runs list, ignoring status and
 // conclusion filters but honouring project scope and the cleared flag.
+// success/completed/median_seconds let the UI compute health stats over the
+// whole history instead of the page it happened to load.
 func (s *Store) RunCounts(ctx context.Context, projectID *uuid.UUID, includeCleared bool) (map[string]int, error) {
-	var all, running, failed, cancelled int
+	var all, running, failed, cancelled, completed, success, median int
 	err := s.pool.QueryRow(ctx, `
 		SELECT count(*),
 		       count(*) FILTER (WHERE r.status IN ('queued', 'in_progress')),
 		       count(*) FILTER (WHERE r.conclusion = 'failure'),
-		       count(*) FILTER (WHERE r.status = 'cancelled' OR r.conclusion = 'cancelled')
+		       count(*) FILTER (WHERE r.status = 'cancelled' OR r.conclusion = 'cancelled'),
+		       count(*) FILTER (WHERE r.status = 'completed'),
+		       count(*) FILTER (WHERE r.conclusion = 'success'),
+		       COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM r.completed_at - r.started_at))
+		                FILTER (WHERE r.status = 'completed' AND r.started_at IS NOT NULL AND r.completed_at IS NOT NULL), 0)::int
 		FROM workflow_runs r
 		WHERE ($1::uuid IS NULL OR r.project_id = $1)
 		  AND ($2::bool OR r.cleared_at IS NULL)`,
-		projectID, includeCleared).Scan(&all, &running, &failed, &cancelled)
+		projectID, includeCleared).Scan(&all, &running, &failed, &cancelled, &completed, &success, &median)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]int{"all": all, "running": running, "failed": failed, "cancelled": cancelled}, nil
+	return map[string]int{"all": all, "running": running, "failed": failed, "cancelled": cancelled,
+		"completed": completed, "success": success, "median_seconds": median}, nil
 }
 
 // ClearRun marks a single cancelled run cleared. Returns false when the run

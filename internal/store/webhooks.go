@@ -47,12 +47,15 @@ type WebhookDelivery struct {
 }
 
 // WebhookDeliveries lists recent deliveries newest-first, payload excluded —
-// fetch it per-row with WebhookDelivery when the UI expands one.
-func (s *Store) WebhookDeliveries(ctx context.Context, limit int) ([]WebhookDelivery, error) {
+// fetch it per-row with WebhookDelivery when the UI expands one. Empty
+// status/event strings mean "no filter".
+func (s *Store) WebhookDeliveries(ctx context.Context, status, event string, limit int) ([]WebhookDelivery, error) {
 	limit, _ = page(limit, 0)
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, provider, delivery_id, event, status, error, received_at, processed_at
-		FROM webhook_deliveries ORDER BY received_at DESC LIMIT $1`, limit)
+		FROM webhook_deliveries
+		WHERE ($1 = '' OR status = $1) AND ($2 = '' OR event = $2)
+		ORDER BY received_at DESC LIMIT $3`, status, event, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -65,6 +68,41 @@ func (s *Store) WebhookDeliveries(ctx context.Context, limit int) ([]WebhookDeli
 			return nil, err
 		}
 		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// WebhookDeliveryStats counts the whole table for the deliveries page —
+// the list is a bounded window, the pills and KPIs must not be.
+func (s *Store) WebhookDeliveryStats(ctx context.Context) (total int, byStatus, byEvent map[string]int, err error) {
+	if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM webhook_deliveries`).Scan(&total); err != nil {
+		return 0, nil, nil, err
+	}
+	if byStatus, err = s.deliveryGroupCounts(ctx, "status"); err != nil {
+		return 0, nil, nil, err
+	}
+	if byEvent, err = s.deliveryGroupCounts(ctx, "event"); err != nil {
+		return 0, nil, nil, err
+	}
+	return total, byStatus, byEvent, nil
+}
+
+func (s *Store) deliveryGroupCounts(ctx context.Context, col string) (map[string]int, error) {
+	// col is an internal constant — never user input.
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+col+`, count(*) FROM webhook_deliveries GROUP BY `+col)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var k string
+		var n int
+		if err := rows.Scan(&k, &n); err != nil {
+			return nil, err
+		}
+		out[k] = n
 	}
 	return out, rows.Err()
 }

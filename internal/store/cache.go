@@ -152,3 +152,15 @@ func (s *Store) CacheEntries(ctx context.Context, orgID uuid.UUID, limit int) ([
 	}
 	return out, rows.Err()
 }
+
+// CacheEntryStats reports org-wide totals for the cache page — the entry
+// list is a bounded window, the KPIs must not be.
+func (s *Store) CacheEntryStats(ctx context.Context, orgID uuid.UUID) (count int, bytes int64, largest int64, projects int, err error) {
+	err = s.pool.QueryRow(ctx, `
+		SELECT count(*), COALESCE(sum(c.size_bytes), 0), COALESCE(max(c.size_bytes), 0),
+		       count(DISTINCT c.project_id)
+		FROM cache_entries c
+		JOIN projects p ON p.id = c.project_id
+		WHERE p.org_id = $1`, orgID).Scan(&count, &bytes, &largest, &projects)
+	return count, bytes, largest, projects, err
+}

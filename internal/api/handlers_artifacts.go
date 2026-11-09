@@ -136,7 +136,15 @@ func (s *Server) listArtifacts(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"artifacts": rows})
+	count, bytes, largest, runs, err := s.Store.ArtifactStats(c.Request.Context(), user.OrgID, runID)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"artifacts": rows,
+		"stats":     gin.H{"count": count, "bytes": bytes, "largest": largest, "runs": runs},
+	})
 }
 
 func (s *Server) deleteArtifact(c *gin.Context) {

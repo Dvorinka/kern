@@ -1045,13 +1045,22 @@ func pathGlobMatch(pattern, name string) bool {
 
 // listWebhookDeliveries feeds the deliveries viewer — metadata only, no
 // payloads; the UI fetches one via getWebhookDelivery when a row expands.
+// counts/events are whole-table totals so the pills stay true when the
+// list itself is a bounded, filtered window.
 func (s *Server) listWebhookDeliveries(c *gin.Context) {
-	rows, err := s.Store.WebhookDeliveries(c.Request.Context(), parseInt(c.DefaultQuery("limit", "100"), 100))
+	ctx := c.Request.Context()
+	rows, err := s.Store.WebhookDeliveries(ctx, c.Query("status"), c.Query("event"),
+		parseInt(c.DefaultQuery("limit", "100"), 100))
 	if err != nil {
 		s.internalError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"deliveries": rows})
+	total, counts, events, err := s.Store.WebhookDeliveryStats(ctx)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"deliveries": rows, "total": total, "counts": counts, "events": events})
 }
 
 func (s *Server) getWebhookDelivery(c *gin.Context) {

@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { ChevronDown, ChevronRight, Webhook } from "lucide-react";
 import { api } from "../lib/api";
 import type { WebhookDelivery } from "../lib/types";
@@ -11,26 +11,27 @@ import { relTime } from "../lib/format";
 export function DeliveriesPage() {
 	const [statusF, setStatusF] = useState("");
 	const [eventF, setEventF] = useState("");
+	// filters run server-side; total/counts/events count the whole table
+	// so the KPIs and pills stay true beyond the fetched window.
+	const qs = new URLSearchParams();
+	if (statusF) qs.set("status", statusF);
+	if (eventF) qs.set("event", eventF);
 	const { data, isLoading } = useQuery({
-		queryKey: ["deliveries"],
-		queryFn: () => api.get<{ deliveries: WebhookDelivery[] }>("/webhooks/deliveries"),
+		queryKey: ["deliveries", statusF, eventF],
+		queryFn: () =>
+			api.get<{
+				deliveries: WebhookDelivery[];
+				total: number;
+				counts: Record<string, number>;
+				events: Record<string, number>;
+			}>(`/webhooks/deliveries?${qs}`),
 		refetchInterval: 5000,
 	});
 
 	const deliveries = data?.deliveries ?? [];
-	const stats = useMemo(() => {
-		const byEvent = new Map<string, number>();
-		let failed = 0;
-		for (const d of deliveries) {
-			byEvent.set(d.event, (byEvent.get(d.event) ?? 0) + 1);
-			if (d.status === "failed") failed++;
-		}
-		return { failed, byEvent };
-	}, [deliveries]);
-	const events = [...stats.byEvent.entries()].sort((a, b) => b[1] - a[1]);
-	const visible = deliveries.filter(
-		(d) => (!statusF || d.status === statusF) && (!eventF || d.event === eventF),
-	);
+	const total = data?.total ?? 0;
+	const counts = data?.counts ?? {};
+	const events = Object.entries(data?.events ?? {}).sort((a, b) => b[1] - a[1]);
 
 	return (
 		<>
@@ -39,31 +40,29 @@ export function DeliveriesPage() {
 				<Spinner />
 			) : (
 				<>
-					{deliveries.length > 0 && (
+					{total > 0 && (
 						<div className="panel kpis mb-4">
 							<div className="kpi">
 								<div className="k">deliveries</div>
-								<div className="v">{deliveries.length}</div>
+								<div className="v">{total}</div>
 								<div className="c">last received {relTime(deliveries[0]?.received_at)}</div>
 							</div>
 							<div className="kpi">
 								<div className="k">failed</div>
-								<div className="v">{stats.failed}</div>
+								<div className="v">{counts.failed ?? 0}</div>
 								<div className="c">
-									{deliveries.length
-										? `${Math.round(((deliveries.length - stats.failed) / deliveries.length) * 100)}% processed`
-										: "—"}
+									{total ? `${Math.round(((total - (counts.failed ?? 0)) / total) * 100)}% processed` : "—"}
 								</div>
 							</div>
 							<div className="kpi">
 								<div className="k">top event</div>
 								<div className="v" style={{ fontSize: 22 }}>{events[0]?.[0] ?? "—"}</div>
-								<div className="c">{events[0] ? `${events[0][1]} of ${deliveries.length}` : ""}</div>
+								<div className="c">{events[0] ? `${events[0][1]} of ${total}` : ""}</div>
 							</div>
 						</div>
 					)}
 					<div className="panel">
-						{deliveries.length === 0 ? (
+						{total === 0 ? (
 							<EmptyState icon={<Webhook size={19} />}
 								title="No deliveries"
 								hint="Configure a GitHub webhook or App to point at /api/v1/webhooks/github."
@@ -72,7 +71,7 @@ export function DeliveriesPage() {
 							<>
 								<div className="flex flex-wrap items-center gap-2 border-b border-[var(--line)] px-4 py-2.5">
 									{["", "processed", "failed", "received"].map((s) => {
-										const n = s ? deliveries.filter((d) => d.status === s).length : deliveries.length;
+										const n = s ? (counts[s] ?? 0) : total;
 										return (
 											<button
 												key={s || "all"}
@@ -96,10 +95,10 @@ export function DeliveriesPage() {
 										))}
 									</select>
 								</div>
-								{visible.length === 0 && (
+								{deliveries.length === 0 && (
 									<div className="emptynote flush">No deliveries match this filter.</div>
 								)}
-								{visible.map((d) => (
+								{deliveries.map((d) => (
 									<DeliveryRow key={d.id} d={d} />
 								))}
 							</>

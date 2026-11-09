@@ -1,6 +1,6 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams, Link } from "react-router-dom";
-import { useMemo, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { FolderGit2, Play, RefreshCw } from "lucide-react";
 import { api } from "../lib/api";
 import { connectGitHubApp } from "../lib/github";
@@ -18,10 +18,6 @@ export function ProjectsPage() {
 		queryKey: ["projects"],
 		queryFn: () => api.get<{ projects: Project[] }>("/projects"),
 	});
-	const { data: runsData } = useQuery({
-		queryKey: ["runs", "all"],
-		queryFn: () => api.get<{ runs: Run[]; total: number }>("/runs?limit=200"),
-	});
 	const [creating, setCreating] = useState(false);
 	const create = useMutation({
 		mutationFn: (body: Record<string, string>) => api.post("/projects", body),
@@ -33,21 +29,34 @@ export function ProjectsPage() {
 	const connect = useMutation({ mutationFn: connectGitHubApp });
 	const icons = useProjectIcons(data?.projects ?? []);
 
-	// roll recent run history into a health line per project
-	const stats = useMemo(() => {
-		const m = new Map<string, { total: number; ok: number; fail: number; last: Run | null; hist: Run[] }>();
-		for (const r of runsData?.runs ?? []) {
-			const s =
-				m.get(r.project_slug) ??
-				m.set(r.project_slug, { total: 0, ok: 0, fail: 0, last: null, hist: [] }).get(r.project_slug)!;
-			s.total++;
-			if (r.conclusion === "success") s.ok++;
-			if (r.conclusion === "failure") s.fail++;
-			if (!s.last) s.last = r;
-			if (s.hist.length < 14) s.hist.push(r);
-		}
-		return m;
-	}, [runsData]);
+	// per-card health comes from server-side counts scoped to the project —
+	// one small read per project, same fan-out as the icons below. The old
+	// global /runs window hid every project outside the newest 200.
+	const runStats = useQueries({
+		queries: (data?.projects ?? []).map((p) => ({
+			queryKey: ["runs", "project", p.slug, "card"],
+			queryFn: () =>
+				api.get<{ runs: Run[]; total: number; counts?: Record<string, number> }>(
+					`/runs?project=${encodeURIComponent(p.slug)}&limit=14`,
+				),
+			staleTime: 15_000,
+		})),
+	});
+	const stats = new Map<
+		string,
+		{ total: number; ok: number; done: number; last: Run | null; hist: Run[] }
+	>();
+	(data?.projects ?? []).forEach((p, i) => {
+		const d = runStats[i]?.data;
+		if (!d) return;
+		stats.set(p.slug, {
+			total: d.counts?.all ?? d.total,
+			ok: d.counts?.success ?? 0,
+			done: d.counts?.completed ?? 0,
+			last: d.runs[0] ?? null,
+			hist: d.runs,
+		});
+	});
 
 	return (
 		<>
@@ -92,9 +101,7 @@ export function ProjectsPage() {
 				<div className="pgrid">
 					{data.projects.map((p) => {
 						const s = stats.get(p.slug);
-						const rate = s && s.total - liveCount(s.hist) > 0
-							? Math.round((s.ok / (s.total - liveCount(s.hist))) * 100)
-							: null;
+						const rate = s && s.done > 0 ? Math.round((s.ok / s.done) * 100) : null;
 						return (
 							<div
 								key={p.id}
@@ -193,8 +200,6 @@ function useProjectIcons(projects: Project[]): Record<string, string | null> {
 	return out;
 }
 
-const liveCount = (runs: Run[]) => runs.filter((r) => r.status === "in_progress" || r.status === "queued").length;
-
 function CreateProjectForm({
 	busy,
 	onSubmit,
@@ -269,8 +274,11 @@ export function ProjectDetailPage() {
 		},
 	});
 	const { data: runsData } = useQuery({
-		queryKey: ["runs", "all"],
-		queryFn: () => api.get<{ runs: Run[]; total: number }>("/runs?limit=200"),
+		queryKey: ["runs", "project", slug, "detail"],
+		queryFn: () =>
+			api.get<{ runs: Run[]; total: number; counts?: Record<string, number> }>(
+				`/runs?project=${encodeURIComponent(slug ?? "")}&limit=50`,
+			),
 		refetchInterval: 8000,
 	});
 	const setHeal = useMutation({
@@ -309,27 +317,17 @@ export function ProjectDetailPage() {
 		onSuccess: (res) => nav(`/runs/${res.run.id}`),
 	});
 
-	const runs = useMemo(
-		() => (runsData?.runs ?? []).filter((r) => r.project_slug === slug),
-		[runsData, slug],
-	);
-	const health = useMemo(() => {
-		const done = runs.filter((r) => r.status === "completed");
-		const ok = done.filter((r) => r.conclusion === "success").length;
-		const secs = done
-			.map((r) =>
-				r.started_at && r.completed_at
-					? (Date.parse(r.completed_at) - Date.parse(r.started_at)) / 1000
-					: 0,
-			)
-			.filter((x) => x > 0)
-			.sort((a, b) => a - b);
-		return {
-			rate: done.length ? Math.round((ok / done.length) * 100) : null,
-			median: secs.length ? secs[Math.floor(secs.length / 2)]! : null,
-			fails: done.length - ok,
-		};
-	}, [runs]);
+	// health stats come from the server counts — scoped to this project and
+	// computed over its full history, not the fetched page.
+	const runs = runsData?.runs ?? [];
+	const counts = runsData?.counts;
+	const health = {
+		rate: counts?.completed ? Math.round(((counts.success ?? 0) / counts.completed) * 100) : null,
+		median: counts?.median_seconds || null,
+		fails: (counts?.completed ?? 0) - (counts?.success ?? 0),
+		done: counts?.completed ?? 0,
+		total: counts?.all ?? runsData?.total ?? 0,
+	};
 
 	if (isLoading || !data) return <Spinner />;
 	const { project, workflows } = data;
@@ -494,12 +492,12 @@ export function ProjectDetailPage() {
 			</div>
 
 			{/* health strip — the project's own report card */}
-			{runs.length > 0 && (
+			{health.total > 0 && (
 				<div className="panel kpis mb-4">
 					<div className="kpi">
 						<div className="k">success</div>
 						<div className="v">{health.rate != null ? `${health.rate}%` : "—"}</div>
-						<div className="c">{health.fails} failed of {runs.length}</div>
+						<div className="c">{health.fails} failed of {health.done} completed</div>
 					</div>
 					<div className="kpi">
 						<div className="k">median run</div>
@@ -508,7 +506,7 @@ export function ProjectDetailPage() {
 					</div>
 					<div className="kpi">
 						<div className="k">runs</div>
-						<div className="v">{runs.length}</div>
+						<div className="v">{health.total}</div>
 						<div className="c">{workflows.length} workflow{workflows.length === 1 ? "" : "s"}</div>
 					</div>
 				</div>
