@@ -428,6 +428,31 @@ func TestParsePRTriggerFork(t *testing.T) {
 	}
 }
 
+// A same-repo PR on a repo that is itself a fork still gets pull_request
+// trust: repo.fork is true for the whole fork network, so only the repo
+// identity comparison may downgrade trust (#184).
+func TestParsePRTriggerSameRepoOnForkNetwork(t *testing.T) {
+	body := []byte(`{
+		"action": "opened", "number": 3,
+		"pull_request": {
+			"title": "same-repo change",
+			"author_association": "MEMBER",
+			"head": {"sha": "aaa111", "ref": "fix-x",
+				"repo": {"full_name": "o/forked", "clone_url": "https://github.com/o/forked.git", "fork": true}},
+			"base": {"ref": "main", "sha": "base999"}
+		},
+		"sender": {"login": "member"},
+		"repository": {"full_name": "o/forked", "clone_url": "https://github.com/o/forked.git", "default_branch": "main"}
+	}`)
+	tr, _, _ := parsePRTrigger(body, "pull_request")
+	if tr == nil {
+		t.Fatal("same-repo PR rejected")
+	}
+	if tr.trust != "pull_request" {
+		t.Fatalf("trust = %q, want pull_request", tr.trust)
+	}
+}
+
 func TestParsePRTriggerMissingHead(t *testing.T) {
 	body := []byte(`{
 		"action": "closed", "number": 3,
