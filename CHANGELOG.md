@@ -5,6 +5,14 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 
 ## [Unreleased]
 
+### Added
+- Per-workflow disable switch: `PATCH /projects/:project/workflows/:id`
+  `{disabled}` (project page gets Disable/Enable buttons) gates every run
+  path — webhook deliveries report the workflow as skipped, schedules stop
+  minting, dispatch and rerun refuse. Sync preserves the flag, so a disable
+  survives re-syncs; useful for keeping GitHub-Actions-owned pipelines
+  (e.g. `release.yml`) from double-firing on KERN.
+
 ## [0.7.8] - 2026-11-09
 
 ### Added

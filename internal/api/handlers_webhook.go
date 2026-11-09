@@ -172,6 +172,10 @@ func (s *Server) actOnGithubEvent(c *gin.Context, delivery, event string, body [
 			return "failed", err.Error()
 		}
 		for _, wf := range wfs {
+			if wf.Disabled {
+				skipped = append(skipped, wf.Name+" (disabled)")
+				continue
+			}
 			version, plan, err := s.workflowAtSHA(c, t.repoName, proj.ID, wf, t.sha)
 			if err != nil {
 				skipped = append(skipped, wf.Name+" ("+err.Error()+")")
