@@ -59,6 +59,7 @@ func (c *cli) cmdDoctor(ctx context.Context, args []string) error {
 		add("version", "fail", err.Error())
 	} else {
 		add("version", "ok", fmt.Sprintf("%s %s (%s)", meta.Name, meta.Version, meta.Env))
+		warnVersionSkew(meta.Version)
 	}
 
 	if c.token == "" {

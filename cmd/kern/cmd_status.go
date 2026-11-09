@@ -3,8 +3,35 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 	"time"
+
+	"github.com/dvorinka/kern/internal/version"
 )
+
+// warnVersionSkew flags CLI/server drift on major.minor: an old binary
+// against a newer /api/v1 fails confusingly (404s, ignored fields), so say
+// so on stderr. Patch drift and dev builds stay quiet.
+func warnVersionSkew(server string) {
+	core := func(v string) string {
+		v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+		if i := strings.IndexByte(v, '-'); i >= 0 {
+			v = v[:i]
+		}
+		parts := strings.SplitN(v, ".", 3)
+		if len(parts) < 2 {
+			return v
+		}
+		return parts[0] + "." + parts[1]
+	}
+	client, srv := core(version.Version), core(server)
+	if client == "" || client == "dev" || srv == "" || srv == "dev" || client == srv {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "kern: warning: CLI v%s vs server v%s — some commands may not work; upgrade the CLI\n",
+		version.Version, server)
+}
 
 // cmdStatus prints the control-plane dashboard: api meta, queue depth, and
 // runner counts. --watch refreshes every few seconds until Ctrl-C.
@@ -45,6 +72,7 @@ func (c *cli) printStatus(ctx context.Context) error {
 	if err := c.api().get(ctx, "/meta", nil, &meta); err != nil {
 		return err
 	}
+	warnVersionSkew(meta.Version)
 	var ov struct {
 		UnmatchedQueued int64 `json:"unmatched_queued"`
 		Overview        struct {
