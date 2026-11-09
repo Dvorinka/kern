@@ -576,7 +576,7 @@ func (e *executor) actionRepoBase() string {
 // map into the `inputs` expression context. With-keys are matched
 // case-insensitively; undeclared keys still land in the context, and the
 // returned list names them for a warning.
-func resolveInputs(meta *actions.Meta, with map[string]any) (map[string]any, []string, error) {
+func resolveInputs(meta *actions.Meta, with map[string]any, ctx map[string]any) (map[string]any, []string, error) {
 	inputs := map[string]any{}
 	undeclared := []string{}
 	for name, in := range meta.Inputs {
@@ -592,6 +592,11 @@ func resolveInputs(meta *actions.Meta, with map[string]any) (map[string]any, []s
 				return nil, nil, fmt.Errorf("required input %q was not supplied", name)
 			}
 			v = in.Default
+			if d, ok := v.(string); ok && strings.Contains(d, "${{") {
+				if r, err := expressions.Interpolate(d, ctx); err == nil {
+					v = r
+				}
+			}
 		}
 		inputs[name] = v
 	}
@@ -671,7 +676,7 @@ func (e *executor) runComposite(ctx context.Context, step StepSpec, meta *action
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(step.TimeoutSeconds)*time.Second)
 		defer cancel()
 	}
-	inputs, undeclared, err := resolveInputs(meta, step.With)
+	inputs, undeclared, err := resolveInputs(meta, step.With, e.runnerContext())
 	if err != nil {
 		e.logStep(step, "KERN: "+err.Error())
 		return "failure", 1

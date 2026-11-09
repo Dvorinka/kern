@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/dvorinka/kern/internal/actions"
+	"github.com/dvorinka/kern/internal/expressions"
 )
 
 const (
@@ -232,10 +233,15 @@ func download(ctx context.Context, url, path string) error {
 // inputEnv builds the INPUT_* variables GitHub exports for a JavaScript
 // action: every `with` key (uppercased, spaces as underscores) plus declared
 // inputs resolved to their default when not supplied.
-func inputEnv(meta *actions.Meta, with map[string]any) map[string]string {
+func inputEnv(meta *actions.Meta, with map[string]any, ctx map[string]any) map[string]string {
 	env := map[string]string{}
 	for name, in := range meta.Inputs {
 		v := in.Default
+		if strings.Contains(v, "${{") {
+			if r, err := expressions.Interpolate(v, ctx); err == nil {
+				v = r
+			}
+		}
 		for k, w := range with {
 			if strings.EqualFold(k, name) {
 				v = envString(w)
@@ -261,7 +267,7 @@ func (e *executor) nodeActionEnv(step StepSpec, meta *actions.Meta, actionPath s
 		env[k] = v
 	}
 	env["GITHUB_ACTION_PATH"] = actionPath
-	for k, v := range inputEnv(meta, step.With) {
+	for k, v := range inputEnv(meta, step.With, e.runnerContext()) {
 		env[k] = v
 	}
 	for k, v := range state {

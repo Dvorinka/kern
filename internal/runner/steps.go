@@ -499,6 +499,9 @@ func (e *executor) baseContext() map[string]any {
 		"repository": e.claim.Run.RepoFullName, "job": e.claim.Job.Key,
 		"workflow": e.claim.Run.Workflow, "head_ref": e.claim.Run.HeadRef,
 		"head_sha": e.claim.Run.HeadSHA, "event": e.eventPayload,
+		// github.token mirrors GITHUB_TOKEN on github.com; actions like
+		// dorny/paths-filter default their token input to it.
+		"token":    e.claim.Run.GitHubToken,
 		"ref_name": refName(e.claim.Run.Ref), "ref_type": refType(e.claim.Run.Ref),
 	}
 	needs := e.claim.Job.Needs
