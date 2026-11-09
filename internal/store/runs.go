@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -257,8 +258,10 @@ type RunFilter struct {
 	PR string
 	// Workflow matches the workflow name or path (.github/workflows/ci.yml).
 	Workflow string
-	Limit    int
-	Offset   int
+	// Since/Until bound created_at — the chart's day drill-down.
+	Since, Until time.Time
+	Limit        int
+	Offset       int
 }
 
 func (s *Store) Runs(ctx context.Context, f RunFilter) ([]Run, int, error) {
@@ -277,9 +280,11 @@ func (s *Store) Runs(ctx context.Context, f RunFilter) ([]Run, int, error) {
 		  AND ($7 = '' OR r.ref = $7 OR r.ref = 'refs/heads/' || $7)
 		  AND ($8 = '' OR r.source->>'pr_number' = $8)
 		  AND ($9 = '' OR w.name = $9 OR w.path = $9 OR w.path LIKE '%/' || $9)
+		  AND ($10::timestamptz IS NULL OR r.created_at >= $10)
+		  AND ($11::timestamptz IS NULL OR r.created_at < $11)
 		ORDER BY r.created_at DESC
 		LIMIT $5 OFFSET $6`, f.ProjectID, statuses, f.Conclusion, f.IncludeCleared, limit, offset,
-		f.Ref, f.PR, f.Workflow)
+		f.Ref, f.PR, f.Workflow, nilTime(f.Since), nilTime(f.Until))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -298,11 +303,23 @@ func (s *Store) Runs(ctx context.Context, f RunFilter) ([]Run, int, error) {
 		WHERE ($1::uuid IS NULL OR r.project_id = $1)
 		  AND ($2::text[] IS NULL OR r.status = ANY($2))
 		  AND ($3 = '' OR r.conclusion = $3)
-		  AND ($4::bool OR r.cleared_at IS NULL)`,
-		f.ProjectID, statuses, f.Conclusion, f.IncludeCleared).Scan(&total); err != nil {
+		  AND ($4::bool OR r.cleared_at IS NULL)
+		  AND ($5::timestamptz IS NULL OR r.created_at >= $5)
+		  AND ($6::timestamptz IS NULL OR r.created_at < $6)`,
+		f.ProjectID, statuses, f.Conclusion, f.IncludeCleared,
+		nilTime(f.Since), nilTime(f.Until)).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	return out, total, rows.Err()
+}
+
+// nilTime returns nil for the zero time so optional filters stay
+// parameterizable — postgres compares $N::timestamptz IS NULL first.
+func nilTime(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
 }
 
 // RunCounts returns per-tab totals for the runs list, ignoring status and
@@ -764,4 +781,95 @@ func (s *Store) NextRunNumber(ctx context.Context, workflowID uuid.UUID) (int, e
 		`SELECT COALESCE(MAX(run_number), 0) + 1 FROM workflow_runs WHERE workflow_id = $1`,
 		workflowID).Scan(&n)
 	return n, err
+}
+
+// DayCount is one day×project bucket of run history for the overview
+// chart — computed in postgres so history does not depend on how many
+// runs the list endpoint happened to return.
+type DayCount struct {
+	Day       string `json:"day"`
+	Project   string `json:"project"`
+	Total     int    `json:"total"`
+	Failed    int    `json:"failed"`
+	Cancelled int    `json:"cancelled"`
+	Live      int    `json:"live"`
+}
+
+// RunDayCounts aggregates runs per day per project over the last `days`
+// days. Cleared runs stay counted — they are history, just hidden.
+func (s *Store) RunDayCounts(ctx context.Context, projectID *uuid.UUID, days int) ([]DayCount, error) {
+	if days <= 0 || days > 400 {
+		days = 30
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT (r.created_at AT TIME ZONE 'UTC')::date::text, p.slug,
+		       count(*),
+		       count(*) FILTER (WHERE r.conclusion = 'failure'),
+		       count(*) FILTER (WHERE r.conclusion = 'cancelled' OR r.status = 'cancelled'),
+		       count(*) FILTER (WHERE r.status IN ('queued', 'in_progress', 'awaiting_approval'))
+		FROM workflow_runs r JOIN projects p ON p.id = r.project_id
+		WHERE ($1::uuid IS NULL OR r.project_id = $1)
+		  AND r.created_at >= now() - make_interval(days => $2)
+		GROUP BY 1, 2
+		ORDER BY 1`, projectID, days)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DayCount
+	for rows.Next() {
+		var d DayCount
+		if err := rows.Scan(&d.Day, &d.Project, &d.Total, &d.Failed, &d.Cancelled, &d.Live); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// QueuedJob is one parked job with just enough run context for the queue
+// panels — the UI used to derive this by fanning out run-detail reads.
+type QueuedJob struct {
+	ID          uuid.UUID `json:"id"`
+	RunID       uuid.UUID `json:"run_id"`
+	RunNumber   int       `json:"run_number"`
+	ProjectSlug string    `json:"project_slug"`
+	JobKey      string    `json:"job_key"`
+	Name        string    `json:"name"`
+	Status      string    `json:"status"`
+	Needs       []string  `json:"needs"`
+	RunsOn      []string  `json:"runs_on"`
+	Priority    int       `json:"priority"`
+	QueuedAt    time.Time `json:"queued_at"`
+}
+
+// QueuedJobs returns jobs waiting for a runner, oldest first — the order
+// claims would serve them modulo labels and priority.
+func (s *Store) QueuedJobs(ctx context.Context, limit int) ([]QueuedJob, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT j.id, j.run_id, r.run_number, p.slug, j.job_key, j.name, j.status,
+		       j.needs, j.runs_on, j.priority, j.queued_at
+		FROM jobs j
+		JOIN workflow_runs r ON r.id = j.run_id
+		JOIN projects p ON p.id = r.project_id
+		WHERE j.status IN ('queued', 'waiting', 'waiting_approval')
+		ORDER BY j.priority DESC, j.queued_at
+		LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []QueuedJob
+	for rows.Next() {
+		var q QueuedJob
+		if err := rows.Scan(&q.ID, &q.RunID, &q.RunNumber, &q.ProjectSlug, &q.JobKey, &q.Name,
+			&q.Status, &q.Needs, &q.RunsOn, &q.Priority, &q.QueuedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, q)
+	}
+	return out, rows.Err()
 }

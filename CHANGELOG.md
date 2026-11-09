@@ -6,6 +6,13 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 ## [Unreleased]
 
 ### Added
+- Dashboard: `GET /runs/day-counts` + `GET /jobs` — per-day run
+  aggregates and the live queue now come from the server, so the
+  runs-per-day chart and activity grid show real history (not the tail
+  of a 100-run fetch) and queue panels show the true claim order.
+  `?day=<iso>` filters the runs list server-side for chart drill-downs.
+- Trace/queue interactivity: MiniTrace lanes and queue rows deep-link to
+  `/runs/<id>?job=<key>`, landing on that job's log.
 - `runner.offline` outbound alert: when the stale-runner sweep flips a
   runner offline, the control plane enqueues a notification event on the
   org's `notify_url` (slack format honoured; `notify_runner_offline=off`

@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { useMemo, useState } from "react";
 import { api } from "../lib/api";
-import type { Run, UsageResponse } from "../lib/types";
+import type { UsageResponse } from "../lib/types";
 import { ActivityMap } from "../components/activitymap";
 import { Card, CardHeader, EmptyState, PageHeader, Spinner, cn } from "../components/ui";
 import { seconds } from "../lib/format";
@@ -28,10 +28,19 @@ export function UsagePage() {
 		queryKey: ["usage", days],
 		queryFn: () => api.get<UsageResponse>(`/usage?days=${days}`),
 	});
-	const { data: runsData } = useQuery({
-		queryKey: ["runs", "all"],
-		queryFn: () => api.get<{ runs: Run[] }>("/runs?limit=200"),
+	const { data: dayCounts } = useQuery({
+		queryKey: ["day-counts", 98],
+		queryFn: () => api.get<{ days: import("../lib/types").DayCount[] }>("/runs/day-counts?days=98"),
 	});
+	const dayTotals = (dayCounts?.days ?? []).reduce((m, c) => {
+		const t = m.get(c.day) ?? { date: c.day, total: 0, failed: 0, cancelled: 0, live: 0 };
+		t.total += c.total;
+		t.failed += c.failed;
+		t.cancelled += c.cancelled;
+		t.live += c.live;
+		m.set(c.day, t);
+		return m;
+	}, new Map<string, import("../components/activitymap").DayTotals>());
 
 	const u = data?.usage;
 	const t = u?.totals;
@@ -117,7 +126,7 @@ export function UsagePage() {
 								<span className="pt">Activity</span>
 								<span className="r">cell = dominant status · weight = run count</span>
 							</div>
-							<ActivityMap runs={runsData?.runs ?? []} weeks={14} />
+							<ActivityMap counts={[...dayTotals.values()]} weeks={14} />
 						</div>
 						<ShareDonut u={u} />
 					</div>
