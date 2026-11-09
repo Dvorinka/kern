@@ -238,9 +238,10 @@ export function OverviewPage() {
 
 	if (isLoading || !data) return <Spinner />;
 	const o = data.overview;
-	const todayStart = new Date();
-	todayStart.setHours(0, 0, 0, 0);
-	const runsToday = runs.filter((r) => Date.parse(r.created_at) >= todayStart.getTime()).length;
+	// Same UTC-day bucket the chart marks "today" — counting the fetched
+	// run page would cap this KPI at the list's limit.
+	const todayKey = new Date().toISOString().slice(0, 10);
+	const runsToday = totals.find((t) => t.date === todayKey)?.total ?? 0;
 	const successRate = o.runs_total ? Math.round((o.runs_success / o.runs_total) * 100) : null;
 
 	const kpis: { k: string; v: string; vs?: string; c: string; to: string }[] = [

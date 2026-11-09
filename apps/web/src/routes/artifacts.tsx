@@ -10,11 +10,15 @@ import { bytes, relTime } from "../lib/format";
 export function ArtifactsPage() {
 	const { data, isLoading } = useQuery({
 		queryKey: ["artifacts"],
-		queryFn: () => api.get<{ artifacts: Artifact[] }>("/artifacts"),
+		// stats cover the whole store — the list itself is a bounded window
+		queryFn: () =>
+			api.get<{
+				artifacts: Artifact[];
+				stats: { count: number; bytes: number; largest: number; runs: number };
+			}>("/artifacts"),
 	});
 
 	const artifacts = useMemo(() => data?.artifacts ?? [], [data]);
-	const totalBytes = artifacts.reduce((n, a) => n + a.size_bytes, 0);
 	const largest = Math.max(...artifacts.map((a) => a.size_bytes), 1);
 
 	// artifacts belong to runs — shelf them that way, newest run first
@@ -54,17 +58,20 @@ export function ArtifactsPage() {
 					<div className="panel kpis mb-4">
 						<div className="kpi">
 							<div className="k">artifacts</div>
-							<div className="v">{artifacts.length}</div>
-							<div className="c">across {groups.length} run{groups.length === 1 ? "" : "s"}</div>
+							<div className="v">{data?.stats.count ?? artifacts.length}</div>
+							<div className="c">
+								across {data?.stats.runs ?? groups.length} run
+								{(data?.stats.runs ?? groups.length) === 1 ? "" : "s"}
+							</div>
 						</div>
 						<div className="kpi">
 							<div className="k">stored</div>
-							<div className="v">{bytes(totalBytes)}</div>
+							<div className="v">{bytes(data?.stats.bytes ?? 0)}</div>
 							<div className="c">compressed archives</div>
 						</div>
 						<div className="kpi">
 							<div className="k">largest</div>
-							<div className="v">{bytes(largest)}</div>
+							<div className="v">{bytes(data?.stats.largest ?? largest)}</div>
 							<div className="c">single archive</div>
 						</div>
 					</div>
