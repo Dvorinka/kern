@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -270,12 +271,12 @@ func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 			}
 			norm = append(norm, a)
 		}
-		opts, _ := parseFlagsEx(norm, []string{"follow"}, "job", "step", "follow")
+		opts, _ := parseFlagsEx(norm, []string{"follow"}, "job", "step", "follow", "out")
 		follow := opts["follow"]
 		if follow == "false" {
 			follow = ""
 		}
-		return c.runLogs(ctx, id, opts["job"], opts["step"], follow)
+		return c.runLogs(ctx, id, opts["job"], opts["step"], follow, opts["out"])
 	case "remediate":
 		opts, pos := parseFlags(rest, "step")
 		jobID, err := strarg(pos, 0, "job id")
@@ -448,14 +449,21 @@ func (c *cli) showRun(ctx context.Context, id string) error {
 	return nil
 }
 
+// logTarget pairs a step with its job directory name for --out exports.
+type logTarget struct {
+	job string
+	st  step
+}
+
 // runLogs pages through step logs; --follow polls until every selected step is
-// terminal. Sequential per-step streaming keeps ordering readable.
-func (c *cli) runLogs(ctx context.Context, runID, jobFilter, stepFilter, follow string) error {
+// terminal. Sequential per-step streaming keeps ordering readable. With --out
+// each step lands in <dir>/run-<id>/<job>/<step>.log plus a run.json summary.
+func (c *cli) runLogs(ctx context.Context, runID, jobFilter, stepFilter, follow, outDir string) error {
 	var out runDetail
 	if err := c.api().get(ctx, "/runs/"+runID, nil, &out); err != nil {
 		return err
 	}
-	var steps []step
+	var targets []logTarget
 	for _, j := range out.Jobs {
 		if jobFilter != "" && j.Key != jobFilter && j.JobKey != jobFilter && j.Name != jobFilter {
 			continue
@@ -464,22 +472,53 @@ func (c *cli) runLogs(ctx context.Context, runID, jobFilter, stepFilter, follow 
 			if stepFilter != "" && fmt.Sprintf("%d", st.Number) != stepFilter {
 				continue
 			}
-			steps = append(steps, st)
+			targets = append(targets, logTarget{job: first(j.JobKey, j.Key, j.Name), st: st})
 		}
 	}
-	if len(steps) == 0 {
+	if len(targets) == 0 {
 		return fmt.Errorf("no steps matched")
 	}
-	for _, st := range steps {
-		fmt.Printf("== %s\n", st.Name)
+
+	var dir string
+	if outDir != "" {
+		dir = filepath.Join(outDir, "run-"+runID)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+		if data, err := json.MarshalIndent(out, "", "  "); err == nil {
+			_ = os.WriteFile(filepath.Join(dir, "run.json"), data, 0o644)
+		}
+	}
+	for _, t := range targets {
+		var f *os.File
+		if dir != "" {
+			jd := filepath.Join(dir, fileSafe(t.job))
+			if err := os.MkdirAll(jd, 0o755); err != nil {
+				return err
+			}
+			name := fmt.Sprintf("%d-%s.log", t.st.Number, fileSafe(t.st.Name))
+			var err error
+			if f, err = os.Create(filepath.Join(jd, name)); err != nil {
+				return err
+			}
+		} else {
+			fmt.Printf("== %s\n", t.st.Name)
+		}
 		offset := int64(0)
 		for {
 			var chunk stepLog
 			q := url.Values{"offset": {fmt.Sprintf("%d", offset)}}
-			if err := c.api().get(ctx, "/steps/"+st.ID+"/logs", q, &chunk); err != nil {
+			if err := c.api().get(ctx, "/steps/"+t.st.ID+"/logs", q, &chunk); err != nil {
+				if f != nil {
+					f.Close()
+				}
 				return err
 			}
-			fmt.Print(chunk.Text)
+			if f != nil {
+				_, _ = f.WriteString(chunk.Text)
+			} else {
+				fmt.Print(chunk.Text)
+			}
 			offset = chunk.NextOffset
 			terminal := chunk.Status != "running" && chunk.Status != "queued"
 			if follow == "" || (terminal && offset >= chunk.Size) {
@@ -487,8 +526,26 @@ func (c *cli) runLogs(ctx context.Context, runID, jobFilter, stepFilter, follow 
 			}
 			time.Sleep(800 * time.Millisecond)
 		}
+		if f != nil {
+			f.Close()
+		}
+	}
+	if dir != "" {
+		fmt.Printf("wrote %d step logs to %s\n", len(targets), dir)
 	}
 	return nil
+}
+
+// fileSafe maps a job/step name to a single safe path component.
+func fileSafe(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '.', r == '-', r == '_':
+			return r
+		}
+		return '_'
+	}, s)
 }
 
 func short(s string, n int) string {
