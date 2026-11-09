@@ -274,23 +274,27 @@ func (a *Agent) sweepWorkspaces() {
 	}
 }
 
-// sweepBoundedCache enforces Config.CacheMaxBytes on the _cache tree. Files
-// are evicted oldest-mtime-first; every resident is a rebuildable cache entry
-// (language caches, _toolcache downloads, _actions checkouts), so removal is
-// always safe — a miss just costs a re-download or recompile. Skipped while a
-// job is active so an in-flight build never loses its warm cache mid-step.
+// sweepBoundedCache enforces Config.CacheMaxBytes on the _cache tree.
+// Eviction is by atomic unit, not loose files: removing part of an
+// extracted module, installed tool, or action checkout corrupts it — go
+// stamps module files with uniformly old mtimes, so file-level eviction
+// shredded gomod trees first (missing .go/.s files under intact dirs).
+// Every unit is a rebuildable cache entry; a miss just costs a
+// re-download or recompile. Skipped while a job is active so an
+// in-flight build never loses its warm cache mid-step.
 func (a *Agent) sweepBoundedCache() {
 	limit := a.cfg.CacheMaxBytes
 	if limit <= 0 || a.active.Load() > 0 {
 		return
 	}
 	root := filepath.Join(a.cfg.WorkRoot, "_cache")
-	type entry struct {
+	type unit struct {
 		path string
+		dir  bool
 		size int64
 		mod  time.Time
 	}
-	var files []entry
+	units := map[string]*unit{}
 	var total int64
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -303,30 +307,96 @@ func (a *Agent) sweepBoundedCache() {
 		if err != nil {
 			return nil
 		}
-		files = append(files, entry{path, info.Size(), info.ModTime()})
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return nil
+		}
+		upath, udir := cacheEvictionUnit(root, rel)
+		u := units[upath]
+		if u == nil {
+			u = &unit{path: upath, dir: udir}
+			units[upath] = u
+		}
+		u.size += info.Size()
+		if info.ModTime().After(u.mod) {
+			u.mod = info.ModTime()
+		}
 		total += info.Size()
 		return nil
 	})
 	if err != nil || total <= limit {
 		return
 	}
-	sort.Slice(files, func(i, j int) bool { return files[i].mod.Before(files[j].mod) })
+	list := make([]*unit, 0, len(units))
+	for _, u := range units {
+		list = append(list, u)
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].mod.Before(list[j].mod) })
 	var freed int64
-	for _, f := range files {
+	for _, u := range list {
 		if total <= limit {
 			break
 		}
-		if err := os.Remove(f.path); err != nil {
+		var err error
+		if u.dir {
+			err = os.RemoveAll(u.path)
+			// toolcache done-markers sit beside the install dir.
+			_ = os.Remove(u.path + ".complete")
+		} else {
+			err = os.Remove(u.path)
+		}
+		if err != nil {
 			continue
 		}
-		total -= f.size
-		freed += f.size
+		total -= u.size
+		freed += u.size
 	}
 	if freed > 0 {
 		a.log.Info("cache bound: evicted oldest entries",
 			zap.Int64("freed_bytes", freed), zap.Int64("remaining_bytes", total),
 			zap.Int64("cap_bytes", limit))
 	}
+}
+
+// cacheEvictionUnit maps a file under the persistent _cache tree to the
+// smallest subtree that may be removed atomically. Tree sections return
+// their entry dir (dir=true); flat content-addressed sections and loose
+// files return the file itself.
+//
+//   - gomod: <mod>@<ver> extracted trees and per-module @v download dirs
+//     are atomic — go assumes an existing module dir is complete.
+//   - _toolcache/<tool>/<ver>: install trees; sibling <ver>.complete
+//     markers resolve to the same unit.
+//   - _actions/<entry>, ms-playwright/<entry>: one checkout/install per
+//     direct child.
+//   - gocache, pnpm-store, gotmp, gopath: content-addressed flat files —
+//     a missing entry is a plain cache miss.
+//   - unknown sections: direct children evict whole — coarse but always
+//     safe; add a case if finer granularity is needed.
+func cacheEvictionUnit(root, rel string) (string, bool) {
+	parts := strings.Split(rel, string(filepath.Separator))
+	if len(parts) == 1 {
+		return filepath.Join(root, rel), false
+	}
+	switch parts[0] {
+	case "gomod":
+		for i := 1; i < len(parts)-1; i++ {
+			if strings.Contains(parts[i], "@") {
+				return filepath.Join(append([]string{root}, parts[:i+1]...)...), true
+			}
+		}
+	case "_toolcache":
+		if len(parts) >= 3 {
+			ver := strings.TrimSuffix(parts[2], ".complete")
+			return filepath.Join(root, parts[0], parts[1], ver), true
+		}
+	case "_actions", "ms-playwright":
+		return filepath.Join(root, parts[0], parts[1]), true
+	case "gocache", "pnpm-store", "gotmp", "gopath":
+	default:
+		return filepath.Join(root, parts[0], parts[1]), true
+	}
+	return filepath.Join(root, rel), false
 }
 
 func (a *Agent) maybePruneDisk(ctx context.Context) {

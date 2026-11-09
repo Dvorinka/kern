@@ -20,6 +20,14 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
   re-runs a single job and its dependents — matching `gh run rerun`
   instead of seeding a whole new run (#179).
 
+### Fixed
+- Runner: the `_cache` size bound now evicts whole atomic entries —
+  extracted `<mod>@<ver>` trees, `_toolcache` installs (marker included),
+  `_actions` checkouts, playwright browsers — instead of loose files.
+  Per-file eviction corrupted atomic trees: go stamps module files with
+  uniformly old mtimes, so the sweep shredded `gomod` first and builds
+  failed on missing `.go`/`.s` files under intact-looking dirs (#211).
+
 ## [v0.6.3] - 2026-11-09
 
 ### Fixed
