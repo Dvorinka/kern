@@ -132,6 +132,9 @@ type Run struct {
 	StartedAt         *time.Time      `json:"started_at"`
 	CompletedAt       *time.Time      `json:"completed_at"`
 	CreatedAt         time.Time       `json:"created_at"`
+	// ClearedAt hides the run from default lists (rerun of a cancelled run,
+	// or an explicit clear). The row and its history remain.
+	ClearedAt *time.Time `json:"cleared_at,omitempty"`
 	// Joined fields.
 	WorkflowName string `json:"workflow_name"`
 	WorkflowPath string `json:"workflow_path"`
