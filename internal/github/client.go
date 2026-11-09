@@ -122,6 +122,56 @@ func (c *Client) HeadSHA(ctx context.Context, repo, ref string) (string, error) 
 	return out.SHA, nil
 }
 
+// PullRequestInfo is the subset of GET /repos/{repo}/pulls/{n} needed to
+// rebuild a webhook-shaped event payload for a manually dispatched run.
+type PullRequestInfo struct {
+	Number    int
+	Title     string
+	UserLogin string
+	Head      struct {
+		Ref          string
+		SHA          string
+		RepoFullName string
+	}
+	Base struct {
+		Ref string
+		SHA string
+	}
+}
+
+// PullRequest fetches pull request metadata; repo may be deleted on the head
+// side, in which case RepoFullName comes back empty.
+func (c *Client) PullRequest(ctx context.Context, repo string, number int) (*PullRequestInfo, error) {
+	var raw struct {
+		Number int    `json:"number"`
+		Title  string `json:"title"`
+		User   struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		Head struct {
+			Ref  string `json:"ref"`
+			SHA  string `json:"sha"`
+			Repo *struct {
+				FullName string `json:"full_name"`
+			} `json:"repo"`
+		} `json:"head"`
+		Base struct {
+			Ref string `json:"ref"`
+			SHA string `json:"sha"`
+		} `json:"base"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/repos/"+repo+"/pulls/"+strconv.Itoa(number), "", nil, &raw); err != nil {
+		return nil, err
+	}
+	pr := &PullRequestInfo{Number: raw.Number, Title: raw.Title, UserLogin: raw.User.Login}
+	pr.Head.Ref, pr.Head.SHA = raw.Head.Ref, raw.Head.SHA
+	if raw.Head.Repo != nil {
+		pr.Head.RepoFullName = raw.Head.Repo.FullName
+	}
+	pr.Base.Ref, pr.Base.SHA = raw.Base.Ref, raw.Base.SHA
+	return pr, nil
+}
+
 // WorkflowFile is a workflow discovered under .github/workflows.
 type WorkflowFile struct {
 	Path string
