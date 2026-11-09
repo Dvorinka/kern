@@ -267,8 +267,11 @@ type Runner struct {
 	// Env is the operator-managed env override map delivered on heartbeat
 	// and merged into every job's base env — app-set values win over
 	// container and env-file defaults.
-	Env       map[string]string `json:"env"`
-	CreatedAt time.Time         `json:"created_at"`
+	Env map[string]string `json:"env"`
+	// DiskAlerted latches while the runner's free-space sample sits below
+	// the org's disk_alert_pct threshold — one audit event per episode.
+	DiskAlerted bool      `json:"disk_alerted"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 // HostMetrics is the live utilization snapshot a runner sends with each
