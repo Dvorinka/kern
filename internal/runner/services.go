@@ -194,7 +194,7 @@ func (e *executor) startService(ctx context.Context, net string, svc ClaimServic
 	if err != nil {
 		return fmt.Errorf("start: %s", tailStr(string(out), 300))
 	}
-	return nil
+	return e.startPortForwards(ctx, svc)
 }
 
 // publishSpec normalises a workflow `ports:` entry ("5433:5432", "5432",
@@ -210,6 +210,63 @@ func publishSpec(p string) string {
 		return p + proto
 	}
 	return p + ":" + p + proto
+}
+
+// portSpecParts splits a compiled ports: entry into host port, container
+// port and protocol. Single-port entries report the same port twice.
+func portSpecParts(p string) (host, container, proto string) {
+	if i := strings.LastIndex(p, "/"); i >= 0 {
+		proto, p = p[i:], p[:i]
+	}
+	if i := strings.Index(p, ":"); i >= 0 {
+		return p[:i], p[i+1:], proto
+	}
+	return p, p, proto
+}
+
+// startPortForwards honours `ports:` host-side remaps on bridge jobs. The
+// service shares the job's netns and binds its own port on the shared
+// localhost; GitHub's contract is that the workflow's host port answers
+// instead, so for every host:container pair that differs a sibling
+// forwarder container joins the same netns and splices host→container.
+// Privileged jobs publish real -p mappings and never reach this.
+func (e *executor) startPortForwards(ctx context.Context, svc ClaimService) error {
+	if e.privileged() {
+		return nil // real 127.0.0.1 -p publishes already applied
+	}
+	var remaps [][2]string
+	for _, p := range svc.Ports {
+		host, cont, proto := portSpecParts(p)
+		if host == cont {
+			continue
+		}
+		if proto != "" && proto != "/tcp" {
+			e.log.Warn("service port remap skipped (tcp only)",
+				zap.String("service", svc.Name), zap.String("port", p))
+			continue
+		}
+		remaps = append(remaps, [2]string{host, cont})
+	}
+	if len(remaps) == 0 {
+		return nil
+	}
+	image, err := e.ensureEgressImage(ctx)
+	if err != nil {
+		return fmt.Errorf("port-forward image: %w", err)
+	}
+	for _, m := range remaps {
+		name := fmt.Sprintf("%s-fwd-%s", e.serviceContainerName(svc), m[0])
+		out, err := exec.CommandContext(ctx, "docker",
+			"run", "-d", "--rm", "--name", name,
+			"--network", "container:"+e.container,
+			image, "port-forward",
+			"--listen", ":"+m[0], "--to", "127.0.0.1:"+m[1]).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("port forward %s→%s: %s", m[0], m[1], tailStr(string(out), 300))
+		}
+		e.svcForwarders = append(e.svcForwarders, name)
+	}
+	return nil
 }
 
 // hostPortLocks serializes host-published service ports across the jobs one
@@ -445,6 +502,10 @@ func (e *executor) stopServices(ctx context.Context) {
 	for _, svc := range e.claim.Job.Services {
 		_ = exec.CommandContext(ctx, "docker", "rm", "-f", e.serviceContainerName(svc)).Run()
 	}
+	for _, name := range e.svcForwarders {
+		_ = exec.CommandContext(ctx, "docker", "rm", "-f", name).Run()
+	}
+	e.svcForwarders = nil
 	e.stopEgress(ctx)
 	if (e.egressRestricted() || len(e.networkedServices()) > 0) && !e.privileged() {
 		_ = exec.CommandContext(ctx, "docker", "network", "rm", e.serviceNet()).Run()

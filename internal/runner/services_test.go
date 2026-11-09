@@ -23,6 +23,26 @@ func TestPublishSpec(t *testing.T) {
 	}
 }
 
+func TestPortSpecParts(t *testing.T) {
+	cases := []struct {
+		in         string
+		host, cont string
+		proto      string
+	}{
+		{"5432", "5432", "5432", ""},
+		{"5433:5432", "5433", "5432", ""},
+		{"8080:80/tcp", "8080", "80", "/tcp"},
+		{"53/udp", "53", "53", "/udp"},
+		{"5353:53/udp", "5353", "53", "/udp"},
+	}
+	for _, c := range cases {
+		h, k, p := portSpecParts(c.in)
+		if h != c.host || k != c.cont || p != c.proto {
+			t.Errorf("portSpecParts(%q) = %q,%q,%q want %q,%q,%q", c.in, h, k, p, c.host, c.cont, c.proto)
+		}
+	}
+}
+
 func TestPublishLockKey(t *testing.T) {
 	cases := map[string]string{
 		"5432":        "127.0.0.1:5432",

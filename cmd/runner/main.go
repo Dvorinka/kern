@@ -226,6 +226,9 @@ func main() {
 	if len(args) > 0 && args[0] == "egress-proxy" {
 		os.Exit(runEgressProxy(args[1:]))
 	}
+	if len(args) > 0 && args[0] == "port-forward" {
+		os.Exit(runPortForward(args[1:]))
+	}
 	loadConfigFile(args)
 	o, ok := parse(args)
 	if !ok {
@@ -256,6 +259,32 @@ func runEgressProxy(args []string) int {
 	}
 	if err := runner.RunEgressProxy(listen, allow); err != nil {
 		fmt.Fprintln(os.Stderr, "kern-runner egress-proxy:", err)
+		return 1
+	}
+	return 0
+}
+
+// runPortForward is the internal entrypoint the executor packages into the
+// kern-egress image for service host:container port remaps on bridge jobs.
+// Not a user-facing mode — the forwarder lives inside the job's netns.
+func runPortForward(args []string) int {
+	var listen, to string
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--listen" && i+1 < len(args):
+			i++
+			listen = args[i]
+		case strings.HasPrefix(args[i], "--listen="):
+			listen = strings.TrimPrefix(args[i], "--listen=")
+		case args[i] == "--to" && i+1 < len(args):
+			i++
+			to = args[i]
+		case strings.HasPrefix(args[i], "--to="):
+			to = strings.TrimPrefix(args[i], "--to=")
+		}
+	}
+	if err := runner.RunPortForward(listen, to); err != nil {
+		fmt.Fprintln(os.Stderr, "kern-runner port-forward:", err)
 		return 1
 	}
 	return 0
