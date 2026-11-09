@@ -67,10 +67,16 @@ func (a *Agent) imageGCLoop(ctx context.Context) {
 }
 
 func (a *Agent) sweepImages(ctx context.Context) {
+	a.sweepImagesOlder(ctx, a.cfg.ImageMaxAge)
+}
+
+// sweepImagesOlder removes ledger-tracked images unused for longer than
+// maxAge — the same rules as sweepImages but at the caller's horizon.
+func (a *Agent) sweepImagesOlder(ctx context.Context, maxAge time.Duration) {
 	if a.active.Load() > 0 {
 		return // never pull an image out from under a running job
 	}
-	cutoff := time.Now().Add(-a.cfg.ImageMaxAge).Unix()
+	cutoff := time.Now().Add(-maxAge).Unix()
 	ledger := loadImageLedger(a.cfg.WorkRoot)
 	dirty := false
 	for image, usedAt := range ledger {
@@ -252,11 +258,17 @@ func (a *Agent) pruneDangling(ctx context.Context) {
 // _cache/_node/_cli/_tool/_actions and the image ledger are managed state and
 // are never touched.
 func (a *Agent) sweepWorkspaces() {
+	a.sweepWorkspacesOlderThan(staleWorkspaceAge)
+}
+
+// sweepWorkspacesOlderThan is sweepWorkspaces at the caller's horizon —
+// critical disk pressure tightens the stale age.
+func (a *Agent) sweepWorkspacesOlderThan(age time.Duration) {
 	entries, err := os.ReadDir(a.cfg.WorkRoot)
 	if err != nil {
 		return
 	}
-	cutoff := time.Now().Add(-staleWorkspaceAge)
+	cutoff := time.Now().Add(-age)
 	for _, e := range entries {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), "_") {
 			continue
@@ -283,7 +295,12 @@ func (a *Agent) sweepWorkspaces() {
 // re-download or recompile. Skipped while a job is active so an
 // in-flight build never loses its warm cache mid-step.
 func (a *Agent) sweepBoundedCache() {
-	limit := a.cfg.CacheMaxBytes
+	a.sweepBoundedCacheTo(a.cfg.CacheMaxBytes)
+}
+
+// sweepBoundedCacheTo is sweepBoundedCache against the caller's floor —
+// critical disk pressure evicts to a tighter bound than the daily cap.
+func (a *Agent) sweepBoundedCacheTo(limit int64) {
 	if limit <= 0 || a.active.Load() > 0 {
 		return
 	}
@@ -399,6 +416,15 @@ func cacheEvictionUnit(root, rel string) (string, bool) {
 	return filepath.Join(root, rel), false
 }
 
+// Critical-tier horizons: under critical pressure the runner reclaims
+// harder than the warn tier's docker prune — ledger images unused past a
+// day, workspaces older than a couple of hours, and the cache floor
+// halves. Everything stays gated on active == 0.
+const (
+	criticalImageAge     = 24 * time.Hour
+	criticalWorkspaceAge = 2 * time.Hour
+)
+
 func (a *Agent) maybePruneDisk(ctx context.Context) {
 	if a.executor() != "docker" {
 		return // host mode has no daemon to prune
@@ -408,14 +434,24 @@ func (a *Agent) maybePruneDisk(ctx context.Context) {
 		return
 	}
 	free, total := diskSpace(a.cfg.WorkRoot)
-	if !diskUnderPressure(free, total, pct) {
+	critical := diskCritical(free, total, a.cfg.DiskCriticalFreePct, a.cfg.DiskCriticalFloorBytes)
+	if !diskUnderPressure(free, total, pct) && !critical {
 		return
 	}
 	if a.active.Load() > 0 {
-		a.log.Warn("disk pressure: jobs active, docker prune deferred",
+		a.log.Warn("disk pressure: jobs active, reclaim deferred",
 			zap.Int64("free_bytes", free), zap.Int64("total_bytes", total),
-			zap.Float64("min_free_pct", pct))
+			zap.Float64("min_free_pct", pct), zap.Bool("critical", critical))
 		return
+	}
+	if critical {
+		a.log.Warn("disk critical: escalating reclaim",
+			zap.Int64("free_bytes", free), zap.Int64("total_bytes", total),
+			zap.Float64("critical_free_pct", a.cfg.DiskCriticalFreePct),
+			zap.Int64("critical_floor_bytes", a.cfg.DiskCriticalFloorBytes))
+		a.sweepImagesOlder(ctx, criticalImageAge)
+		a.sweepWorkspacesOlderThan(criticalWorkspaceAge)
+		a.sweepBoundedCacheTo(a.cfg.CacheMaxBytes / 2)
 	}
 	a.log.Warn("disk pressure: pruning docker",
 		zap.Int64("free_bytes", free), zap.Int64("total_bytes", total),
@@ -447,6 +483,16 @@ func (a *Agent) maybePruneDisk(ctx context.Context) {
 // pct <= 0 disables the check; total == 0 means statfs failed.
 func diskUnderPressure(free, total int64, pct float64) bool {
 	return pct > 0 && total > 0 && float64(free)*100 < float64(total)*pct
+}
+
+// diskCritical reports the critical tier: free space below pct percent of
+// total OR below the absolute floor, whichever trips first. Either bound
+// of zero disables that half.
+func diskCritical(free, total int64, pct float64, floor int64) bool {
+	if diskUnderPressure(free, total, pct) {
+		return true
+	}
+	return floor > 0 && free < floor
 }
 
 // prepullLoop pulls Config.Prepull images at startup and hourly so job image

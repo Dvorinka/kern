@@ -33,6 +33,12 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
   cancelled jobs in place (plus their dependents), and `--job KEY`
   re-runs a single job and its dependents — matching `gh run rerun`
   instead of seeding a whole new run (#179).
+- Critical-tier disk reclaim: below `KERN_RUNNER_DISK_CRITICAL_FREE_PCT`
+  (default 5) or `KERN_RUNNER_DISK_CRITICAL_FLOOR_BYTES` (default 2 GiB),
+  whichever trips first, the idle runner also removes ledger-tracked
+  images unused >24h, sweeps workspaces older than 2h, and evicts
+  `_cache` down to half its cap — before reaching for the docker prune
+  the warn tier already runs (#211).
 
 ### Fixed
 - Runner: the `_cache` size bound now evicts whole atomic entries —

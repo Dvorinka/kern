@@ -69,6 +69,10 @@ Symptoms: jobs die with `ENOSPC` mid-step, `docker` errors, runner GC warnings.
   under `_node`/`_toolcache`.
 - Below `KERN_RUNNER_DISK_MIN_FREE_PCT` (default 10, `0` disables) the runner
   prunes reclaimable Docker space — but only while idle; active jobs defer it.
+- Under the critical tier — free below `KERN_RUNNER_DISK_CRITICAL_FREE_PCT`
+  (default 5) or `KERN_RUNNER_DISK_CRITICAL_FLOOR_BYTES` (default 2 GiB),
+  whichever trips first — the runner additionally drops ledger images unused
+  >24h, workspaces >2h, and evicts `_cache` to half its cap. Still idle-gated.
 - `KERN_RUNNER_IMAGE_MAX_AGE` GCs pulled job images; `KERN_RUNNER_PREPULL`
   keeps hot images local.
 - Manual: `docker system df` then `docker image prune` / `docker builder prune`
