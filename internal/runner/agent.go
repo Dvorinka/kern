@@ -64,6 +64,14 @@ type Config struct {
 	// (KERN_RUNNER_DISK_MIN_FREE_PCT, default 10). Zero disables both;
 	// the stale-workspace sweep always runs.
 	DiskMinFreePct float64
+	// DiskCriticalFreePct and DiskCriticalFloorBytes mark the critical
+	// reclaim tier — whichever trips first escalates beyond the docker
+	// prune: ledger images unused >24h, workspaces >2h, and the _cache
+	// floor halves (KERN_RUNNER_DISK_CRITICAL_FREE_PCT default 5,
+	// KERN_RUNNER_DISK_CRITICAL_FLOOR_BYTES default 2 GiB). Zero disables
+	// each bound. Idle-gated like the warn tier.
+	DiskCriticalFreePct    float64
+	DiskCriticalFloorBytes int64
 	// Executor selects the job execution substrate: "docker" (default)
 	// runs steps in ephemeral containers; "host" runs them as local
 	// processes on the runner host. Host mode has no isolation and the

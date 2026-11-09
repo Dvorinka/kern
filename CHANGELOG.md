@@ -38,6 +38,12 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
   runs first — the baseline toolset GitHub's ubuntu image ships on PATH
   (curl/jq/git already live in the `kern-ubuntu` parity image). The
   provision is once per runner host and best-effort (#220).
+- Critical-tier disk reclaim: below `KERN_RUNNER_DISK_CRITICAL_FREE_PCT`
+  (default 5) or `KERN_RUNNER_DISK_CRITICAL_FLOOR_BYTES` (default 2 GiB),
+  whichever trips first, the idle runner also removes ledger-tracked
+  images unused >24h, sweeps workspaces older than 2h, and evicts
+  `_cache` down to half its cap — before reaching for the docker prune
+  the warn tier already runs (#211).
 
 ### Fixed
 - Runner: the `_cache` size bound now evicts whole atomic entries —
