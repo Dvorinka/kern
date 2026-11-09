@@ -346,6 +346,7 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 			AutoUpdate      string `json:"auto_update"`
 			RunnerAutostart string `json:"runner_autostart"`
 			ForkGate        string `json:"fork_gate"`
+			PrTrust         string `json:"pr_trust"`
 		}
 		if err := c.api().get(ctx, path, nil, &out); err != nil {
 			return err
@@ -376,11 +377,16 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 					v = "off"
 				}
 				fmt.Println("fork_gate:", v)
+				v = out.PrTrust
+				if v == "" {
+					v = "off"
+				}
+				fmt.Println("pr_trust:", v)
 			}
 		}
 	case "set":
 		if len(pos) < 2 {
-			return fmt.Errorf("usage: kern settings set self_heal off|auto|approve [--project S] | public_ci on|off | auto_update on|off | fork_gate off|all|first-time --project S")
+			return fmt.Errorf("usage: kern settings set self_heal off|auto|approve [--project S] | public_ci on|off | auto_update on|off | fork_gate off|all|first-time --project S | pr_trust off|trusted --project S")
 		}
 		body := map[string]any{}
 		switch pos[0] {
@@ -420,8 +426,16 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 				return fmt.Errorf("usage: kern settings set fork_gate off|all|first-time --project S")
 			}
 			body["fork_gate"] = pos[1]
+		case "pr_trust":
+			if path == "/settings" {
+				return fmt.Errorf("pr_trust is a project setting — pass --project S")
+			}
+			if pos[1] != "off" && pos[1] != "trusted" {
+				return fmt.Errorf("usage: kern settings set pr_trust off|trusted --project S")
+			}
+			body["pr_trust"] = pos[1]
 		default:
-			return fmt.Errorf("usage: kern settings set self_heal off|auto|approve [--project S] | public_ci on|off | auto_update on|off | fork_gate off|all|first-time --project S")
+			return fmt.Errorf("usage: kern settings set self_heal off|auto|approve [--project S] | public_ci on|off | auto_update on|off | fork_gate off|all|first-time --project S | pr_trust off|trusted --project S")
 		}
 		var out map[string]string
 		if err := c.api().put(ctx, path, body, &out); err != nil {
