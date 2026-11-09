@@ -342,6 +342,16 @@ func (e *executor) prepare(ctx context.Context) error {
 		e.goStop()
 		return fmt.Errorf("pull image: %w", err)
 	}
+	// Baseline toolset: the parity image ships curl/jq/git, and node rides
+	// the provisioned runtime so `node`/`npm` work in plain run steps even
+	// when no JS action runs first (GitHub's ubuntu image ships node on
+	// PATH). Best-effort — a failed download degrades to on-demand
+	// provisioning inside JS actions.
+	if err := e.ensureNode(ctx); err != nil {
+		e.log.Warn("baseline node provision failed; JS actions will retry", zap.Error(err))
+	} else {
+		e.enc.persistPaths([]string{e.nodeBinDir()})
+	}
 	if !e.privileged() {
 		if err := e.ensureEgress(ctx); err != nil {
 			e.goStop()
