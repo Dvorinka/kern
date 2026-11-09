@@ -3,6 +3,7 @@ package runner
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -213,6 +214,17 @@ type heartbeatResponse struct {
 	// Deregistered confirms the control plane deleted this runner's row; the
 	// agent exits once it sees this.
 	Deregistered bool `json:"deregistered"`
+	// Exec lists pending live-exec requests for jobs leased to this runner
+	// (#132). Each spawns one session; the map dedupes redelivery.
+	Exec []execOffer `json:"exec"`
+}
+
+// execOffer is a live-exec request delivered on the heartbeat.
+type execOffer struct {
+	ID          string `json:"id"`
+	JobID       string `json:"job_id"`
+	Command     string `json:"command"`
+	Interactive bool   `json:"interactive"`
 }
 
 func (c *client) heartbeat(ctx context.Context, m heartbeatMetrics) (heartbeatResponse, error) {
@@ -307,6 +319,36 @@ func (c *client) finishJob(ctx context.Context, jobID, conclusion string, output
 	return c.do(ctx, http.MethodPost, path, map[string]any{
 		"conclusion": conclusion, "outputs": outputs, "error": errMsg, "metrics": metrics,
 	}, nil)
+}
+
+func (c *client) execStart(ctx context.Context, execID string) error {
+	return c.do(ctx, http.MethodPost, "/api/v1/runners/exec/"+url.PathEscape(execID)+"/start", map[string]any{}, nil)
+}
+
+// execOutput appends one output chunk to the session blob.
+func (c *client) execOutput(ctx context.Context, execID string, data []byte) error {
+	return c.do(ctx, http.MethodPost, "/api/v1/runners/exec/"+url.PathEscape(execID)+"/output", data, nil)
+}
+
+// execStdin returns stdin bytes after offset, the total size, and whether
+// the client closed the pipe.
+func (c *client) execStdin(ctx context.Context, execID string, after int64) ([]byte, int64, bool, error) {
+	var out struct {
+		Data   string `json:"data"`
+		Size   int64  `json:"size"`
+		Closed bool   `json:"closed"`
+	}
+	path := fmt.Sprintf("/api/v1/runners/exec/%s/stdin?after=%d", url.PathEscape(execID), after)
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, 0, false, err
+	}
+	data, err := base64.StdEncoding.DecodeString(out.Data)
+	return data, out.Size, out.Closed, err
+}
+
+func (c *client) execFinish(ctx context.Context, execID string, exitCode *int, errText string) error {
+	return c.do(ctx, http.MethodPost, "/api/v1/runners/exec/"+url.PathEscape(execID)+"/finish",
+		map[string]any{"exit_code": exitCode, "error": errText}, nil)
 }
 
 func (c *client) cancelCheck(ctx context.Context, jobID string) (bool, error) {

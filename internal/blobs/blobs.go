@@ -189,3 +189,13 @@ func LogKey(runID, jobID string, stepNumber int) string {
 func SummaryKey(jobID string, stepNumber int) string {
 	return fmt.Sprintf("summaries/%s/%d.md", jobID, stepNumber)
 }
+
+// ExecOutKey is the blob key for an exec session's combined output stream.
+func ExecOutKey(jobID, execID string) string {
+	return fmt.Sprintf("exec/%s/%s.out", jobID, execID)
+}
+
+// ExecStdinKey is the blob key for an exec session's stdin pipe.
+func ExecStdinKey(jobID, execID string) string {
+	return fmt.Sprintf("exec/%s/%s.stdin", jobID, execID)
+}

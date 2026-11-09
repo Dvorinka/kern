@@ -264,6 +264,10 @@ func (s *Server) buildRouter() *gin.Engine {
 		write.POST("/jobs/:id/remediate", s.approveRemediation)
 		write.POST("/jobs/:id/remediate-dismiss", s.dismissRemediation)
 
+		admin.POST("/jobs/:id/exec", s.createExec)
+		auth.GET("/exec/:id", s.getExec)
+		admin.POST("/exec/:id/stdin", s.postExecStdin)
+
 		auth.GET("/secrets", s.listSecrets)
 		admin.PUT("/secrets/:name", s.putSecret)
 		admin.DELETE("/secrets/:name", s.deleteSecret)
@@ -294,6 +298,10 @@ func (s *Server) buildRouter() *gin.Engine {
 		runner.GET("/runners/jobs/:jobID/artifacts/:name", s.downloadArtifact)
 		runner.GET("/runners/jobs/:jobID/cache/restore", s.cacheRestore)
 		runner.PUT("/runners/jobs/:jobID/cache/:key", s.cacheSave)
+		runner.POST("/runners/exec/:execID/start", s.execStart)
+		runner.POST("/runners/exec/:execID/output", s.execOutput)
+		runner.GET("/runners/exec/:execID/stdin", s.execStdinFeed)
+		runner.POST("/runners/exec/:execID/finish", s.execFinish)
 	}
 
 	// GitHub cache-service v1 protocol — what @actions/cache (and the
