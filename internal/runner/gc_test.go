@@ -93,6 +93,84 @@ func TestSweepBoundedCache(t *testing.T) {
 	}
 }
 
+// Extracted module trees, tool installs and action checkouts are atomic:
+// eviction removes the whole entry or leaves it intact — never loose
+// files inside one (go stamps module files with old mtimes, so file-level
+// eviction shredded gomod first on the fleet).
+func TestSweepBoundedCacheAtomicUnits(t *testing.T) {
+	root := t.TempDir()
+	cache := filepath.Join(root, "_cache")
+	old := time.Now().Add(-48 * time.Hour)
+	write := func(name string, size int, mtime time.Time) {
+		p := filepath.Join(cache, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, make([]byte, size), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(p, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("gomod/github.com/foo/bar@v1.0.0/a.go", 300, old)
+	write("gomod/github.com/foo/bar@v1.0.0/sub/b.go", 300, old)
+	write("gomod/github.com/foo/baz@v2.0.0/c.go", 300, time.Now())
+	write("_toolcache/go/1.26.10/x64/bin/go", 100, old)
+	write("_toolcache/go/1.26.10.complete", 10, old)
+	write("gocache/aa/newer", 290, time.Now())
+
+	// Total 1300 against a 600 cap: evicts the cold module tree (600),
+	// then the cold tool install (110) — the marker dies with it. The
+	// fresh module and flat-section file stay.
+	a := &Agent{cfg: Config{WorkRoot: root, CacheMaxBytes: 600}, log: zap.NewNop()}
+	a.sweepBoundedCache()
+
+	for _, gone := range []string{
+		"gomod/github.com/foo/bar@v1.0.0",
+		"_toolcache/go/1.26.10",
+		"_toolcache/go/1.26.10.complete",
+	} {
+		if _, err := os.Stat(filepath.Join(cache, gone)); !os.IsNotExist(err) {
+			t.Errorf("%s should be evicted whole", gone)
+		}
+	}
+	for _, kept := range []string{
+		"gomod/github.com/foo/baz@v2.0.0/c.go",
+		"gocache/aa/newer",
+	} {
+		if _, err := os.Stat(filepath.Join(cache, kept)); err != nil {
+			t.Errorf("%s should be kept: %v", kept, err)
+		}
+	}
+}
+
+func TestCacheEvictionUnit(t *testing.T) {
+	cases := []struct {
+		rel  string
+		want string
+		dir  bool
+	}{
+		{"gomod/github.com/foo/bar@v1.0.0/a.go", "gomod/github.com/foo/bar@v1.0.0", true},
+		{"gomod/cache/download/github.com/foo/@v/v1.0.0.zip", "gomod/cache/download/github.com/foo/@v", true},
+		{"gomod/cache/lock", "gomod/cache/lock", false},
+		{"_toolcache/go/1.26.10/x64/bin/go", "_toolcache/go/1.26.10", true},
+		{"_toolcache/go/1.26.10.complete", "_toolcache/go/1.26.10", true},
+		{"_actions/actions__checkout__abc123/dist/index.js", "_actions/actions__checkout__abc123", true},
+		{"ms-playwright/chromium-1187/chrome-linux/chrome", "ms-playwright/chromium-1187", true},
+		{"gocache/aa/bb0123", "gocache/aa/bb0123", false},
+		{"pnpm-store/v3/files/ab/cd", "pnpm-store/v3/files/ab/cd", false},
+		{"unknown-section/sub/file", "unknown-section/sub", true},
+		{"loose.bin", "loose.bin", false},
+	}
+	for _, c := range cases {
+		got, dir := cacheEvictionUnit("/root", c.rel)
+		if want := filepath.Join("/root", c.want); got != want || dir != c.dir {
+			t.Errorf("cacheEvictionUnit(%q) = %q,%v want %q,%v", c.rel, got, dir, want, c.dir)
+		}
+	}
+}
+
 func TestDiskUnderPressure(t *testing.T) {
 	cases := []struct {
 		free, total int64

@@ -25,6 +25,12 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
   instead of seeding a whole new run (#179).
 
 ### Fixed
+- Runner: the `_cache` size bound now evicts whole atomic entries —
+  extracted `<mod>@<ver>` trees, `_toolcache` installs (marker included),
+  `_actions` checkouts, playwright browsers — instead of loose files.
+  Per-file eviction corrupted atomic trees: go stamps module files with
+  uniformly old mtimes, so the sweep shredded `gomod` first and builds
+  failed on missing `.go`/`.s` files under intact-looking dirs (#211).
 - Prepare/checkout failures that die before any step (ENOSPC, image
   pull) now get a classified job error with the runner's live free
   space instead of a raw `no space left on device` string, and step
