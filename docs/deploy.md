@@ -151,7 +151,11 @@ commit status on the pushed SHA.
 - Runner disk hygiene: stale per-job dirs under `KERN_RUNNER_WORK` are swept,
   remote actions are cached by commit SHA under `_cache/_actions`, and when
   free space drops below `KERN_RUNNER_DISK_MIN_FREE_PCT` (default `10`, `0`
-  disables) the runner prunes reclaimable Docker space while idle.
+  disables) the runner prunes reclaimable Docker space while idle. Below the
+  critical bounds (`KERN_RUNNER_DISK_CRITICAL_FREE_PCT` default `5` or
+  `KERN_RUNNER_DISK_CRITICAL_FLOOR_BYTES` default `2 GiB`) it also removes
+  ledger images unused >24h, workspaces >2h old, and halves the `_cache`
+  floor.
   `KERN_RUNNER_PREPULL` (comma-separated images) keeps hot images local so
   job pulls skip the registry.
 - Postgres lives in the `kern-db` volume — back it up with `docker exec

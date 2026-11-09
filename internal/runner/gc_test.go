@@ -189,6 +189,53 @@ func TestDiskUnderPressure(t *testing.T) {
 	}
 }
 
+func TestDiskCritical(t *testing.T) {
+	cases := []struct {
+		free, total int64
+		pct         float64
+		floor       int64
+		want        bool
+	}{
+		{4 << 30, 100 << 30, 5, 2 << 30, true},  // 4% < 5%
+		{1 << 30, 100 << 30, 0, 2 << 30, true},  // floor trips with pct off
+		{4 << 30, 100 << 30, 0, 10 << 30, true}, // below floor alone
+		{6 << 30, 100 << 30, 5, 2 << 30, false}, // inside both bounds
+		{4 << 30, 100 << 30, 0, 0, false},       // fully disabled
+	}
+	for _, c := range cases {
+		if got := diskCritical(c.free, c.total, c.pct, c.floor); got != c.want {
+			t.Errorf("diskCritical(%d,%d,%v,%d) = %v, want %v", c.free, c.total, c.pct, c.floor, got, c.want)
+		}
+	}
+}
+
+// The critical tier runs the same sweeps at tighter horizons: 2h-old
+// workspaces and a halved cache floor reclaim what the warn tier leaves.
+func TestCriticalSweepHorizons(t *testing.T) {
+	root := t.TempDir()
+	recent := time.Now().Add(-3 * time.Hour) // stale for 2h, fresh for 24h
+	mk := func(name string, mtime time.Time) {
+		d := filepath.Join(root, name)
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(d, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("job-dir", recent)
+
+	a := &Agent{cfg: Config{WorkRoot: root}, log: zap.NewNop()}
+	a.sweepWorkspaces() // warn-tier horizon keeps it
+	if _, err := os.Stat(filepath.Join(root, "job-dir")); err != nil {
+		t.Fatal("warn tier must keep a 3h-old workspace")
+	}
+	a.sweepWorkspacesOlderThan(criticalWorkspaceAge)
+	if _, err := os.Stat(filepath.Join(root, "job-dir")); !os.IsNotExist(err) {
+		t.Fatal("critical tier must sweep a 3h-old workspace")
+	}
+}
+
 func TestJobActive(t *testing.T) {
 	a := &Agent{}
 	if a.jobActive("kern-svc-abc-svc") {
