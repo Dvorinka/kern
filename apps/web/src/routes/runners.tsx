@@ -160,7 +160,7 @@ export function RunnersPage() {
 											{r.cpus} cores · {r.arch}
 											{r.hostname ? ` · ${r.hostname}` : ""}
 											{r.geo_city ? ` · ${r.geo_city}` : ""}
-											{` · v${r.version || "dev"}`}
+											{` · ${r.version || "dev"}`}
 										</small>
 									</div>
 									<div className={`slots ${r.status === "offline" ? "off" : ""}`}>
