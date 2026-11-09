@@ -514,22 +514,30 @@ func jobErrorHint(msg, workRoot string) string {
 		msg, free/(1<<20), total/(1<<20))
 }
 
+// loadAvg1Fn and cpusVisibleFn stub the host probes in tests.
+var (
+	loadAvg1Fn    = loadAvg1
+	cpusVisibleFn = cpusVisible
+)
+
 // overLoaded reports whether the claim gate is engaged: loadavg1 above
 // MaxLoadPerCPU per CPU means the host is saturated and new work would only
-// slow the jobs already running.
+// slow the jobs already running. The CPU count comes from /proc/cpuinfo —
+// the same kernel that publishes loadavg — not the container's cpuset.
 func (a *Agent) overLoaded() bool {
 	if a.cfg.MaxLoadPerCPU <= 0 {
 		return false
 	}
-	load, ok := loadAvg1()
+	load, ok := loadAvg1Fn()
 	if !ok {
 		return false
 	}
-	if load <= a.cfg.MaxLoadPerCPU*float64(runtime.NumCPU()) {
+	cpus := cpusVisibleFn()
+	if load <= a.cfg.MaxLoadPerCPU*float64(cpus) {
 		return false
 	}
 	a.log.Warn("load gate: host saturated, pausing claims",
-		zap.Float64("loadavg1", load), zap.Float64("gate", a.cfg.MaxLoadPerCPU*float64(runtime.NumCPU())))
+		zap.Float64("loadavg1", load), zap.Float64("gate", a.cfg.MaxLoadPerCPU*float64(cpus)))
 	return true
 }
 

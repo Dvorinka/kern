@@ -2,6 +2,7 @@ package runner
 
 import (
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -80,6 +81,24 @@ func loadAvg1() (float64, bool) {
 	}
 	v, err := strconv.ParseFloat(strings.Fields(string(data))[0], 64)
 	return v, err == nil
+}
+
+// cpusVisible counts the processors the kernel reports via /proc/cpuinfo.
+// That is the machine /proc/loadavg describes — inside an LXC or a cpuset
+// docker container, runtime.NumCPU reflects the container's quota while
+// loadavg stays host-wide, so normalizing by NumCPU over-fires the gate.
+func cpusVisible() int {
+	data, err := os.ReadFile("/proc/cpuinfo")
+	if err == nil {
+		n := strings.Count(string(data), "\nprocessor")
+		if strings.HasPrefix(string(data), "processor") {
+			n++
+		}
+		if n > 0 {
+			return n
+		}
+	}
+	return runtime.NumCPU()
 }
 
 // memUsed reports total minus available from /proc/meminfo.

@@ -33,3 +33,19 @@ func TestMemClaimPaused(t *testing.T) {
 		t.Fatal("gate disabled but still pausing")
 	}
 }
+
+func TestOverLoadedUsesVisibleCPUs(t *testing.T) {
+	defer func(l func() (float64, bool), c func() int) {
+		loadAvg1Fn, cpusVisibleFn = l, c
+	}(loadAvg1Fn, cpusVisibleFn)
+	loadAvg1Fn = func() (float64, bool) { return 30, true }
+	a := &Agent{cfg: Config{MaxLoadPerCPU: 2}, log: zap.NewNop()}
+	cpusVisibleFn = func() int { return 6 } // LXC cpuset — old behaviour, gated
+	if !a.overLoaded() {
+		t.Fatal("load 30 over 2x6=12 should gate")
+	}
+	cpusVisibleFn = func() int { return 20 } // host view from /proc/cpuinfo
+	if a.overLoaded() {
+		t.Fatal("load 30 under 2x20=40 should not gate")
+	}
+}
