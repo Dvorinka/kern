@@ -6,6 +6,11 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 ## [Unreleased]
 
 ### Added
+- Critical-tier reclaim now also sweeps stale tool scratch dirs under
+  the job temp root (`pytest-of-*`, `trivy-*`, `playwright-*` older than
+  24h) — co-located fleets leak multi-GB residue in /tmp that docker
+  prune never reaches. Operator paths (`gha-*`, `kern-job-*`) are
+  excluded by pattern, not by age.
 - `jobs.<id>.priority` (KERN extension): integer claim priority —
   the queue serves higher values first (`priority` then `queued_at`), so
   short urgent jobs can jump ahead of long builds on a shared fleet.
