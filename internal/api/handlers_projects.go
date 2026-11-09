@@ -314,13 +314,41 @@ func (s *Server) triggerRun(c *gin.Context) {
 		}
 		source["bundle_ref"] = req.BundleRef
 	}
+	// Resolve the ref to its current head and compile the workflow as it
+	// exists there — the stored version is sync-time state and goes stale
+	// between syncs (a manual dispatch once ran a month-old commit and the
+	// month-old workflow definition because of it). GitHub-backed projects
+	// get webhook parity; local-path projects keep the stored version.
+	sha := req.SHA
+	if p.RepoFullName != "" {
+		if sha == "" {
+			refName := strings.TrimPrefix(req.Ref, "refs/heads/")
+			refName = strings.TrimPrefix(refName, "refs/tags/")
+			if gh, gerr := s.githubClient(c.Request.Context(), p.RepoFullName); gerr == nil {
+				if resolved, rerr := gh.HeadSHA(c.Request.Context(), p.RepoFullName, refName); rerr == nil {
+					sha = resolved
+				} else {
+					s.Log.Warn("trigger ref resolution failed; using workflow-version sha",
+						zap.String("ref", req.Ref), zap.Error(rerr))
+				}
+			}
+		}
+		if sha != "" {
+			if v, _, verr := s.workflowAtSHA(c, p.RepoFullName, p.ID, wf, sha); verr == nil {
+				version = v
+			} else {
+				s.Log.Warn("trigger workflow fetch failed; using stored version",
+					zap.String("sha", sha), zap.Error(verr))
+			}
+		}
+	}
 	run, err := s.Orch.StartRun(c.Request.Context(), store.CreateRunParams{
 		ProjectID:         p.ID,
 		WorkflowID:        wf.ID,
 		WorkflowVersionID: version.ID,
 		Event:             req.Event,
 		Ref:               req.Ref,
-		SHA:               firstNonEmpty(req.SHA, version.CommitSHA),
+		SHA:               firstNonEmpty(sha, version.CommitSHA),
 		CommitMessage:     req.CommitMessage,
 		Actor:             req.Actor,
 		TrustLevel:        req.TrustLevel,
