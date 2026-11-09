@@ -6,6 +6,11 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 ## [Unreleased]
 
 ### Added
+- `kern optimize [dir]` — compiles each workflow against the live
+  fleet and prints ranked suggestions: unclaimable `runs-on` labels
+  (job waits forever), missing `priority` on PR pipelines, serial
+  test lanes that should take `strategy.split`, and services without
+  `--health-*` options that race first steps.
 - Dashboard: `GET /runs/day-counts` + `GET /jobs` — per-day run
   aggregates and the live queue now come from the server, so the
   runs-per-day chart and activity grid show real history (not the tail
