@@ -111,6 +111,10 @@ type executor struct {
 	// jobEnvResolved caches claim.Job.Env after expression interpolation;
 	// nil until the first expression context is built (post-prepare).
 	jobEnvResolved map[string]string
+	// runnerEnv carries operator-managed env overrides delivered on
+	// heartbeat; merged into jobEnv so app values win over container
+	// defaults but never over the GITHUB_*/RUNNER_* contract keys.
+	runnerEnv map[string]string
 
 	cancelled    atomic.Bool
 	stepResults  map[string]*stepOutcome
@@ -647,6 +651,15 @@ func (e *executor) jobEnv() map[string]string {
 		"GIT_CONFIG_COUNT":   "1",
 		"GIT_CONFIG_KEY_0":   "safe.directory",
 		"GIT_CONFIG_VALUE_0": "*",
+	}
+	// Operator-managed runner env fills keys the system env doesn't own —
+	// app values beat container/env-file defaults (jobEnv goes out as docker
+	// -e, which wins over --env-file) but never the GITHUB_*/RUNNER_*
+	// contract keys above.
+	for k, v := range e.runnerEnv {
+		if _, taken := env[k]; !taken {
+			env[k] = v
+		}
 	}
 	if p := e.eventPath(); p != "" {
 		env["GITHUB_EVENT_PATH"] = p

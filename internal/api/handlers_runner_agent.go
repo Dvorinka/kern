@@ -45,6 +45,7 @@ func (s *Server) registerRunner(c *gin.Context) {
 		return
 	}
 	var orgID uuid.UUID
+	var enrollCfg store.RunnerEnrollConfig
 	if s.joinTokenValid(req.JoinToken) {
 		org, err := s.Store.FirstOrg(c.Request.Context())
 		if err != nil {
@@ -54,7 +55,7 @@ func (s *Server) registerRunner(c *gin.Context) {
 		orgID = org.ID
 	} else {
 		var err error
-		orgID, err = s.Store.ConsumeEnrollToken(c.Request.Context(), auth.HashToken(req.JoinToken))
+		orgID, enrollCfg, err = s.Store.ConsumeEnrollToken(c.Request.Context(), auth.HashToken(req.JoinToken))
 		if err != nil {
 			fail(c, http.StatusUnauthorized, "invalid_join_token",
 				"join token is invalid, expired or already used")
@@ -89,6 +90,14 @@ func (s *Server) registerRunner(c *gin.Context) {
 	s.Log.Info("runner registered", zap.String("runner", runner.Name), zap.String("runner_id", runner.ID.String()))
 	if ip := clientIP(c); geoForRunner(runner, ip) {
 		go s.resolveRunnerGeo(runner.ID, ip)
+	}
+	// Enrollment-time desired config rides the token: auto_update opt-in and
+	// operator env overrides land on the runner row at registration.
+	if enrollCfg.AutoUpdate != nil {
+		_ = s.Store.SetRunnerAutoUpdate(c.Request.Context(), orgID, runner.ID, *enrollCfg.AutoUpdate)
+	}
+	if enrollCfg.Env != nil {
+		_ = s.Store.SetRunnerEnv(c.Request.Context(), orgID, runner.ID, enrollCfg.Env)
 	}
 	c.JSON(http.StatusCreated, gin.H{"runner_id": runner.ID, "name": runner.Name, "token": token})
 }
@@ -138,6 +147,11 @@ func (s *Server) runnerHeartbeat(c *gin.Context) {
 	}
 	if image, ver, ok := s.offerRunnerUpdate(c.Request.Context(), runner, body.SelfUpdate || runner.AutoUpdate, active); ok {
 		resp["update"] = gin.H{"version": ver, "image": image}
+	}
+	// Operator-managed env overrides ride every heartbeat; the agent merges
+	// them into each job's base env (app values win over container defaults).
+	if len(runner.Env) > 0 {
+		resp["env"] = runner.Env
 	}
 	c.JSON(http.StatusOK, resp)
 }

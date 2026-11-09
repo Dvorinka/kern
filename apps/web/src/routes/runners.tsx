@@ -15,6 +15,7 @@ export function RunnersPage() {
 	const [enrolling, setEnrolling] = useState(false);
 	const [geoEdit, setGeoEdit] = useState<string | null>(null);
 	const [iconEdit, setIconEdit] = useState<string | null>(null);
+	const [envEdit, setEnvEdit] = useState<string | null>(null);
 	const { data, isLoading } = useQuery({
 		queryKey: ["runners"],
 		queryFn: () => api.get<{ runners: Runner[] }>("/runners"),
@@ -159,6 +160,7 @@ export function RunnersPage() {
 											{r.cpus} cores · {r.arch}
 											{r.hostname ? ` · ${r.hostname}` : ""}
 											{r.geo_city ? ` · ${r.geo_city}` : ""}
+											{` · v${r.version || "dev"}`}
 										</small>
 									</div>
 									<div className={`slots ${r.status === "offline" ? "off" : ""}`}>
@@ -226,6 +228,19 @@ export function RunnersPage() {
 												<RefreshCw size={12} />
 											</button>
 											<button
+												className="pill"
+												title={
+													Object.keys(r.env ?? {}).length > 0
+														? `env overrides: ${Object.keys(r.env).join(", ")}`
+														: "Env overrides — app-managed env for every job"
+												}
+												onClick={() => setEnvEdit((g) => (g === r.id ? null : r.id))}
+											>
+												<span className={Object.keys(r.env ?? {}).length > 0 ? "text-[var(--acc)]" : ""}>
+													≡
+												</span>
+											</button>
+											<button
 												className={r.wake_on_demand ? "pill solid" : "pill"}
 												title={r.wake_on_demand
 													? "Wake on demand — a scaler may power this host for queued work"
@@ -256,6 +271,7 @@ export function RunnersPage() {
 										</span>
 									</div>
 									{geoEdit === r.id && <GeoEditor runner={r} onDone={() => setGeoEdit(null)} />}
+									{envEdit === r.id && <EnvEditor runner={r} onDone={() => setEnvEdit(null)} />}
 									{iconEdit === r.id && (
 										<div className="fgeo">
 											<IconEditor runner={r} onDone={() => setIconEdit(null)} />
@@ -274,27 +290,63 @@ export function RunnersPage() {
 // EnrollCard mints a one-time enrollment token and prints the join command —
 // the plaintext token is shown once, only its hash is stored.
 function EnrollCard({ onDone }: { onDone: () => void }) {
-	const [minted, setMinted] = useState<{ token: string; name: string } | null>(null);
+	const [minted, setMinted] = useState<{
+		token: string;
+		name: string;
+		autoUpdate: boolean;
+	} | null>(null);
+	const [autoUpdate, setAutoUpdate] = useState(true);
+	const [envDraft, setEnvDraft] = useState("");
 	const mint = useMutation({
-		mutationFn: (body: { name: string; ttl_minutes: number }) =>
-			api.post<{ token: string }>("/enroll-tokens", body),
-		onSuccess: (res, body) => setMinted({ token: res.token, name: body.name }),
+		mutationFn: (body: {
+			name: string;
+			ttl_minutes: number;
+			config?: { auto_update?: boolean; env?: Record<string, string> };
+		}) => api.post<{ token: string }>("/enroll-tokens", body),
+		onSuccess: (res, body) =>
+			setMinted({ token: res.token, name: body.name, autoUpdate: !!body.config?.auto_update }),
 	});
+
+	const parseEnv = (raw: string): Record<string, string> => {
+		const env: Record<string, string> = {};
+		for (const line of raw.split("\n")) {
+			const t = line.trim();
+			if (!t || t.startsWith("#")) continue;
+			const eq = t.indexOf("=");
+			if (eq > 0) env[t.slice(0, eq).trim()] = t.slice(eq + 1);
+		}
+		return env;
+	};
 
 	const submit = (e: FormEvent<HTMLFormElement>) => {
 		e.preventDefault();
 		const fd = new FormData(e.currentTarget);
+		const env = parseEnv(envDraft);
 		mint.mutate({
 			name: String(fd.get("name")).trim() || "runner",
 			ttl_minutes: parseInt(String(fd.get("ttl")), 10) || 60,
+			config: {
+				auto_update: autoUpdate,
+				...(Object.keys(env).length > 0 ? { env } : {}),
+			},
 		});
 	};
 
 	const joinCmd = minted
 		? `kern-runner join --control ${window.location.origin} --name ${minted.name} --token ${minted.token}`
 		: "";
+	const envFlags = envDraft
+		.trim()
+		.split("\n")
+		.filter((l) => l.trim() && !l.trim().startsWith("#"))
+		.map((l) => {
+			const eq = l.indexOf("=");
+			return eq > 0 ? `-e ${l.slice(0, eq).trim()}=${l.slice(eq + 1)}` : "";
+		})
+		.filter(Boolean)
+		.join(" ");
 	const dockerCmd = minted
-		? `docker run -d --name kern-runner --restart always -e KERN_CONTROL_URL=${window.location.origin} -e KERN_RUNNER_JOIN_TOKEN=${minted.token} -e KERN_RUNNER_UPDATE=1 -e KERN_RUNNER_CONCURRENCY=1 -e KERN_WORK_ROOT=/opt/kern/work -e HOME=/root -v /var/run/docker.sock:/var/run/docker.sock -v /opt/kern/work:/opt/kern/work kern-runner:local`
+		? `docker run -d --name kern-runner --restart always -e KERN_CONTROL_URL=${window.location.origin} -e KERN_RUNNER_JOIN_TOKEN=${minted.token} ${minted.autoUpdate ? "-e KERN_RUNNER_UPDATE=1 " : ""}-e KERN_RUNNER_CONCURRENCY=1 -e KERN_WORK_ROOT=/opt/kern/work -e HOME=/root ${envFlags} -v /var/run/docker.sock:/var/run/docker.sock -v /opt/kern/work:/opt/kern/work kern-runner:local`
 		: "";
 
 	return (
@@ -329,13 +381,90 @@ function EnrollCard({ onDone }: { onDone: () => void }) {
 						placeholder="ttl minutes (60)"
 						className="w-40"
 					/>
+					<label className="flex items-center gap-1.5 text-xs text-[var(--dim)]">
+						<input
+							type="checkbox"
+							checked={autoUpdate}
+							onChange={(e) => setAutoUpdate(e.target.checked)}
+						/>
+						auto-update
+					</label>
 					<Button type="submit" variant="primary" size="sm" disabled={mint.isPending}>
 						Mint token
 					</Button>
 					{mint.error && <span className="text-xs text-[var(--err)]">{mint.error.message}</span>}
+					<div className="w-full">
+						<label className="mb-1 block text-[11px] text-[var(--faint)]">
+							initial env overrides (KEY=VALUE per line — applied to every job on this runner)
+						</label>
+						<textarea
+							className="w-full rounded-lg border border-[var(--line)] bg-[var(--bg)] px-3 py-2 font-mono text-xs"
+							rows={3}
+							placeholder={"# e.g.\nNODE_ENV=production"}
+							value={envDraft}
+							onChange={(e) => setEnvDraft(e.target.value)}
+						/>
+					</div>
 				</form>
 			)}
 		</Card>
+	);
+}
+
+// EnvEditor manages the operator env override map — KEY=VALUE lines merged
+// into every job's environment on this runner (app values win over
+// container/env-file defaults; GITHUB_*/RUNNER_* contract keys are protected
+// server-side).
+function EnvEditor({ runner, onDone }: { runner: Runner; onDone: () => void }) {
+	const qc = useQueryClient();
+	const [draft, setDraft] = useState(() =>
+		Object.entries(runner.env ?? {})
+			.map(([k, v]) => `${k}=${v}`)
+			.join("\n"),
+	);
+	const save = useMutation({
+		mutationFn: (env: Record<string, string>) => api.patch(`/runners/${runner.id}`, { env }),
+		onSuccess: () => {
+			qc.invalidateQueries({ queryKey: ["runners"] });
+			onDone();
+		},
+	});
+	const submit = (e: FormEvent<HTMLFormElement>) => {
+		e.preventDefault();
+		const env: Record<string, string> = {};
+		for (const line of draft.split("\n")) {
+			const t = line.trim();
+			if (!t || t.startsWith("#")) continue;
+			const eq = t.indexOf("=");
+			if (eq <= 0) {
+				save.reset();
+				return;
+			}
+			env[t.slice(0, eq).trim()] = t.slice(eq + 1);
+		}
+		save.mutate(env);
+	};
+	return (
+		<div className="ml-[23px] mt-2">
+			<form onSubmit={submit}>
+				<textarea
+					className="w-full rounded-lg border border-[var(--line)] bg-[var(--bg)] px-3 py-2 font-mono text-xs"
+					rows={Math.min(8, Math.max(3, draft.split("\n").length + 1))}
+					placeholder={"KEY=VALUE — one per line\n# comments and blank lines ignored"}
+					value={draft}
+					onChange={(e) => setDraft(e.target.value)}
+				/>
+				<div className="mt-2 flex items-center gap-2">
+					<Button type="submit" variant="primary" size="sm" disabled={save.isPending}>
+						Save env
+					</Button>
+					<Button type="button" variant="ghost" size="sm" onClick={onDone}>
+						Cancel
+					</Button>
+					{save.error && <span className="text-xs text-[var(--err)]">{save.error.message}</span>}
+				</div>
+			</form>
+		</div>
 	);
 }
 

@@ -263,8 +263,12 @@ type Runner struct {
 	Executor string `json:"executor"`
 	// Icon is an operator-set glyph: an emoji or an image URL/path. Empty
 	// renders the default marker.
-	Icon      string    `json:"icon"`
-	CreatedAt time.Time `json:"created_at"`
+	Icon string `json:"icon"`
+	// Env is the operator-managed env override map delivered on heartbeat
+	// and merged into every job's base env — app-set values win over
+	// container and env-file defaults.
+	Env       map[string]string `json:"env"`
+	CreatedAt time.Time         `json:"created_at"`
 }
 
 // HostMetrics is the live utilization snapshot a runner sends with each

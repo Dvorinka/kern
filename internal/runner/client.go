@@ -207,6 +207,9 @@ type heartbeatResponse struct {
 		Version string `json:"version"`
 		Image   string `json:"image"`
 	} `json:"update"`
+	// Env carries operator-managed env overrides merged into every job's
+	// base env — app-set values win over container defaults.
+	Env map[string]string `json:"env"`
 	// Deregistered confirms the control plane deleted this runner's row; the
 	// agent exits once it sees this.
 	Deregistered bool `json:"deregistered"`
