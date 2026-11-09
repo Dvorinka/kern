@@ -487,6 +487,134 @@ func (s *Store) CancelRun(ctx context.Context, runID uuid.UUID) (Run, error) {
 	return s.Run(ctx, runID)
 }
 
+// rerunJob is the minimal job shape in-place rerun selection needs.
+type rerunJob struct {
+	ID         uuid.UUID
+	JobKey     string
+	Key        string
+	Needs      []string
+	Conclusion string
+}
+
+// rerunSeed picks the jobs an in-place rerun resets. keys non-empty selects
+// those jobs (matched on the unique key, then the shared job_key so a matrix
+// id selects the whole group); empty selects every job that did not succeed.
+// All transitive dependents join regardless of conclusion — a rerun can
+// change a job's outputs, so downstream results are stale by definition.
+func rerunSeed(jobs []rerunJob, keys []string) map[uuid.UUID]bool {
+	want := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		want[k] = true
+	}
+	seed := map[uuid.UUID]bool{}
+	seedKeys := map[string]bool{}
+	for _, j := range jobs {
+		var hit bool
+		if len(keys) == 0 {
+			hit = j.Conclusion == "failure" || j.Conclusion == "cancelled"
+		} else {
+			hit = want[j.Key] || want[j.JobKey]
+		}
+		if hit {
+			seed[j.ID] = true
+			seedKeys[j.JobKey] = true
+		}
+	}
+	for changed := true; changed; {
+		changed = false
+		for _, j := range jobs {
+			if seed[j.ID] {
+				continue
+			}
+			for _, n := range j.Needs {
+				if seedKeys[n] {
+					seed[j.ID] = true
+					seedKeys[j.JobKey] = true
+					changed = true
+					break
+				}
+			}
+		}
+	}
+	return seed
+}
+
+// RerunJobs resets selected jobs of a finished run back to 'waiting' so the
+// orchestrator re-evaluates needs/if/environments exactly like a fresh run,
+// and flips the run back to 'in_progress'. keys empty means "everything that
+// did not succeed" (gh rerun --failed); otherwise the named job keys plus
+// their dependents (gh rerun --job). Returns the number of jobs reset.
+func (s *Store) RerunJobs(ctx context.Context, runID uuid.UUID, keys []string) (int, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE workflow_runs SET status = 'in_progress', conclusion = '',
+			completed_at = NULL, started_at = COALESCE(started_at, now())
+		WHERE id = $1 AND status IN ('completed', 'cancelled')`, runID)
+	if err != nil {
+		return 0, err
+	}
+	if tag.RowsAffected() == 0 {
+		return 0, fmt.Errorf("run %s is not finished", runID)
+	}
+
+	rows, err := tx.Query(ctx, `
+		SELECT id, job_key, key, needs, conclusion FROM jobs WHERE run_id = $1`, runID)
+	if err != nil {
+		return 0, err
+	}
+	var jobs []rerunJob
+	for rows.Next() {
+		var j rerunJob
+		if err := rows.Scan(&j.ID, &j.JobKey, &j.Key, &j.Needs, &j.Conclusion); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		jobs = append(jobs, j)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	seed := rerunSeed(jobs, keys)
+	if len(seed) == 0 {
+		return 0, fmt.Errorf("no jobs to rerun")
+	}
+	ids := make([]uuid.UUID, 0, len(seed))
+	for id := range seed {
+		ids = append(ids, id)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE jobs SET status = 'waiting', conclusion = '', error = '',
+			runner_id = NULL, lease_expires_at = NULL, started_at = NULL,
+			completed_at = NULL, attempt = 0, outputs = '{}'::jsonb
+		WHERE id = ANY($1)`, ids); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE steps SET status = 'queued', conclusion = '', exit_code = NULL,
+			started_at = NULL, completed_at = NULL, log_ref = '', log_bytes = 0,
+			diagnosis = NULL, annotations = '[]'::jsonb, summary_ref = ''
+		WHERE job_id = ANY($1)`, ids); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE job_leases SET released_at = now()
+		WHERE released_at IS NULL AND job_id = ANY($1)`, ids); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return len(ids), nil
+}
+
 // PromoteQueuedRuns moves serialized runs (concurrency groups) forward when the
 // group is free. When a newer queued run shares a group with an in-progress run
 // that opted into cancel-in-progress, the older run is cancelled first.

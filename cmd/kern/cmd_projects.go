@@ -242,7 +242,34 @@ func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 		} else {
 			fmt.Printf("run %s (#%d) triggered\n", out.Run.ID, out.Run.RunNumber)
 		}
-	case "cancel", "approve", "rerun":
+	case "rerun":
+		id, err := strarg(rest, 0, "run id")
+		if err != nil {
+			return err
+		}
+		opts, _ := parseFlagsEx(rest[1:], []string{"failed"}, "job")
+		body := map[string]any{}
+		if opts["failed"] == "true" {
+			body["failed"] = true
+		}
+		if j := opts["job"]; j != "" {
+			body["jobs"] = []string{j}
+		}
+		var out struct {
+			Run  run `json:"run"`
+			Jobs int `json:"jobs"`
+		}
+		if err := c.api().post(ctx, "/runs/"+id+"/rerun", body, &out); err != nil {
+			return err
+		}
+		if c.json {
+			printJSON(out.Run)
+		} else if out.Jobs > 0 {
+			fmt.Printf("run %s → %s (%d jobs requeued)\n", shortID(out.Run.ID), out.Run.Status, out.Jobs)
+		} else {
+			fmt.Printf("run %s → %s\n", shortID(out.Run.ID), out.Run.Status)
+		}
+	case "cancel", "approve":
 		id, err := strarg(rest, 0, "run id")
 		if err != nil {
 			return err
