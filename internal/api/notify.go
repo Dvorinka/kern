@@ -71,6 +71,45 @@ func notifyConclusionAllowed(filter, conclusion string) bool {
 	return false
 }
 
+// notifyRunnersOffline enqueues a runner.offline event per runner that just
+// flipped offline — one delivery per runner per org, only while the org has
+// a notify_url configured. The transition itself is detected in the
+// orchestrator's stale-runner sweep; alerting fires once per episode.
+func (s *Server) NotifyRunnersOffline(ctx context.Context, runners []store.OfflineRunner) {
+	seen := map[[16]byte]struct{}{}
+	for _, r := range runners {
+		if _, dup := seen[r.OrgID]; dup {
+			continue
+		}
+		seen[r.OrgID] = struct{}{}
+		orgRaw, err := s.Store.OrgSettings(ctx, r.OrgID)
+		if err != nil {
+			continue
+		}
+		if settingsValue(orgRaw, "notify_runner_offline", "on") == "off" {
+			continue
+		}
+		url := strings.TrimSpace(settingsValue(orgRaw, "notify_url", ""))
+		if url == "" {
+			continue
+		}
+		var payload []byte
+		if settingsValue(orgRaw, "notify_format", "kern") == "slack" {
+			payload, _ = json.Marshal(map[string]any{
+				"text": fmt.Sprintf("KERN runner %s went offline", r.Name),
+			})
+		} else {
+			payload, _ = json.Marshal(map[string]any{
+				"event":  "runner.offline",
+				"runner": map[string]any{"id": r.ID, "name": r.Name},
+			})
+		}
+		if err := s.Store.EnqueueNotifyEvent(ctx, r.OrgID, nil, nil, "runner.offline", url, payload); err != nil {
+			s.Log.Warn("enqueue runner.offline", zap.String("runner", r.Name), zap.Error(err))
+		}
+	}
+}
+
 // notifyPayload builds the webhook body. format "slack" emits Slack's
 // incoming-webhook {"text": ...} shape; anything else keeps the kern event
 // envelope.
@@ -121,13 +160,17 @@ func (s *Server) deliverNotify(ctx context.Context, d store.NotifyDelivery) {
 		return
 	}
 	// A cleared or "off" notify_url disables delivery for rows already queued.
-	projRaw, _ := s.Store.ProjectSettings(ctx, d.ProjectID)
-	projNotify := settingsValue(projRaw, "notify_url", "")
-	if projNotify == "off" {
-		_ = s.Store.MarkNotifyDead(ctx, d.ID, d.Attempts+1, "project notify disabled")
-		return
+	// Org-level events carry no project row.
+	live := ""
+	if d.ProjectID != nil {
+		projRaw, _ := s.Store.ProjectSettings(ctx, *d.ProjectID)
+		projNotify := settingsValue(projRaw, "notify_url", "")
+		if projNotify == "off" {
+			_ = s.Store.MarkNotifyDead(ctx, d.ID, d.Attempts+1, "project notify disabled")
+			return
+		}
+		live = strings.TrimSpace(projNotify)
 	}
-	live := strings.TrimSpace(projNotify)
 	if live == "" {
 		live = strings.TrimSpace(settingsValue(orgRaw, "notify_url", ""))
 	}
@@ -144,7 +187,11 @@ func (s *Server) deliverNotify(ctx context.Context, d store.NotifyDelivery) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Kern-Event", "run.completed")
+	event := d.Event
+	if event == "" {
+		event = "run.completed"
+	}
+	req.Header.Set("X-Kern-Event", event)
 	if secret := settingsValue(orgRaw, "notify_secret", ""); secret != "" {
 		mac := hmac.New(sha256.New, []byte(secret))
 		mac.Write(d.Payload)

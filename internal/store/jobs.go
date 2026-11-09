@@ -428,23 +428,46 @@ func (s *Store) PruneStepBlobs(ctx context.Context, olderThan time.Duration) ([]
 	return refs, nil
 }
 
-// MarkStaleRunnersOffline flips runners that missed heartbeats. Ephemeral
-// runners that stay offline past the grace window are deleted outright —
-// their credentials are already dead and the row is only fleet clutter.
-func (s *Store) MarkStaleRunnersOffline(ctx context.Context, timeout time.Duration) (int64, error) {
-	tag, err := s.pool.Exec(ctx, `
+// OfflineRunner is a runner that just flipped offline in a sweep — enough
+// identity to alert on the transition.
+type OfflineRunner struct {
+	ID    uuid.UUID `json:"id"`
+	OrgID uuid.UUID `json:"org_id"`
+	Name  string    `json:"name"`
+}
+
+// MarkStaleRunnersOffline flips runners that missed heartbeats and returns
+// which ones transitioned, so the caller can alert on the edge rather than
+// the state. Ephemeral runners that stay offline past the grace window are
+// deleted outright — their credentials are already dead and the row is
+// only fleet clutter.
+func (s *Store) MarkStaleRunnersOffline(ctx context.Context, timeout time.Duration) ([]OfflineRunner, error) {
+	rows, err := s.pool.Query(ctx, `
 		UPDATE runners SET status = 'offline'
 		WHERE status IN ('online', 'draining')
-		  AND (last_heartbeat_at IS NULL OR last_heartbeat_at < now() - make_interval(secs => $1))`,
+		  AND (last_heartbeat_at IS NULL OR last_heartbeat_at < now() - make_interval(secs => $1))
+		RETURNING id, org_id, name`,
 		int(timeout.Seconds()))
 	if err != nil {
-		return 0, err
+		return nil, err
+	}
+	defer rows.Close()
+	var out []OfflineRunner
+	for rows.Next() {
+		var r OfflineRunner
+		if err := rows.Scan(&r.ID, &r.OrgID, &r.Name); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	_, _ = s.pool.Exec(ctx, `
 		DELETE FROM runners
 		WHERE ephemeral AND status = 'offline'
 		  AND (last_heartbeat_at IS NULL OR last_heartbeat_at < now() - interval '24 hours')`)
-	return tag.RowsAffected(), nil
+	return out, nil
 }
 
 // CancelOrphanedJobs cancels queued/waiting jobs whose run already reached a
