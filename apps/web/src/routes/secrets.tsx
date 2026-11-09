@@ -23,6 +23,20 @@ export function SecretsPage() {
 	const projectList = projects?.projects ?? [];
 	const slug = projectList.some((p) => p.slug === project) ? project : "";
 
+	// Latest-version diagnostics per workflow — used to surface setup hints
+	// (e.g. the ghcr-token warning) on this page, not just after a sync.
+	const workflows = useQuery({
+		queryKey: ["workflows", slug],
+		enabled: slug !== "",
+		queryFn: () =>
+			api.get<{
+				workflows: {
+					path: string;
+					diagnostics?: { level: string; code?: string; message: string }[] | null;
+				}[];
+			}>(`/projects/${encodeURIComponent(slug)}/workflows`),
+	});
+
 	const envs = useQuery({
 		queryKey: ["environments", slug],
 		enabled: slug !== "",
@@ -117,6 +131,15 @@ export function SecretsPage() {
 	const stale = allSecrets.filter((s) => Date.now() - Date.parse(s.updated_at) > STALE).length;
 	const fresh = allSecrets.filter((s) => Date.now() - Date.parse(s.updated_at) < 7 * 86_400_000).length;
 
+	// ghcr-token diagnostics mean a workflow pushes to GHCR with GITHUB_TOKEN,
+	// which KERN's installation tokens cannot do — nudge toward GHCR_TOKEN.
+	const needsGhcrToken =
+		slug !== "" &&
+		(workflows.data?.workflows ?? []).some((w) =>
+			(w.diagnostics ?? []).some((d) => d.code === "ghcr-token"),
+		) &&
+		!allSecrets.some((s) => s.name === "GHCR_TOKEN");
+
 	return (
 		<>
 			<PageHeader mark="ok"
@@ -187,6 +210,18 @@ export function SecretsPage() {
 						<div className="c">fresh values</div>
 					</div>
 				</div>
+			)}
+			{needsGhcrToken && (
+				<Card className="mb-4 border-[var(--warn)] p-4">
+					<div className="text-sm font-medium">GHCR push needs a token secret</div>
+					<p className="mt-1 text-xs text-[var(--dim)]">
+						A workflow in <span className="font-mono">{slug}</span> pushes to ghcr.io with{" "}
+						<span className="font-mono">GITHUB_TOKEN</span>, which GitHub App installation tokens cannot
+						do. Create a classic PAT with <span className="font-mono">write:packages</span> and add it
+						here as <span className="font-mono">GHCR_TOKEN</span>, then point docker login at{" "}
+						<span className="font-mono">{"${{ secrets.GHCR_TOKEN }}"}</span>.
+					</p>
+				</Card>
 			)}
 			{adding && (
 				<Card className="mb-4 p-4">

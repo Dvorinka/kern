@@ -99,6 +99,9 @@ type Workflow struct {
 	Name      string    `json:"name"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// Diagnostics carries the latest version's compile diagnostics so the
+	// UI can surface lint warnings (e.g. ghcr-token) outside sync results.
+	Diagnostics json.RawMessage `json:"diagnostics,omitempty"`
 }
 
 type WorkflowVersion struct {

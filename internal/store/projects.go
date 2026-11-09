@@ -110,8 +110,15 @@ func (s *Store) UpsertWorkflow(ctx context.Context, projectID uuid.UUID, path, n
 
 func (s *Store) Workflows(ctx context.Context, projectID uuid.UUID) ([]Workflow, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, project_id, path, name, created_at, updated_at
-		FROM workflows WHERE project_id = $1 ORDER BY path`, projectID)
+		SELECT w.id, w.project_id, w.path, w.name, w.created_at, w.updated_at,
+		       v.diagnostics
+		FROM workflows w
+		LEFT JOIN LATERAL (
+			SELECT diagnostics FROM workflow_versions
+			WHERE workflow_id = w.id
+			ORDER BY created_at DESC LIMIT 1
+		) v ON true
+		WHERE w.project_id = $1 ORDER BY w.path`, projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +126,7 @@ func (s *Store) Workflows(ctx context.Context, projectID uuid.UUID) ([]Workflow,
 	out := []Workflow{}
 	for rows.Next() {
 		var w Workflow
-		if err := rows.Scan(&w.ID, &w.ProjectID, &w.Path, &w.Name, &w.CreatedAt, &w.UpdatedAt); err != nil {
+		if err := rows.Scan(&w.ID, &w.ProjectID, &w.Path, &w.Name, &w.CreatedAt, &w.UpdatedAt, &w.Diagnostics); err != nil {
 			return nil, err
 		}
 		out = append(out, w)
