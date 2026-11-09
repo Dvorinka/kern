@@ -185,6 +185,9 @@ pull_request runs by number; --workflow matches name or path.
 	case "split":
 		return `kern split --pattern GLOB --shards N [--root DIR]
 `
+	case "optimize":
+		return `kern optimize [dir] — ranked CI/CD suggestions from compiled workflows + live fleet
+`
 	case "migrate":
 		return `kern migrate <owner/name|github-url> [--project S]
 `
@@ -327,6 +330,8 @@ func dispatch(c *cli, args []string) int {
 		err = c.cmdExec(ectx, rest)
 	case "split":
 		err = c.cmdSplit(rest)
+	case "optimize":
+		err = c.cmdOptimize(rest)
 	case "lint":
 		err = c.cmdLint(rest)
 	case "hooks":
