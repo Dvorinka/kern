@@ -9,6 +9,10 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 - `kern completion <bash|zsh|fish>` prints a shell completion script
   covering the top-level commands and subcommand trees — source it from
   your shell rc to get tab completion (#189).
+- `kern runs rerun <id> --failed` re-runs a finished run's failed and
+  cancelled jobs in place (plus their dependents), and `--job KEY`
+  re-runs a single job and its dependents — matching `gh run rerun`
+  instead of seeding a whole new run (#179).
 
 ## [v0.6.3] - 2026-11-09
 
