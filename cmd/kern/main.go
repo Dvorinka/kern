@@ -35,7 +35,7 @@ Projects:
   migrate <owner/name|github-url>        import workflows into a new/existing project
 
 Runs:
-  runs list [--status S] [--limit N]
+  runs list [--status S] [--limit N] [--ref R|BRANCH] [--pr N] [--workflow W]
   runs show <run-id>
   runs trigger [<project>] <workflow-id|path|name> [--event E] [--ref R] [--sha S] [--inputs JSON]
   runs cancel|approve|rerun <run-id>
@@ -87,6 +87,109 @@ Advisory:
 Globals: --server, --token, --project override config and KERN_SERVER,
 KERN_TOKEN, KERN_PROJECT env vars. --json prints raw JSON.
 `
+
+// commandUsage returns focused help for `kern <cmd> --help`; unknown or
+// bare commands fall back to the full usage.
+func commandUsage(name string) string {
+	switch name {
+	case "runs", "logs":
+		return `kern runs — workflow runs
+
+  runs list [--status S[,S..]] [--limit N] [--offset N]
+            [--project S] [--ref REF|BRANCH] [--pr N] [--workflow NAME|PATH]
+  runs show <run-id>                  run + job/step detail (short ids work)
+  runs wait <run-id> [--interval 5s] [--timeout 30m]
+  runs trigger [<project>] <workflow> [--event E] [--ref R] [--sha S]
+            [--inputs '{"k":"v"}']
+  runs cancel|approve|rerun <run-id>
+  runs logs <run-id> [--job KEY] [--step N] [--follow]
+  runs remediate <job-id> --step N     approve a remediation proposal
+  logs <run-id> [-f]                   alias for runs logs
+  diagnose <run-id> [--tail N] [--job K]
+
+Run ids accept the full uuid or the unambiguous short prefix printed by
+runs list. --ref matches refs/heads/<branch> or a full ref; --pr matches
+pull_request runs by number; --workflow matches name or path.
+`
+	case "projects":
+		return `kern projects — repositories and workflows
+
+  projects list|show <slug>
+  projects create <owner/name|github-url>
+  projects sync <slug>                re-read workflows from the repo
+  projects workflows <slug>           list discovered workflows
+  migrate <owner/name|github-url>     import workflows into a project
+`
+	case "runners":
+		return `kern runners — self-hosted runner fleet
+
+  runners list                        online/offline, load, disk, version
+  runners drain <id>                  stop claiming new jobs
+  runners delete <id>
+`
+	case "secrets", "vars":
+		return `kern ` + name + ` — project configuration
+
+  ` + name + ` list [--project S]
+  ` + name + ` set [--project S] <name> [value]   value from stdin when omitted
+  ` + name + ` delete [--project S] <name>
+`
+	case "artifacts", "cache":
+		return `kern ` + name + ` — run artifacts / action cache
+
+  ` + name + ` list
+  artifacts download <id> [--out FILE]
+  cache delete <id>
+`
+	case "token":
+		return `kern token — API tokens
+
+  token list|create|delete [id]
+`
+	case "config":
+		return `kern config — local CLI config (~/.config/kern/config.json)
+
+  config list|get|set|unset <key> [value]
+`
+	case "environments":
+		return `kern environments — deployment protection rules
+
+  environments list [--project S]
+  environments set <name> [--protected true|false] [--approvals N]
+                   [--reviewers a@b,c@d] [--wait MIN]
+                   [--branches all|PATTERN,PATTERN] [--project S]
+  environments delete <name> [--project S]
+`
+	case "deployments":
+		return `kern deployments — gated job approvals
+
+  deployments list [--project S]
+  deployments approve|reject <job-id>
+`
+	case "exec":
+		return `kern exec <run-id> [--job KEY] — interactive shell into a live job
+`
+	case "doctor":
+		return `kern doctor — check CLI config, auth and control-plane reachability
+`
+	case "status":
+		return `kern status [--watch] — control-plane dashboard
+`
+	case "hooks":
+		return `kern hooks install [--dry-run] [--force] — pre-push hook that runs kern lint
+`
+	case "lint":
+		return `kern lint [dir ...] — offline compile of .github/workflows
+`
+	case "split":
+		return `kern split --pattern GLOB --shards N [--root DIR]
+`
+	case "migrate":
+		return `kern migrate <owner/name|github-url> [--project S]
+`
+	}
+	return usage
+}
 
 // cli carries global options resolved from flags, env and the config file.
 type cli struct {
@@ -153,6 +256,15 @@ func dispatch(c *cli, args []string) int {
 	defer cancel()
 
 	name, rest := args[0], args[1:]
+	// `kern <cmd> ... --help` prints the command's usage instead of dying in
+	// flag parsing with "unknown flag" — the discoverability papercut from
+	// #179. Checked before dispatch so every subcommand inherits it.
+	for _, a := range rest {
+		if a == "--help" || a == "-h" {
+			fmt.Print(commandUsage(name))
+			return 0
+		}
+	}
 	var err error
 	switch name {
 	case "version", "--version", "-v":

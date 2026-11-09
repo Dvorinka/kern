@@ -19,6 +19,9 @@ func (s *Server) listRuns(c *gin.Context) {
 		Status:         c.Query("status"),
 		Conclusion:     c.Query("conclusion"),
 		IncludeCleared: c.Query("include_cleared") == "1" || c.Query("include_cleared") == "true",
+		Ref:            c.Query("ref"),
+		PR:             c.Query("pr"),
+		Workflow:       c.Query("workflow"),
 		Limit:          parseInt(c.DefaultQuery("limit", "50"), 50),
 		Offset:         parseInt(c.DefaultQuery("offset", "0"), 0),
 	}
