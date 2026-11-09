@@ -33,6 +33,11 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
   cancelled jobs in place (plus their dependents), and `--job KEY`
   re-runs a single job and its dependents — matching `gh run rerun`
   instead of seeding a whole new run (#179).
+- Job containers now provision the pinned Node runtime at job setup, so
+  `node`/`npm`/`npx` work in plain `run:` steps even when no JS action
+  runs first — the baseline toolset GitHub's ubuntu image ships on PATH
+  (curl/jq/git already live in the `kern-ubuntu` parity image). The
+  provision is once per runner host and best-effort (#220).
 - `services.<name>.ports` host:container remaps are now honoured instead
   of warned away — on bridge jobs a loopback forwarder container binds
   the declared host port inside the job's netns; on trusted host-net
