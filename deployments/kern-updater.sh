@@ -23,6 +23,27 @@ post() {
 		"${API}/api/v1/update/status" || true
 }
 
+# stale_kern_api reports whether more than one kern-api process is alive on
+# the host. compose recreates the api container, but a leaked containerd task
+# can keep the old process running after docker forgot the container (#178).
+# pid:host exposes the host /proc to this container; exactly one kern-api —
+# the api service's — is expected.
+stale_kern_api() {
+	n=0
+	for c in /proc/[0-9]*/comm; do
+		[ "$(cat "$c" 2>/dev/null)" = "kern-api" ] && n=$((n+1))
+	done
+	[ "$n" -gt 1 ]
+}
+
+report_idle() {
+	if stale_kern_api; then
+		post error "stale kern-api process detected after recreate" "$1"
+	else
+		post idle "" "$1"
+	fi
+}
+
 printf '%s' "$REPO" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' || {
 	echo "KERN_RELEASE_REPO must look like owner/name" >&2
 	exit 1
@@ -44,7 +65,7 @@ while true; do
 	ver=$(jq -r '.version // empty' /tmp/kern-plan.json)
 	sha=$(jq -r '.git_sha // empty' /tmp/kern-plan.json)
 	if [ "$apply" != "true" ]; then
-		post idle "" "$ver"
+		report_idle "$ver"
 		sleep 30
 		continue
 	fi
@@ -70,7 +91,7 @@ while true; do
 	running=$(printf '%s' "$(jq -r '.current // empty' /tmp/kern-plan.json)" | sed 's/^v//')
 	target=$(printf '%s' "$ver" | sed 's/^v//')
 	if [ "$(git -C "$SRC" rev-parse HEAD)" = "$sha" ] && [ "$running" = "$target" ]; then
-		post idle "" "$ver"
+		report_idle "$ver"
 		sleep 30
 		continue
 	fi
@@ -98,6 +119,6 @@ while true; do
 		sleep 30
 		continue
 	fi
-	post idle "" "$ver"
+	report_idle "$ver"
 	sleep 30
 done

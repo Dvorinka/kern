@@ -106,6 +106,9 @@ services:
   updater:
     profiles: ["update"]
     image: docker:27.5.1-cli
+    # pid:host lets the stale-process guard see kern-api instances leaked by
+    # containerd tasks whose docker-side container is already gone (#178).
+    pid: host
     entrypoint: ["/bin/sh", "/opt/kern/src/deployments/kern-updater.sh"]
     environment:
       KERN_RUNNER_JOIN_TOKEN: ${KERN_RUNNER_JOIN_TOKEN:?set KERN_RUNNER_JOIN_TOKEN}

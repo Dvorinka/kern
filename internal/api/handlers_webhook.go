@@ -338,7 +338,11 @@ func parsePRTrigger(body []byte, event string) (*ghTrigger, string, string) {
 		return nil, "ignored", "head repository is gone (deleted fork?); nothing to check out"
 	}
 	trust := "pull_request"
-	if pr.Head.Repo.Fork || pr.Head.Repo.FullName != p.Repository.FullName {
+	// Repo identity decides fork trust, not the repo.fork flag: GitHub sets
+	// fork=true on every repo in a fork network, so a same-repo PR on a
+	// forked project (head.repo.full_name == repository.full_name) would be
+	// misclassified and pr_trust could never promote it (#184).
+	if pr.Head.Repo.FullName != p.Repository.FullName {
 		trust = "fork"
 	}
 	return &ghTrigger{
