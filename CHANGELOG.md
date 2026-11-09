@@ -5,6 +5,11 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 
 ## [Unreleased]
 
+### Added
+- `kern completion <bash|zsh|fish>` prints a shell completion script
+  covering the top-level commands and subcommand trees — source it from
+  your shell rc to get tab completion (#189).
+
 ## [v0.6.3] - 2026-11-09
 
 ### Fixed

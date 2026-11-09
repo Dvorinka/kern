@@ -83,6 +83,7 @@ Advisory:
   split --pattern GLOB --shards N [--root DIR]   suggest strategy.split and file buckets
   lint [dir ...]               offline compile of .github/workflows — will KERN run it?
   hooks install [--dry-run] [--force]             pre-push hook that runs kern lint
+  completion <bash|zsh|fish>  print a shell completion script
 
 Globals: --server, --token, --project override config and KERN_SERVER,
 KERN_TOKEN, KERN_PROJECT env vars. --json prints raw JSON.
@@ -186,6 +187,9 @@ pull_request runs by number; --workflow matches name or path.
 `
 	case "migrate":
 		return `kern migrate <owner/name|github-url> [--project S]
+`
+	case "completion":
+		return `kern completion <bash|zsh|fish> — print a shell completion script
 `
 	}
 	return usage
@@ -327,6 +331,8 @@ func dispatch(c *cli, args []string) int {
 		err = c.cmdLint(rest)
 	case "hooks":
 		err = c.cmdHooks(rest)
+	case "completion":
+		err = c.cmdCompletion(rest)
 	default:
 		err = fmt.Errorf("unknown command %q — see kern help", name)
 	}
