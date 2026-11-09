@@ -13,3 +13,6 @@ coverage/
 *.tsbuildinfo
 .playwright-mcp/
 .playwright-cli/
+
+# compiled CLI binary (accidentally committed in #124)
+/kern
