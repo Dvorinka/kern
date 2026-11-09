@@ -56,7 +56,8 @@ func defaultEgressAllowlist() []string {
 		"docker.io", "docker.com", "cloudflare-docker.com",
 		"mcr.microsoft.com", "nuget.org", "nuget.org",
 		"rubygems.org", "crates.io", "static.crates.io",
-		"repo.maven.apache.org", "plugins.gradle.org", "services.gradle.org",
+		"repo.maven.apache.org", "repo1.maven.org", "plugins.gradle.org", "services.gradle.org",
+		"dl.google.com", "maven.google.com",
 		"registry.npmjs.org",
 	}
 }
