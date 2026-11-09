@@ -46,18 +46,12 @@ jobs:
     # Dogfood docsync: docs-vs-code drift (env vars, paths, commands, routes).
     # The committed baseline suppresses known findings; only NEW drift fails.
     runs-on: [self-hosted, linux, x64]
-    env:
-      GOCACHE: /kern/cache/gocache
-      GOMODCACHE: /kern/cache/gomod
-      GOPATH: /kern/cache/gopath
-      GOTMPDIR: /kern/cache/gotmp
     steps:
       - uses: actions/checkout@v7
-      - run: mkdir -p "$GOTMPDIR" "$GOCACHE" "$GOMODCACHE" "$GOPATH"
-      # docsync needs go >= 1.27.1; this job only runs docsync, never builds
-      # the project, so it floats on a newer toolchain than the go job's pin.
-      - uses: actions/setup-go@v7
-        with:
-          go-version: "1.27"
-      - run: go install github.com/Dvorinka/docsync/cmd/docsync@v0.1.0
+      # docsync ships binaries — no Go needed here (its module wants >=1.27.1
+      # while the project pins 1.26, and GOTOOLCHAIN=local is pinned fleet-wide).
+      - run: |
+          curl -fsSL -o /usr/local/bin/docsync \
+            https://github.com/Dvorinka/docsync/releases/download/v0.1.0/docsync-v0.1.0-linux-amd64
+          chmod +x /usr/local/bin/docsync
       - run: docsync check --baseline .docsync-baseline.txt
