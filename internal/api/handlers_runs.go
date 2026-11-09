@@ -27,6 +27,14 @@ func (s *Server) listRuns(c *gin.Context) {
 		Limit:          parseInt(c.DefaultQuery("limit", "50"), 50),
 		Offset:         parseInt(c.DefaultQuery("offset", "0"), 0),
 	}
+	// ?day=<RFC3339> scopes to the 24h window starting at that instant —
+	// the overview chart's bar drill-down. The client sends local midnight.
+	if day := c.Query("day"); day != "" {
+		if t, err := time.Parse(time.RFC3339, day); err == nil {
+			filter.Since = t
+			filter.Until = t.Add(24 * time.Hour)
+		}
+	}
 	if slug := c.Query("project"); slug != "" {
 		p, err := s.Store.Project(c.Request.Context(), user.OrgID, slug)
 		if err != nil {
@@ -46,6 +54,42 @@ func (s *Server) listRuns(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"runs": runs, "total": total, "counts": counts})
+}
+
+// dayCounts serves the overview charts — per-day per-project totals from
+// the table itself, so a 14-day or 10-week view does not depend on how
+// many runs the paged list happened to return.
+func (s *Server) dayCounts(c *gin.Context) {
+	user, _ := currentUser(c)
+	var projectID *uuid.UUID
+	if slug := c.Query("project"); slug != "" {
+		p, err := s.Store.Project(c.Request.Context(), user.OrgID, slug)
+		if err != nil {
+			s.internalError(c, err)
+			return
+		}
+		projectID = &p.ID
+	}
+	days, err := s.Store.RunDayCounts(c.Request.Context(), projectID,
+		parseInt(c.DefaultQuery("days", "30"), 30))
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"days": days})
+}
+
+// queuedJobs lists the real queue — jobs parked waiting for a runner,
+// in claim order (priority then age). The overview and runs pages used
+// to fan out a run-detail read per live run to reconstruct this.
+func (s *Server) queuedJobs(c *gin.Context) {
+	jobs, err := s.Store.QueuedJobs(c.Request.Context(),
+		parseInt(c.DefaultQuery("limit", "100"), 100))
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"jobs": jobs})
 }
 
 // clearCancelledRuns hides every cleared-eligible cancelled run from the

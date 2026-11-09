@@ -411,3 +411,26 @@ export interface Member {
 	role: string;
 	created_at: string;
 }
+
+export interface QueuedJob {
+	id: string;
+	run_id: string;
+	run_number: number;
+	project_slug: string;
+	job_key: string;
+	name: string;
+	status: "queued" | "waiting" | "waiting_approval";
+	needs: string[];
+	runs_on: string[];
+	priority: number;
+	queued_at: string;
+}
+
+export interface DayCount {
+	day: string;
+	project: string;
+	total: number;
+	failed: number;
+	cancelled: number;
+	live: number;
+}

@@ -2395,6 +2395,12 @@ dl.rkv dd {
 	margin-top: 10px;
 	padding-bottom: 2px;
 }
+.mini .lane.click {
+  cursor: pointer;
+}
+.mini .lane.click:hover .bar {
+  outline: 1px solid var(--ink);
+}
 .mini .lane {
 	position: relative;
 	height: 15px;

@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useMemo, useState, type ReactNode } from "react";
 import { RotateCcw, X } from "lucide-react";
 import { api } from "../lib/api";
-import type { Job, OverviewResponse, Project, Run, Runner } from "../lib/types";
+import type { Job, OverviewResponse, Project, QueuedJob, Run, Runner } from "../lib/types";
 import { PageHeader, RunnerIcon, Spinner, cn } from "../components/ui";
 import { StatusPill, StatusSq } from "../components/status";
 import { Fingerprint, jobHue, useRunDetails } from "../components/fingerprint";
@@ -38,9 +38,10 @@ export function RunsPage() {
 	if (active.status) filterQuery.set("status", active.status);
 	if (active.conclusion) filterQuery.set("conclusion", active.conclusion);
 	if (project) filterQuery.set("project", project);
+	if (day) filterQuery.set("day", day);
 	const { data, isLoading, fetchNextPage, hasNextPage, isFetchingNextPage } =
 		useInfiniteQuery({
-			queryKey: ["runs", "all", tab, project],
+			queryKey: ["runs", "all", tab, project, day],
 			queryFn: ({ pageParam }) => {
 				const q = new URLSearchParams(filterQuery);
 				q.set("offset", String(pageParam));
@@ -67,6 +68,12 @@ export function RunsPage() {
 		queryKey: ["projects"],
 		queryFn: () => api.get<{ projects: Project[] }>("/projects"),
 	});
+	// The real queue, server-side — not reconstructed from visible runs.
+	const { data: queueData } = useQuery({
+		queryKey: ["queue"],
+		queryFn: () => api.get<{ jobs: QueuedJob[] }>("/jobs?status=queued"),
+		refetchInterval: 4000,
+	});
 
 	const runs = useMemo(() => {
 		const seen = new Set<string>();
@@ -88,15 +95,8 @@ export function RunsPage() {
 		() => (projectList?.projects ?? []).map((p) => p.slug).sort(),
 		[projectList],
 	);
-	const dayStart = day ? new Date(day).getTime() : null;
-	const dayEnd = dayStart != null ? dayStart + 86_400_000 : null;
-	// Status/project filters ran server-side; branch and day refine locally.
-	const visible = runs.filter(
-		(r) =>
-			(!branch || refName(r.ref) === branch) &&
-			(dayStart == null ||
-				(Date.parse(r.created_at) >= dayStart && Date.parse(r.created_at) < dayEnd!)),
-	);
+	// Status/project/day filters ran server-side; branch refines locally.
+	const visible = runs.filter((r) => !branch || refName(r.ref) === branch);
 	const detailRuns = useMemo(() => visible.slice(0, DETAIL_CAP), [visible]);
 	const details = useRunDetails(detailRuns);
 	const jobsByRun = useMemo(() => {
@@ -121,15 +121,8 @@ export function RunsPage() {
 		return out;
 	}, [visible]);
 
-	// jobs still parked — surfaces the real queue, not just a count
-	const queuedJobs = useMemo(
-		() =>
-			[...jobsByRun.values()]
-				.flat()
-				.filter((j) => j.status === "queued" || j.status === "waiting_approval")
-				.sort((a, b) => Date.parse(a.queued_at) - Date.parse(b.queued_at)),
-		[jobsByRun],
-	);
+	// jobs still parked — the real queue in server claim order
+	const queuedJobs = queueData?.jobs ?? [];
 
 	const qc = useQueryClient();
 	const clearCancelled = useMutation({
@@ -277,7 +270,7 @@ export function RunsPage() {
 							<div className="emptynote flush">Queue is clear. A push picks a runner on contact.</div>
 						)}
 						{queuedJobs.slice(0, 5).map((j) => (
-							<Link to={`/runs/${j.run_id}`} className="qrow rowlink" key={j.id}>
+							<Link to={`/runs/${j.run_id}?job=${encodeURIComponent(j.job_key || j.id)}`} className="qrow rowlink" key={j.id}>
 								<i className={`sw pat-${jobHue(j.job_key || j.name)}`} />
 								<div className="min-w-0">
 									<b className="block truncate">{j.name}</b>

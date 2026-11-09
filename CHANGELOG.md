@@ -6,6 +6,13 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 ## [Unreleased]
 
 ### Added
+- Dashboard: `GET /runs/day-counts` + `GET /jobs` — per-day run
+  aggregates and the live queue now come from the server, so the
+  runs-per-day chart and activity grid show real history (not the tail
+  of a 100-run fetch) and queue panels show the true claim order.
+  `?day=<iso>` filters the runs list server-side for chart drill-downs.
+- Trace/queue interactivity: MiniTrace lanes and queue rows deep-link to
+  `/runs/<id>?job=<key>`, landing on that job's log.
 - `docs` CI job runs `docsync check` against a committed baseline —
   new docs-vs-code drift (env vars, paths, commands, routes) fails the
   build while the 80 known findings stay suppressed (#193).

@@ -2,12 +2,12 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { useMemo, useState } from "react";
 import { api } from "../lib/api";
-import type { FleetMapResponse, Job, OverviewResponse, Run } from "../lib/types";
+import type { DayCount, FleetMapResponse, Job, OverviewResponse, QueuedJob, Run } from "../lib/types";
 import { Spinner } from "../components/ui";
 import { jobHue, useRunDetails } from "../components/fingerprint";
 import { FleetMap, fleetSites } from "../components/fleetmap";
-import { RunsChart, runsPerDay } from "../components/runschart";
-import { ActivityMap } from "../components/activitymap";
+import { RunsChart, type DayPoint } from "../components/runschart";
+import { ActivityMap, type DayTotals } from "../components/activitymap";
 import { duration, projectColor, refName, relTime, seconds, shortSha } from "../lib/format";
 
 const live = (r: Run) => r.status === "in_progress" || r.status === "queued";
@@ -75,6 +75,7 @@ const mmss = (ms: number) =>
 
 /* ── live now: one compact lane per job on the run's own clock ── */
 function MiniTrace({ run, jobs }: { run: Run; jobs: Job[] }) {
+	const nav = useNavigate();
 	const t0 = Date.parse(run.started_at ?? run.created_at);
 	const nowS = (Date.now() - t0) / 1000;
 	const endS = Math.max(240, Math.ceil((nowS * 1.18) / 60) * 60);
@@ -88,7 +89,23 @@ function MiniTrace({ run, jobs }: { run: Run; jobs: Job[] }) {
 				const hue = `pat-${jobHue(j.job_key || j.name)}`;
 				const running = st != null && en == null;
 				return (
-					<div className="lane" key={j.id}>
+					<div
+						className="lane click"
+						key={j.id}
+						role="link"
+						tabIndex={0}
+						title={`${j.name} — open its log`}
+						onClick={(e) => {
+							e.stopPropagation();
+							nav(`/runs/${run.id}?job=${encodeURIComponent(j.job_key || j.id)}`);
+						}}
+						onKeyDown={(e) => {
+							if (e.key === "Enter") {
+								e.stopPropagation();
+								nav(`/runs/${run.id}?job=${encodeURIComponent(j.job_key || j.id)}`);
+							}
+						}}
+					>
 						{j.status === "skipped" || j.status === "cancelled" ? null : st == null ? (
 							// parked in the queue — a dashed stub just past now
 							<i
@@ -146,6 +163,19 @@ export function OverviewPage() {
 		queryFn: () => api.get<{ name: string; version: string; env: string }>("/meta"),
 		staleTime: Number.POSITIVE_INFINITY,
 	});
+	// Per-day aggregates come from the table — the chart and activity map
+	// show real history instead of the tail of the paged runs list.
+	const { data: dayCounts } = useQuery({
+		queryKey: ["day-counts", 70],
+		queryFn: () => api.get<{ days: DayCount[] }>("/runs/day-counts?days=70"),
+		refetchInterval: 30000,
+	});
+	// The live queue, server-side — replaces per-run detail fan-out.
+	const { data: queueData } = useQuery({
+		queryKey: ["queue"],
+		queryFn: () => api.get<{ jobs: QueuedJob[] }>("/jobs?status=queued"),
+		refetchInterval: 4000,
+	});
 
 	const runs = useMemo(() => runsData?.runs ?? [], [runsData]);
 	const liveRuns = useMemo(() => runs.filter(live), [runs]);
@@ -158,7 +188,51 @@ export function OverviewPage() {
 	const details = useRunDetails(detailRuns);
 	const detailOf = (id: string) => details[detailRuns.findIndex((r) => r.id === id)]?.data;
 
-	const day = useMemo(() => runsPerDay(runs), [runs]);
+	// Server aggregates → chart points + activity cells. Buckets are UTC
+	// days; the ?day= drill-down parses the same instant server-side.
+	const { day, totals } = useMemo(() => {
+		const byDay = new Map<string, DayPoint>();
+		const tmap = new Map<string, DayTotals>();
+		for (const c of dayCounts?.days ?? []) {
+			const p =
+				byDay.get(c.day) ??
+				(() => {
+					const d: DayPoint = {
+						label: new Date(`${c.day}T00:00:00Z`).toLocaleDateString(undefined, {
+							month: "short",
+							day: "numeric",
+						}),
+						dayISO: `${c.day}T00:00:00Z`,
+						total: 0,
+						failed: 0,
+						cancelled: 0,
+						projects: [],
+						today: false,
+					};
+					byDay.set(c.day, d);
+					return d;
+				})();
+			p.total += c.total;
+			p.failed += c.failed;
+			p.cancelled += c.cancelled;
+			p.projects.push({ slug: c.project, count: c.total });
+			const t = tmap.get(c.day) ?? { date: c.day, total: 0, failed: 0, cancelled: 0, live: 0 };
+			t.total += c.total;
+			t.failed += c.failed;
+			t.cancelled += c.cancelled;
+			t.live += c.live;
+			tmap.set(c.day, t);
+		}
+		const todayKey = new Date().toISOString().slice(0, 10);
+		const days = [...byDay.values()]
+			.sort((a, b) => a.dayISO.localeCompare(b.dayISO))
+			.slice(-14);
+		days.forEach((d) => {
+			d.today = d.dayISO.slice(0, 10) === todayKey;
+			d.projects.sort((a, b) => b.count - a.count);
+		});
+		return { day: days, totals: [...tmap.values()] };
+	}, [dayCounts]);
 	const lanes = useMemo(() => laneOf(recent), [recent]);
 	const sites = useMemo(() => fleetSites(fleetMap?.runners ?? []), [fleetMap]);
 
@@ -198,10 +272,8 @@ export function OverviewPage() {
 		},
 	];
 
-	// jobs parked on the queue, oldest first — the mockup's Queue sheet
-	const queued = details
-		.flatMap((d) => (d.data?.jobs ?? []).filter((j) => j.status === "queued" || j.status === "waiting_approval"))
-		.sort((a, b) => Date.parse(a.queued_at) - Date.parse(b.queued_at));
+	// the real queue, server-side claim order
+	const queued = queueData?.jobs ?? [];
 
 	const pick = (id: string) => {
 		sessionStorage.setItem(SEL_KEY, id);
@@ -426,7 +498,7 @@ export function OverviewPage() {
 								<span className="r">14d bars · 10w grid</span>
 							</div>
 							<RunsChart days={day} version={meta?.version} />
-							<ActivityMap runs={runsData?.runs ?? []} weeks={10} />
+							<ActivityMap counts={totals} weeks={10} />
 						</div>
 						<div className="panel">
 							<div className="phead">
@@ -441,7 +513,7 @@ export function OverviewPage() {
 								)}
 								{queued.slice(0, 5).map((j) => (
 									<Link
-										to={`/runs/${j.run_id}`}
+										to={`/runs/${j.run_id}?job=${encodeURIComponent(j.job_key || j.id)}`}
 										className="qrow rowlink"
 										key={j.id}
 									>
@@ -453,7 +525,7 @@ export function OverviewPage() {
 													? "needs an approval"
 													: j.needs.length
 														? `waits for ${j.needs.join(", ")}`
-														: "waiting for a runner"}
+														: `waiting for a runner · ${j.project_slug}`}
 											</small>
 										</div>
 										<span className="wt">

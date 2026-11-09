@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams } from "react-router-dom";
-import { useState } from "react";
+import { Link, useParams, useSearchParams } from "react-router-dom";
+import { useEffect, useState } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { Download, Wrench } from "lucide-react";
@@ -47,6 +47,15 @@ export function RunDetailPage() {
 
 	const [jobId, setJobId] = useState<string | null>(null);
 	const [stepN, setStepN] = useState<number | null>(null);
+	// ?job=<key|id> deep links — trace lanes and queue rows land on a
+	// specific job's log.
+	const [params] = useSearchParams();
+	const wantJob = params.get("job");
+	useEffect(() => {
+		if (!wantJob || !data) return;
+		const j = data.jobs.find((j) => j.job_key === wantJob || j.id === wantJob || j.name === wantJob);
+		if (j) setJobId(j.id);
+	}, [wantJob, data]);
 
 	const runnerNames = new Map((runners?.runners ?? []).map((r) => [r.id, r.name]));
 

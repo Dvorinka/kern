@@ -1,6 +1,13 @@
 import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import type { Run } from "../lib/types";
+
+export interface DayTotals {
+	date: string; // yyyy-mm-dd
+	total: number;
+	failed: number;
+	cancelled: number;
+	live: number;
+}
 
 type DayCell = {
 	date: string;
@@ -12,33 +19,25 @@ type DayCell = {
 
 // A GitHub-contributions grid for runs: one cell per day, week columns,
 // cell colour = the day's dominant status, fill weight = run count.
-// Failures and live runs keep their state colour; success scales on ink.
-export function ActivityMap({ runs, weeks = 10 }: { runs: Run[]; weeks?: number }) {
+// Counts come from the server aggregate — history is not limited to
+// whatever the runs list happened to return.
+export function ActivityMap({ counts, weeks = 10 }: { counts: DayTotals[]; weeks?: number }) {
 	const nav = useNavigate();
 
 	const days = useMemo(() => {
-		const byDate = new Map<string, { s: number; f: number; r: number; c: number }>();
-		for (const r of runs) {
-			const d = (r.created_at ?? "").slice(0, 10);
-			if (!d) continue;
-			const m = byDate.get(d) ?? { s: 0, f: 0, r: 0, c: 0 };
-			if (r.status === "in_progress" || r.status === "queued" || r.status === "awaiting_approval") m.r++;
-			else if (r.conclusion === "failure") m.f++;
-			else if (r.conclusion === "success") m.s++;
-			else m.c++;
-			byDate.set(d, m);
-		}
+		const byDate = new Map(counts.map((c) => [c.date, c]));
 		const out: DayCell[] = [];
 		for (let i = weeks * 7 - 1; i >= 0; i--) {
 			const d = new Date();
 			d.setDate(d.getDate() - i);
 			const key = d.toISOString().slice(0, 10);
 			const m = byDate.get(key);
-			const count = m ? m.s + m.f + m.r + m.c : 0;
+			const count = m ? m.total : 0;
+			const ok = m ? m.total - m.failed - m.cancelled - m.live : 0;
 			let status: DayCell["status"] = "none";
-			if (m && m.r > 0) status = "running";
-			else if (m && m.f >= Math.max(m.s, 1)) status = "failure";
-			else if (m && m.s > 0) status = "success";
+			if (m && m.live > 0) status = "running";
+			else if (m && m.failed >= Math.max(ok, 1)) status = "failure";
+			else if (m && ok > 0) status = "success";
 			else if (count > 0) status = "cancelled";
 			out.push({
 				date: key,
@@ -49,7 +48,7 @@ export function ActivityMap({ runs, weeks = 10 }: { runs: Run[]; weeks?: number 
 			});
 		}
 		return out;
-	}, [runs, weeks]);
+	}, [counts, weeks]);
 
 	const max = Math.max(...days.map((d) => d.count), 1);
 	// weeks as columns, days as rows — pad the first column to start on Sunday
@@ -58,12 +57,12 @@ export function ActivityMap({ runs, weeks = 10 }: { runs: Run[]; weeks?: number 
 	const cols: (DayCell | null)[][] = [];
 	for (let i = 0; i < padded.length; i += 7) cols.push(padded.slice(i, i + 7));
 
-	const counts = { success: 0, failure: 0, running: 0, cancelled: 0 };
+	const legend = { success: 0, failure: 0, running: 0, cancelled: 0 };
 	for (const d of days) {
-		if (d.status === "success") counts.success += d.count;
-		else if (d.status === "failure") counts.failure += d.count;
-		else if (d.status === "running") counts.running += d.count;
-		else if (d.status === "cancelled") counts.cancelled += d.count;
+		if (d.status === "success") legend.success += d.count;
+		else if (d.status === "failure") legend.failure += d.count;
+		else if (d.status === "running") legend.running += d.count;
+		else if (d.status === "cancelled") legend.cancelled += d.count;
 	}
 
 	// month tick under each week column when the month rolls over
@@ -111,19 +110,19 @@ export function ActivityMap({ runs, weeks = 10 }: { runs: Run[]; weeks?: number 
 			<div className="amleg">
 				<span>{days.filter((d) => d.count > 0).length} active days</span>
 				<span className="key i ok" />
-				{counts.success} ok
+				{legend.success} ok
 				<span className="key i err" />
-				{counts.failure} failed
-				{counts.running > 0 && (
+				{legend.failure} failed
+				{legend.running > 0 && (
 					<>
 						<span className="key i live" />
-						{counts.running} live
+						{legend.running} live
 					</>
 				)}
-				{counts.cancelled > 0 && (
+				{legend.cancelled > 0 && (
 					<>
 						<span className="key i cxl" />
-						{counts.cancelled} cancelled
+						{legend.cancelled} cancelled
 					</>
 				)}
 			</div>
