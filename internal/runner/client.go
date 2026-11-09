@@ -57,6 +57,10 @@ type Claim struct {
 		Inputs          map[string]string `json:"inputs"`
 		Services        []ClaimService    `json:"services"`
 		Needs           map[string]any    `json:"needs"`
+		// CacheToken is the job-scoped kc1 credential for the GitHub
+		// cache-service endpoints; empty against pre-kc1 servers, where the
+		// runner token is the fallback.
+		CacheToken string `json:"cache_token"`
 	} `json:"job"`
 	Run          ClaimRun            `json:"run"`
 	Steps        []StepSpec          `json:"steps"`

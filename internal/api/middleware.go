@@ -18,6 +18,7 @@ const (
 	ctxUser      = "kern.user"
 	ctxAuthKind  = "kern.auth_kind"
 	ctxRunner    = "kern.runner"
+	ctxCacheJob  = "kern.cache_job"
 	ctxAPIScopes = "kern.api_scopes"
 )
 
@@ -220,6 +221,38 @@ func currentRunner(c *gin.Context) (store.Runner, bool) {
 	}
 	r, ok := v.(store.Runner)
 	return r, ok
+}
+
+// requireCacheClient authenticates the GitHub cache-service protocol: either
+// a runner token (lease-checked downstream) or a kc1 job token minted at
+// claim time and exposed to steps as ACTIONS_RUNTIME_TOKEN. The job token is
+// HMAC-bound to one jobID, so untrusted job code cannot reach runner-wide
+// endpoints with it.
+func (s *Server) requireCacheClient() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		token := bearer(c)
+		if token == "" {
+			fail(c, http.StatusUnauthorized, "unauthenticated", "runner or job token required")
+			return
+		}
+		if strings.HasPrefix(token, auth.RunnerPrefix) {
+			runner, err := s.Store.RunnerByToken(c.Request.Context(), auth.HashToken(token))
+			if err != nil {
+				fail(c, http.StatusUnauthorized, "invalid_token", "runner token is invalid or revoked")
+				return
+			}
+			c.Set(ctxRunner, runner)
+			c.Next()
+			return
+		}
+		jobID, ok := s.parseCacheJobToken(token)
+		if !ok {
+			fail(c, http.StatusUnauthorized, "invalid_token", "not a runner or job token")
+			return
+		}
+		c.Set(ctxCacheJob, jobID)
+		c.Next()
+	}
 }
 
 func (s *Server) joinTokenValid(token string) bool {
