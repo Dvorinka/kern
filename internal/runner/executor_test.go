@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -385,5 +386,22 @@ func TestRefNameAndType(t *testing.T) {
 		if got := refType(c.ref); got != c.typ {
 			t.Errorf("refType(%q) = %q, want %q", c.ref, got, c.typ)
 		}
+	}
+}
+
+func TestPathExists(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "marker")
+	if err := os.WriteFile(f, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !pathExists(f) {
+		t.Error("pathExists(file) = false, want true")
+	}
+	if !pathExists(dir) {
+		t.Error("pathExists(dir) = false, want true")
+	}
+	if pathExists(filepath.Join(dir, "missing")) {
+		t.Error("pathExists(missing) = true, want false")
 	}
 }

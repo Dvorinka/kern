@@ -9,6 +9,9 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 - `kern runners list` shows a VERSION column per runner and prints a fleet
   version histogram when runners disagree — the drift view from #181 without
   opening the UI (#181).
+- `kern completion <bash|zsh|fish>` prints a shell completion script
+  covering the top-level commands and subcommand trees — source it from
+  your shell rc to get tab completion (#189).
 
 ## [v0.6.3] - 2026-11-09
 
