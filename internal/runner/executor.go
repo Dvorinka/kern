@@ -439,6 +439,28 @@ func (e *executor) imageExists(ctx context.Context, image string) bool {
 	return exec.CommandContext(ctx, "docker", "image", "inspect", image).Run() == nil
 }
 
+// imageUserHome reports the home directory of uid 1000 in the job image's
+// /etc/passwd — what getpwuid(3) returns inside the container. JVM tools
+// (Gradle, Maven, Java itself) resolve user.home this way and ignore $HOME.
+// Returns "" when the image has no uid-1000 entry or the probe fails; the
+// caller then skips the extra home mount.
+func (e *executor) imageUserHome(ctx context.Context) string {
+	out, err := exec.CommandContext(ctx, "docker", "run", "--rm", "--network", "none",
+		"--entrypoint", "sh", e.claim.Job.Image, "-c",
+		`awk -F: '$3==1000 {print $6; exit}' /etc/passwd 2>/dev/null || true`).Output()
+	if err != nil {
+		return ""
+	}
+	home := strings.TrimSpace(string(out))
+	// Only /home/<name> paths are mount targets — anything else (/, /etc,
+	// a missing entry) skips the extra mount rather than shadowing system
+	// directories in the job container.
+	if !strings.HasPrefix(home, "/home/") || strings.ContainsAny(home, " \t\n\r") {
+		return ""
+	}
+	return home
+}
+
 // startContainer creates and starts the idle job container.
 func (e *executor) startContainer(ctx context.Context) error {
 	if e.cfg.Concurrency <= 1 {
@@ -524,6 +546,15 @@ func (e *executor) startContainer(ctx context.Context) error {
 		"-v", cacheDir(e.cfg.WorkRoot)+":"+containerCacheDir,
 		"-v", filepath.Join(workRoot, "home")+":"+containerActionHome,
 	)
+	if !e.privileged() {
+		// The rootfs is read-only, and JVM-based actions resolve user.home
+		// via getpwuid — not $HOME — so they would write into the image's
+		// own home (e.g. ~/.gradle) and fail. Give uid 1000's passwd home
+		// the same writable per-job home volume.
+		if home := e.imageUserHome(ctx); home != "" && home != containerActionHome {
+			args = append(args, "-v", filepath.Join(workRoot, "home")+":"+home)
+		}
+	}
 	args = append(args, jobCAMount()...)
 	args = append(args, caEnv()...)
 	if eventPath != "" {
