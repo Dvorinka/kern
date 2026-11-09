@@ -46,7 +46,8 @@ func (c *cli) printStatus(ctx context.Context) error {
 		return err
 	}
 	var ov struct {
-		Overview struct {
+		UnmatchedQueued int64 `json:"unmatched_queued"`
+		Overview        struct {
 			RunsTotal     int64      `json:"runs_total"`
 			RunsSuccess   int64      `json:"runs_success"`
 			RunsFailure   int64      `json:"runs_failure"`
@@ -88,6 +89,7 @@ func (c *cli) printStatus(ctx context.Context) error {
 			"server": c.server, "version": meta.Version, "env": meta.Env,
 			"runs_active": o.RunsActive, "jobs_queued": o.JobsQueued,
 			"jobs_running": o.JobsRunning, "runners_online": online,
+			"unmatched_queued": ov.UnmatchedQueued,
 			"runners_draining": draining, "runners_offline": offline,
 			"runners_total": o.RunnersTotal, "last_heartbeat": lastBeat,
 			"last_run": o.LastRunAt,
@@ -96,7 +98,11 @@ func (c *cli) printStatus(ctx context.Context) error {
 	}
 	fmt.Printf("%s %s · %s · %s\n", meta.Name, meta.Version, meta.Env, c.server)
 	fmt.Printf("runs:    %d active · %d total (%d ok, %d failed)\n", o.RunsActive, o.RunsTotal, o.RunsSuccess, o.RunsFailure)
-	fmt.Printf("queue:   %d queued · %d running\n", o.JobsQueued, o.JobsRunning)
+	fmt.Printf("queue:   %d queued · %d running", o.JobsQueued, o.JobsRunning)
+	if ov.UnmatchedQueued > 0 {
+		fmt.Printf(" · %d unmatched (no runner)", ov.UnmatchedQueued)
+	}
+	fmt.Println()
 	fmt.Printf("runners: %d online · %d draining · %d offline (of %d) · last beat %s\n",
 		online, draining, offline, o.RunnersTotal, rel(lastBeat))
 	fmt.Printf("last run: %s\n", rel(o.LastRunAt))
