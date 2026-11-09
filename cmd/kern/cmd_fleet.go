@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -72,10 +73,17 @@ func (c *cli) cmdRunners(ctx context.Context, args []string) error {
 				if r.Draining {
 					state = "draining"
 				}
-				rows = append(rows, []string{shortID(r.ID), r.Name, state,
+				version := r.Version
+				if version == "" {
+					version = "-"
+				}
+				rows = append(rows, []string{shortID(r.ID), r.Name, state, version,
 					fmt.Sprintf("%d", r.ActiveJobs), cpu, mem, disk, rel(r.LastHeartbeatAt)})
 			}
-			table([]string{"ID", "NAME", "STATE", "JOBS", "CPU", "MEM", "DISK", "BEAT"}, rows)
+			table([]string{"ID", "NAME", "STATE", "VERSION", "JOBS", "CPU", "MEM", "DISK", "BEAT"}, rows)
+			if drift := versionDrift(out.Runners); drift != "" {
+				fmt.Println(drift)
+			}
 		})
 	case "drain", "undrain":
 		arg, err := strarg(rest, 0, "runner id|name")
@@ -820,4 +828,32 @@ func (c *cli) cmdDeployments(ctx context.Context, args []string) error {
 		return fmt.Errorf("unknown deployments subcommand %q", args[0])
 	}
 	return nil
+}
+
+// versionDrift summarizes runner version spread for `runners list`. Returns
+// "" when the fleet is uniform (or empty); otherwise a one-line histogram so
+// operators can spot stale runners without opening the UI (#181).
+func versionDrift(runners []runnerRow) string {
+	counts := map[string]int{}
+	for _, r := range runners {
+		v := r.Version
+		if v == "" {
+			v = "unknown"
+		}
+		counts[v]++
+	}
+	if len(counts) <= 1 {
+		return ""
+	}
+	versions := make([]string, 0, len(counts))
+	for v := range counts {
+		versions = append(versions, v)
+	}
+	sort.Strings(versions)
+	parts := make([]string, 0, len(versions))
+	for _, v := range versions {
+		parts = append(parts, fmt.Sprintf("%s×%d", v, counts[v]))
+	}
+	return fmt.Sprintf("versions: %s — fleet is split, check 'kern runners self-update'",
+		strings.Join(parts, " "))
 }

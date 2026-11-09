@@ -9,6 +9,9 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 - `docs` CI job runs `docsync check` against a committed baseline —
   new docs-vs-code drift (env vars, paths, commands, routes) fails the
   build while the 80 known findings stay suppressed (#193).
+- `kern runners list` shows a VERSION column per runner and prints a fleet
+  version histogram when runners disagree — the drift view from #181 without
+  opening the UI (#181).
 - `docs/runbook.md` — operations runbook: symptom → check → fix tables for
   webhook delivery failures, stuck queues, runner offline/drift, runner disk
   pressure, Postgres maintenance, retention knobs and deploy/rollback (#192).
