@@ -6,6 +6,29 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 ## [Unreleased]
 
 ### Added
+- `GITHUB_REF_NAME`, `GITHUB_REF_TYPE`, `GITHUB_HEAD_REF`, `GITHUB_BASE_REF`
+  (PR runs), `GITHUB_RUN_ATTEMPT`, `GITHUB_REPOSITORY_OWNER`,
+  `GITHUB_GRAPHQL_URL` and `GITHUB_TRIGGERING_ACTOR` now reach the step
+  environment — previously they existed only in the `github.*` expression
+  context, so `echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT`
+  wrote an empty output and `steps.<id>.outputs` resolved empty (kern#247).
+- Homebrew distribution: `brew install dvorinka/tap/kern` installs the CLI
+  with shell completions; the release workflow bumps the tap formula on
+  every tag.
+- `/webhooks/deliveries` accepts `status`/`event` filters and returns
+  whole-table `total`, `counts` and `events`; `/artifacts` and `/cache`
+  return a `stats` aggregate; `/runs` `counts` adds `success`,
+  `completed` and `median_seconds`.
+
+### Fixed
+- Dashboard pages no longer derive stats from bounded list windows:
+  overview "runs today" counted only the newest 100 runs, project cards
+  and project health read a global `/runs?limit=200` window, and the
+  deliveries/artifacts/cache KPIs counted only the fetched page. All now
+  read server-side aggregates.
+- `docs` CI job runs docsync from its release binary — its module needs
+  go >= 1.27.1 while the project pins 1.26 and the fleet pins
+  `GOTOOLCHAIN=local`.
 - `kern-ubuntu` parity image now ships Playwright's full Ubuntu 24.04
   dependency set (chromium, firefox, webkit + tools/fonts) and the
   tauri release-lane packages (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`,
