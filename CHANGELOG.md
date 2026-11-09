@@ -9,9 +9,16 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 - `kern runners list` shows a VERSION column per runner and prints a fleet
   version histogram when runners disagree — the drift view from #181 without
   opening the UI (#181).
+- `docs/runbook.md` — operations runbook: symptom → check → fix tables for
+  webhook delivery failures, stuck queues, runner offline/drift, runner disk
+  pressure, Postgres maintenance, retention knobs and deploy/rollback (#192).
 - `kern completion <bash|zsh|fish>` prints a shell completion script
   covering the top-level commands and subcommand trees — source it from
   your shell rc to get tab completion (#189).
+- `kern runs rerun <id> --failed` re-runs a finished run's failed and
+  cancelled jobs in place (plus their dependents), and `--job KEY`
+  re-runs a single job and its dependents — matching `gh run rerun`
+  instead of seeding a whole new run (#179).
 
 ## [v0.6.3] - 2026-11-09
 
