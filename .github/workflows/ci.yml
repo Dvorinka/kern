@@ -42,3 +42,22 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm build
+  docs:
+    # Dogfood docsync: docs-vs-code drift (env vars, paths, commands, routes).
+    # The committed baseline suppresses known findings; only NEW drift fails.
+    runs-on: [self-hosted, linux, x64]
+    env:
+      GOCACHE: /kern/cache/gocache
+      GOMODCACHE: /kern/cache/gomod
+      GOPATH: /kern/cache/gopath
+      GOTMPDIR: /kern/cache/gotmp
+    steps:
+      - uses: actions/checkout@v7
+      - run: mkdir -p "$GOTMPDIR" "$GOCACHE" "$GOMODCACHE" "$GOPATH"
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+      # docsync v0.1.0 requires go >= 1.27.1; the project pins 1.26, so let
+      # the toolchain auto-fetch for this install only.
+      - run: GOTOOLCHAIN=auto go install github.com/Dvorinka/docsync/cmd/docsync@v0.1.0
+      - run: docsync check --baseline .docsync-baseline.txt

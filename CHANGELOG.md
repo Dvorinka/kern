@@ -6,6 +6,9 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 ## [Unreleased]
 
 ### Added
+- `docs` CI job runs `docsync check` against a committed baseline —
+  new docs-vs-code drift (env vars, paths, commands, routes) fails the
+  build while the 80 known findings stay suppressed (#193).
 - Runner pauses job claims while the work-root filesystem is below
   `KERN_RUNNER_DISK_MIN_FREE_PCT` — the same threshold that drives the
   docker reclaim sweep, now also a claim gate so a full runner stops
