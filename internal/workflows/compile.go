@@ -423,6 +423,7 @@ func compileJob(wf Workflow, id string, job *Job, matrix map[string]any, c Compi
 		TimeoutSeconds:  timeout,
 		ContinueOnError: job.ContinueOnError,
 		FailFast:        failFast(job),
+		Priority:        job.Priority,
 		Environment:     envName,
 		EnvironmentURL:  envURL,
 		SplitN:          splitN,
