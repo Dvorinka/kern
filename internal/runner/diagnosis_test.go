@@ -22,6 +22,7 @@ func TestDiagnose(t *testing.T) {
 		{"permission", 1, "touch: cannot touch '/etc/x': Permission denied\n", "", "permission_denied", false},
 		{"network", 1, "curl: (6) Could not resolve host: api.example.com\n", "", "network", false},
 		{"disk", 1, "write failed: No space left on device\n", "", "disk_full", false},
+		{"disk in stepErr", 1, "", "prepare workspace: no space left on device", "disk_full", false},
 		{"oom", 137, "", "", "oom", false},
 		{"generic", 2, "make: *** [all] Error 1\n", "", "script_failure", false},
 	}
