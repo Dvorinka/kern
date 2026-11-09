@@ -13,8 +13,9 @@ import (
 type NotifyDelivery struct {
 	ID          uuid.UUID  `json:"id"`
 	OrgID       uuid.UUID  `json:"org_id"`
-	ProjectID   uuid.UUID  `json:"project_id"`
-	RunID       uuid.UUID  `json:"run_id"`
+	ProjectID   *uuid.UUID `json:"project_id,omitempty"`
+	RunID       *uuid.UUID `json:"run_id,omitempty"`
+	Event       string     `json:"event"`
 	URL         string     `json:"url"`
 	Payload     []byte     `json:"-"`
 	Attempts    int        `json:"attempts"`
@@ -24,11 +25,17 @@ type NotifyDelivery struct {
 	DeliveredAt *time.Time `json:"delivered_at"`
 }
 
-// EnqueueNotify inserts a delivery due immediately.
+// EnqueueNotify inserts a run.completed delivery due immediately.
 func (s *Store) EnqueueNotify(ctx context.Context, orgID, projectID, runID uuid.UUID, url string, payload []byte) error {
+	return s.EnqueueNotifyEvent(ctx, orgID, &projectID, &runID, "run.completed", url, payload)
+}
+
+// EnqueueNotifyEvent inserts a delivery for a non-run event (e.g.
+// runner.offline, which carries nil project/run ids).
+func (s *Store) EnqueueNotifyEvent(ctx context.Context, orgID uuid.UUID, projectID, runID *uuid.UUID, event, url string, payload []byte) error {
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO notify_deliveries (org_id, project_id, run_id, url, payload)
-		VALUES ($1, $2, $3, $4, $5)`, orgID, projectID, runID, url, payload)
+		INSERT INTO notify_deliveries (org_id, project_id, run_id, event, url, payload)
+		VALUES ($1, $2, $3, $4, $5, $6)`, orgID, projectID, runID, event, url, payload)
 	return err
 }
 
@@ -39,7 +46,7 @@ func (s *Store) DueNotifyDeliveries(ctx context.Context, limit int) ([]NotifyDel
 		limit = 20
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, org_id, project_id, run_id, url, payload, attempts,
+		SELECT id, org_id, project_id, run_id, event, url, payload, attempts,
 		       next_attempt_at, last_error, created_at, delivered_at
 		FROM notify_deliveries
 		WHERE delivered_at IS NULL AND next_attempt_at <= now()
@@ -52,7 +59,7 @@ func (s *Store) DueNotifyDeliveries(ctx context.Context, limit int) ([]NotifyDel
 	out := []NotifyDelivery{}
 	for rows.Next() {
 		var d NotifyDelivery
-		if err := rows.Scan(&d.ID, &d.OrgID, &d.ProjectID, &d.RunID, &d.URL, &d.Payload,
+		if err := rows.Scan(&d.ID, &d.OrgID, &d.ProjectID, &d.RunID, &d.Event, &d.URL, &d.Payload,
 			&d.Attempts, &d.NextAttempt, &d.LastError, &d.CreatedAt, &d.DeliveredAt); err != nil {
 			return nil, err
 		}
