@@ -50,6 +50,8 @@ Environment only:
   KERN_RUNNER_IMAGE_MAX_AGE GC pulled job images unused this long (default 168h, 0=off)
   KERN_RUNNER_PREPULL       comma-separated images to keep pulled (job pulls hit local cache)
   KERN_RUNNER_DISK_MIN_FREE_PCT  prune docker + pause claims when work-root fs free drops below % (default 10, 0=off)
+  KERN_RUNNER_DISK_CRITICAL_FREE_PCT  escalate reclaim under critical pressure (default 5, 0=off)
+  KERN_RUNNER_DISK_CRITICAL_FLOOR_BYTES  absolute floor that also marks critical (default 2GiB, 0=off)
   KERN_RUNNER_CACHE_MAX_BYTES    cap the persistent _cache tree, evicting oldest first (default 8GiB, 0=off)
   KERN_ACTIONS_GIT_BASE     git base URL for remote actions (default: the run's
                             repo host, or https://github.com)
@@ -329,6 +331,16 @@ func agentConfig(o options) runner.Config {
 		cfg.DiskMinFreePct, _ = strconv.ParseFloat(v, 64)
 	} else {
 		cfg.DiskMinFreePct = 10
+	}
+	if v := os.Getenv("KERN_RUNNER_DISK_CRITICAL_FREE_PCT"); v != "" {
+		cfg.DiskCriticalFreePct, _ = strconv.ParseFloat(v, 64)
+	} else {
+		cfg.DiskCriticalFreePct = 5
+	}
+	if v := os.Getenv("KERN_RUNNER_DISK_CRITICAL_FLOOR_BYTES"); v != "" {
+		cfg.DiskCriticalFloorBytes, _ = strconv.ParseInt(v, 10, 64)
+	} else {
+		cfg.DiskCriticalFloorBytes = 2 << 30
 	}
 	cfg.Executor = os.Getenv("KERN_RUNNER_EXECUTOR")
 	if cfg.Executor == "" {

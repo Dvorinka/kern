@@ -40,6 +40,12 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 - `docs/runner-contract.md` — the job/service networking model, reserved
   kern ports, health-gate semantics, and job-container hardening in one
   place (#223).
+- Critical-tier disk reclaim: below `KERN_RUNNER_DISK_CRITICAL_FREE_PCT`
+  (default 5) or `KERN_RUNNER_DISK_CRITICAL_FLOOR_BYTES` (default 2 GiB),
+  whichever trips first, the idle runner also removes ledger-tracked
+  images unused >24h, sweeps workspaces older than 2h, and evicts
+  `_cache` down to half its cap — before reaching for the docker prune
+  the warn tier already runs (#211).
 
 ### Fixed
 - Runner: the `_cache` size bound now evicts whole atomic entries —
