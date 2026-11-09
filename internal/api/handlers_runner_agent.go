@@ -309,6 +309,7 @@ func (s *Server) respondWithClaim(c *gin.Context, claimed *store.ClaimedJob, run
 	}
 	remediations, _ := s.Store.ApprovedFixes(c.Request.Context(), claimed.Job.ID)
 	policy, _ := s.Store.SelfHealPolicy(c.Request.Context(), claimed.Run.ID)
+	s.postJobCheck(c.Request.Context(), claimed.Run, claimed.Job, "in_progress")
 	// Private repos clone with a short-lived installation token minted at claim
 	// time. It rides the claim payload only — never the stored run source.
 	var cloneToken string
@@ -592,6 +593,10 @@ func (s *Server) finishJob(c *gin.Context) {
 	if !updated {
 		fail(c, http.StatusConflict, "lease_lost", "job is no longer leased to this runner")
 		return
+	}
+	if run, rerr := s.Store.Run(c.Request.Context(), job.RunID); rerr == nil {
+		job.Conclusion = req.Conclusion
+		s.postJobCheck(c.Request.Context(), run, job, "completed")
 	}
 	if err := s.Orch.AdvanceRun(c.Request.Context(), job.RunID); err != nil {
 		s.Log.Error("advance after job finish", zap.Error(err))

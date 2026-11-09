@@ -126,6 +126,18 @@ func (s *Server) wireCommitStatus() {
 		}); err != nil {
 			s.Log.Warn("check run failed", zap.String("repo", repo), zap.Error(err))
 		}
+		// Terminal sweep: post each job's final check so paths that never
+		// reported mid-run (fail-fast sibling cancels, run-level cancels,
+		// skips before seeding completed) still land a terminal per-job
+		// check on the commit. Upsert makes re-posts idempotent.
+		if status == "completed" {
+			for _, job := range jobs {
+				s.postJobCheck(ctx, run, job, job.Status)
+			}
+		}
+	}
+	s.Orch.PostJobStatus = func(ctx context.Context, run store.Run, job store.Job, state string) {
+		s.postJobCheck(ctx, run, job, state)
 	}
 }
 

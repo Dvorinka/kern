@@ -86,6 +86,27 @@ func TestGitHubCheckAndLink(t *testing.T) {
 	}
 }
 
+func TestJobCheckMapping(t *testing.T) {
+	cases := []struct {
+		state, conc, wantSt, wantConc string
+	}{
+		{"queued", "", "queued", ""},
+		{"waiting_approval", "", "queued", ""},
+		{"in_progress", "", "in_progress", ""},
+		{"skipped", "", "completed", "skipped"},
+		{"cancelled", "", "completed", "cancelled"},
+		{"completed", "success", "completed", "success"},
+		{"completed", "timed_out", "completed", "timed_out"},
+		{"completed", "", "completed", "neutral"},
+	}
+	for _, tc := range cases {
+		st, c := jobCheck(tc.state, store.Job{Conclusion: tc.conc})
+		if st != tc.wantSt || c != tc.wantConc {
+			t.Fatalf("%s/%s -> %s/%s, want %s/%s", tc.state, tc.conc, st, c, tc.wantSt, tc.wantConc)
+		}
+	}
+}
+
 // The first failing step's masked diagnosis rides the check-run summary;
 // the private detail field never does (#136).
 func TestCheckSummaryFailureDiagnosis(t *testing.T) {
