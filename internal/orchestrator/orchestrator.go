@@ -51,7 +51,10 @@ type Orchestrator struct {
 	PostStatus func(ctx context.Context, run store.Run, state string)
 	// NotifySweep, when set, delivers due outbound notifications. It runs
 	// inside the leader-gated tick so exactly one replica sends at a time.
-	NotifySweep       func(ctx context.Context)
+	NotifySweep func(ctx context.Context)
+	// RunnerOffline, when set, is called with the runners each stale sweep
+	// just transitioned offline — alerting on the edge, not the state.
+	RunnerOffline     func(ctx context.Context, runners []store.OfflineRunner)
 	lastScheduleCheck time.Time
 
 	leaderMu sync.Mutex
@@ -244,8 +247,10 @@ func (o *Orchestrator) Tick(ctx context.Context) {
 		o.Log.Warn("jobs failed by timeout watchdog", zap.Int64("jobs", n))
 	}
 	if o.StaleRunnerTimeout > 0 {
-		if _, err := o.Store.MarkStaleRunnersOffline(ctx, o.StaleRunnerTimeout); err != nil {
+		if offline, err := o.Store.MarkStaleRunnersOffline(ctx, o.StaleRunnerTimeout); err != nil {
 			o.Log.Error("mark stale runners", zap.Error(err))
+		} else if len(offline) > 0 && o.RunnerOffline != nil {
+			o.RunnerOffline(ctx, offline)
 		}
 	}
 	if o.Blobs != nil {
