@@ -27,43 +27,62 @@ import (
 )
 
 const (
-	// nodeRelease is the pinned Node distribution every node* action runtime
-	// resolves to. GitHub likewise retargets node12/node16 onto node20.
-	nodeRelease         = "v20.18.1"
+	// nodeDistBase is the Node release archive origin; SHASUMS256.txt beside
+	// each tarball proves download integrity.
 	nodeDistBase        = "https://nodejs.org/dist"
 	containerNodeRoot   = "/kern/node" // _node is mounted here; children may be re-provisioned mid-job
 	nodeDownloadTimeout = 5 * time.Minute
 )
 
-// nodeHostDir is the runner-persistent location of the unpacked distribution.
-// The container mounts its parent _node, so a re-provisioned child directory
-// stays visible inside running job containers.
-func (e *executor) nodeHostDir() string {
-	return filepath.Join(e.cfg.WorkRoot, "_node", nodeRelease)
+// nodeReleases maps action runtimes to pinned Node distributions, provisioned
+// lazily under <work-root>/_node/<release>. GitHub retargets node12/node16
+// onto node20; node24 gets its own major — actions declaring node24 (type
+// stripping, --experimental-strip-types, newer APIs) must not run on v20.
+var nodeReleases = map[string]string{
+	"node12": "v20.18.1",
+	"node16": "v20.18.1",
+	"node20": "v20.18.1",
+	"node24": "v24.22.2",
+}
+
+// nodeReleaseFor resolves an action runtime name to its pinned release.
+// Unknown runtimes fall back to the node20 pin.
+func nodeReleaseFor(using string) string {
+	if r, ok := nodeReleases[using]; ok {
+		return r
+	}
+	return nodeReleases["node20"]
+}
+
+// nodeHostDir is the runner-persistent location of the unpacked distribution
+// for one runtime. The container mounts its parent _node, so a re-provisioned
+// child directory stays visible inside running job containers.
+func (e *executor) nodeHostDir(using string) string {
+	return filepath.Join(e.cfg.WorkRoot, "_node", nodeReleaseFor(using))
 }
 
 // containerNodeBin is the node binary as executed code sees it: /kern/node
 // inside job containers, the host path on the host executor. The Windows
 // dist unpacks node.exe at the archive root (no bin/ dir).
-func (e *executor) nodeBin() string {
+func (e *executor) nodeBin(using string) string {
 	if e.host {
 		if runtime.GOOS == "windows" {
-			return filepath.Join(e.nodeHostDir(), "node.exe")
+			return filepath.Join(e.nodeHostDir(using), "node.exe")
 		}
-		return filepath.Join(e.nodeHostDir(), "bin", "node")
+		return filepath.Join(e.nodeHostDir(using), "bin", "node")
 	}
-	return containerNodeRoot + "/" + nodeRelease + "/bin/node"
+	return containerNodeRoot + "/" + nodeReleaseFor(using) + "/bin/node"
 }
 
 // nodeBinDir is that binary's directory. Actions start with an absolute
 // node path, but scripts they spawn (pnpm's preinstall) call `node` on PATH.
-func (e *executor) nodeBinDir() string {
-	return filepath.Dir(e.nodeBin())
+func (e *executor) nodeBinDir(using string) string {
+	return filepath.Dir(e.nodeBin(using))
 }
 
 // nodeArchive maps the runner platform to the dist archive name. Windows
 // ships a .zip (node.exe at the root); unix ships a .tar.gz with bin/node.
-func nodeArchive() (string, error) {
+func nodeArchive(release string) (string, error) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
 		return "", fmt.Errorf("JavaScript actions need a linux, darwin or windows runner host (got %s)", runtime.GOOS)
 	}
@@ -77,24 +96,25 @@ func nodeArchive() (string, error) {
 		return "", fmt.Errorf("JavaScript actions are unsupported on %s runners", runtime.GOARCH)
 	}
 	if runtime.GOOS == "windows" {
-		return fmt.Sprintf("node-%s-win-%s.zip", nodeRelease, arch), nil
+		return fmt.Sprintf("node-%s-win-%s.zip", release, arch), nil
 	}
-	return fmt.Sprintf("node-%s-%s-%s.tar.gz", nodeRelease, runtime.GOOS, arch), nil
+	return fmt.Sprintf("node-%s-%s-%s.tar.gz", release, runtime.GOOS, arch), nil
 }
 
-// ensureNode provisions the Node distribution once per runner host. A
-// <dir>.complete marker gates readers, so a crashed download never leaves a
-// half-unpacked runtime for the next job.
+// ensureNode provisions the Node distribution for one runtime once per
+// runner host. A <dir>.complete marker gates readers, so a crashed download
+// never leaves a half-unpacked runtime for the next job.
 var nodeProvisionMu sync.Mutex
 
-func (e *executor) ensureNode(ctx context.Context) error {
+func (e *executor) ensureNode(ctx context.Context, using string) error {
 	nodeProvisionMu.Lock()
 	defer nodeProvisionMu.Unlock()
-	dir := e.nodeHostDir()
+	release := nodeReleaseFor(using)
+	dir := e.nodeHostDir(using)
 	if _, err := os.Stat(dir + ".complete"); err == nil {
 		return nil
 	}
-	archive, err := nodeArchive()
+	archive, err := nodeArchive(release)
 	if err != nil {
 		return err
 	}
@@ -105,10 +125,10 @@ func (e *executor) ensureNode(ctx context.Context) error {
 		return err
 	}
 	pkg := filepath.Join(tmp, archive)
-	if err := download(ctx, nodeDistBase+"/"+nodeRelease+"/"+archive, pkg); err != nil {
-		return fmt.Errorf("download node %s: %w", nodeRelease, err)
+	if err := download(ctx, nodeDistBase+"/"+release+"/"+archive, pkg); err != nil {
+		return fmt.Errorf("download node %s: %w", release, err)
 	}
-	if err := verifyDistSum(ctx, archive, pkg); err != nil {
+	if err := verifyDistSum(ctx, release, archive, pkg); err != nil {
 		return err
 	}
 	root := strings.TrimSuffix(strings.TrimSuffix(archive, ".tar.gz"), ".zip")
@@ -123,15 +143,15 @@ func (e *executor) ensureNode(ctx context.Context) error {
 	if err := os.Rename(filepath.Join(tmp, root), dir); err != nil {
 		return err
 	}
-	return os.WriteFile(dir+".complete", []byte(nodeRelease+"\n"), 0o644)
+	return os.WriteFile(dir+".complete", []byte(release+"\n"), 0o644)
 }
 
 // verifyDistSum checks the tarball against the SHASUMS256.txt published with
 // the release. The checksum file is fetched over https from the same origin;
 // it proves download integrity, not publisher trust.
-func verifyDistSum(ctx context.Context, archive, tgz string) error {
+func verifyDistSum(ctx context.Context, release, archive, tgz string) error {
 	sums := filepath.Join(filepath.Dir(tgz), "SHASUMS256.txt")
-	if err := download(ctx, nodeDistBase+"/"+nodeRelease+"/SHASUMS256.txt", sums); err != nil {
+	if err := download(ctx, nodeDistBase+"/"+release+"/SHASUMS256.txt", sums); err != nil {
 		return fmt.Errorf("download node checksums: %w", err)
 	}
 	data, err := os.ReadFile(sums)
@@ -279,16 +299,17 @@ func (e *executor) nodeActionEnv(step StepSpec, meta *actions.Meta, actionPath s
 // runNodeScript executes one JavaScript entrypoint (pre/main/post) of a node
 // action inside the job container on the bundled Node runtime.
 func (e *executor) runNodeScript(ctx context.Context, step StepSpec, meta *actions.Meta, actionPath, script string, state map[string]string) (string, int) {
-	if err := e.ensureNode(ctx); err != nil {
+	using := meta.Runs.Using
+	if err := e.ensureNode(ctx, using); err != nil {
 		e.logStep(step, "KERN: node runtime: "+err.Error())
 		return "failure", 1
 	}
-	e.enc.persistPaths([]string{e.nodeBinDir()})
+	e.enc.persistPaths([]string{e.nodeBinDir(using)})
 	sub := StepSpec{
 		Number:         step.Number,
 		ID:             step.ID,
 		Name:           step.Name,
-		Run:            shellQuote(e.nodeBin()) + " " + shellQuote(actionPath+"/"+script),
+		Run:            shellQuote(e.nodeBin(using)) + " " + shellQuote(actionPath+"/"+script),
 		Shell:          e.shell,
 		Env:            e.nodeActionEnv(step, meta, actionPath, state),
 		TimeoutSeconds: step.TimeoutSeconds,
@@ -310,7 +331,7 @@ func (e *executor) runNodeAction(ctx context.Context, step StepSpec, meta *actio
 		return "failure", 1
 	}
 	if meta.Runs.Using != "node20" {
-		e.logStep(step, fmt.Sprintf("KERN: runs.using %s executes on the bundled %s runtime", meta.Runs.Using, nodeRelease))
+		e.logStep(step, fmt.Sprintf("KERN: runs.using %s executes on the bundled %s runtime", meta.Runs.Using, nodeReleaseFor(meta.Runs.Using)))
 	}
 	if !e.runNestedPre(ctx, step, meta, actionPath, "") {
 		return "failure", 1
