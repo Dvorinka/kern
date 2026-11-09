@@ -5,7 +5,21 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 
 ## [Unreleased]
 
+## [v0.6.3] - 2026-11-09
+
 ### Fixed
+- Runner: privileged jobs now mount the workspace at a per-job path
+  (`/github/workspaces/<job-id>`) with a matching host symlink. The
+  single shared `/github/workspace` link raced whenever
+  `KERN_RUNNER_CONCURRENCY > 1` — a sibling job rewrote it mid-run and
+  `docker compose ./` binds resolved to the wrong or wiped workspace
+  (primora e2e-smoke mount failure). Stale links are removed in cleanup
+  and swept by the 15-min GC loop (#164).
+- Runner: `github.ref_name` and `github.ref_type` are now populated in
+  the expression context — `${{ github.ref_name }}` previously
+  interpolated empty, producing invalid image tags like
+  `ghcr.io/dvorinka/kern-api:` and failing the release images job
+  (#164).
 - Web UI on phones: the 11-item nav no longer crushes into a 20px
   scroll sliver — it collapses into a hamburger menu (badges included)
   with a scrim, search becomes an icon that still opens ⌘K, and the
@@ -22,6 +36,12 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
   seed-time resolution, delivered to every run including untrusted
   `pull_request`/`fork` like GitHub. CLI `kern vars list|set|delete` and a
   Variables card on the secrets page (#160).
+- Run routes accept short run-id prefixes: `kern runs show 99540d68`,
+  `/runs/<prefix>`, logs and diagnose all resolve unambiguous prefixes
+  server-side (#161).
+- Command palette (⌘K): results carry unique keys — every runner entry
+  shared the `/runners` destination key, producing React duplicate-key
+  warnings whenever the palette listed multiple runners (#165).
 
 ## [v0.6.2] - 2026-11-09
 
