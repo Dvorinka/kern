@@ -101,6 +101,39 @@ func TestRunFiltersAndCounts(t *testing.T) {
 	}
 }
 
+func TestRunClassificationFilter(t *testing.T) {
+	s, ctx := testStore(t)
+	pid, wid, vid := fixture(t, ctx, s)
+
+	mk := func(class string) Run {
+		run, err := s.CreateRun(ctx, CreateRunParams{
+			ProjectID: pid, WorkflowID: wid, WorkflowVersionID: vid,
+			Event: "push", Ref: "refs/heads/main", TrustLevel: "trusted",
+		}, []JobSeed{{Key: "build", JobKey: "build", Name: "Build", Needs: []string{}, RunsOn: []string{"x"}}})
+		if err != nil {
+			t.Fatalf("create run: %v", err)
+		}
+		if _, err := s.pool.Exec(ctx, `UPDATE jobs SET classification = $2 WHERE run_id = $1`, run.ID, class); err != nil {
+			t.Fatal(err)
+		}
+		return run
+	}
+	oom := mk("oom")
+	mk("network")
+	mk("")
+
+	runs, total, err := s.Runs(ctx, RunFilter{ProjectID: &pid, Classification: "oom"})
+	if err != nil || total != 1 || len(runs) != 1 || runs[0].ID != oom.ID {
+		t.Fatalf("classification filter: n=%d total=%d err=%v", len(runs), total, err)
+	}
+	if _, total, _ := s.Runs(ctx, RunFilter{ProjectID: &pid, Classification: "hang"}); total != 0 {
+		t.Fatalf("hang filter should match nothing, total=%d", total)
+	}
+	if _, total, _ := s.Runs(ctx, RunFilter{ProjectID: &pid}); total != 3 {
+		t.Fatalf("unfiltered total=%d, want 3", total)
+	}
+}
+
 func TestClearCancelledRunsScoped(t *testing.T) {
 	s, ctx := testStore(t)
 	pid, wid, vid := fixture(t, ctx, s)

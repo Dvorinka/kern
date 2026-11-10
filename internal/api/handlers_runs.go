@@ -24,6 +24,7 @@ func (s *Server) listRuns(c *gin.Context) {
 		Ref:            c.Query("ref"),
 		PR:             c.Query("pr"),
 		Workflow:       c.Query("workflow"),
+		Classification: c.Query("classification"),
 		Limit:          parseInt(c.DefaultQuery("limit", "50"), 50),
 		Offset:         parseInt(c.DefaultQuery("offset", "0"), 0),
 	}
