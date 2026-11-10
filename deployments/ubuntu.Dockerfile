@@ -59,12 +59,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gstreamer1.0-libav gstreamer1.0-plugins-bad gstreamer1.0-plugins-base \
     gstreamer1.0-plugins-good libgstreamer1.0-0 libgstreamer-gl1.0-0 \
     libgstreamer-plugins-bad1.0-0 libgstreamer-plugins-base1.0-0 \
-    libgtk-4-1 libicu74 libenchant-2-2 libepoxy0 libevent-2.1-7t64 \
+    libgtk-4-1 libicu78 libenchant-2-2 libepoxy0 libevent-2.1-7t64 \
     libflite1 libgles2 libharfbuzz-icu0 libharfbuzz0b libhyphen0 \
     libjpeg-turbo8 liblcms2-2 libmanette-0.2-0 libopus0 libpng16-16t64 \
-    libsecret-1-0 libvpx9 libwayland-client0 libwayland-egl1 \
+    libsecret-1-0 libvpx12 libwayland-client0 libwayland-egl1 \
     libwayland-server0 libwebp7 libwebpdemux2 libwoff1 libxslt1.1 \
-    libx264-164 libavif16 \
+    libx264-165 libavif16 \
     && rm -rf /var/lib/apt/lists/*
 
 # Tauri build deps every release lane installs per job (Invico, Primora,
