@@ -393,6 +393,12 @@ func (a *Agent) maybeSelfUpdate(ctx context.Context, offer *updateOffer) {
 	if offer.Image == "" || time.Now().Unix() < a.nextUpdate.Load() {
 		return
 	}
+	// Already at the offered version: skip the swap. Guards token-mode
+	// runners against a stale runners.version server-side re-offering the
+	// same release every hold window.
+	if strings.TrimPrefix(offer.Version, "v") == strings.TrimPrefix(version.Version, "v") {
+		return
+	}
 	if !a.updating.CompareAndSwap(false, true) {
 		return
 	}

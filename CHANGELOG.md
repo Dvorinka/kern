@@ -3,6 +3,23 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
+## [Unreleased]
+
+### Fixed
+- Runner `version` and work-root disk capacity now ride every heartbeat
+  instead of staying at their register-time values. A token-mode runner
+  (one that authenticates with a runner token and never re-registers)
+  reported its enroll-time version forever, so the control plane kept
+  offering the same self-update every hold window — a download/swap/re-exec
+  loop that never converged.
+- The runner skips a self-update offer that names the version it is already
+  running, so a stale `runners.version` can no longer re-install the same
+  binary in a loop.
+- Binary self-update no longer leaks its `kern-update-*` staging directory:
+  `syscall.Exec`/`os.Exit` relaunch skips deferred cleanup, so the dir is
+  removed before relaunching. On hosts with a small `/tmp` (tmpfs) the leak
+  filled the filesystem until the update download itself ran out of space.
+
 ## [0.8.0] - 2026-11-10
 
 ### Added

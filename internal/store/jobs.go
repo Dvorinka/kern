@@ -191,12 +191,18 @@ func (s *Store) RenewLease(ctx context.Context, runnerID, jobID uuid.UUID, lease
 }
 
 // Heartbeat records liveness and the latest utilization snapshot for a runner.
+// Version and disk capacity refresh here too — a token-mode runner never
+// re-registers, so register-time values would go stale forever; a stale
+// version made the auto-update offer loop on the same binary.
 func (s *Store) Heartbeat(ctx context.Context, runnerID uuid.UUID, m HostMetrics) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE runners SET last_heartbeat_at = now(),
 			status = CASE WHEN draining THEN 'draining' ELSE 'online' END,
-			cpu_percent = $2, mem_used_bytes = $3, disk_free_bytes = $4, metrics_at = now()
-		WHERE id = $1`, runnerID, m.CPUPercent, m.MemUsedBytes, m.DiskFreeBytes)
+			cpu_percent = $2, mem_used_bytes = $3, disk_free_bytes = $4, metrics_at = now(),
+			version = COALESCE(NULLIF($5, ''), version),
+			disk_bytes = COALESCE($6, disk_bytes)
+		WHERE id = $1`, runnerID, m.CPUPercent, m.MemUsedBytes, m.DiskFreeBytes,
+		m.Version, m.DiskBytes)
 	return err
 }
 

@@ -76,6 +76,9 @@ func applyBinaryUpdate(ctx context.Context, ver string, bins map[string]update.B
 	if err := swapBinary(exe, newBin); err != nil {
 		return err
 	}
+	// relaunchSelf replaces or exits this process — deferred cleanup never
+	// runs, so remove the staging dir first or every update leaks it.
+	os.RemoveAll(dir)
 	return relaunchSelf(exe)
 }
 
