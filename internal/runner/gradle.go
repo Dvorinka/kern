@@ -26,7 +26,10 @@ def mirrorUrl = System.getenv('KERN_MAVEN_MIRROR') ?: 'https://maven-central.sto
 def addMirror
 addMirror = { repos ->
     if (repos.findByName('kern-central-mirror') == null) {
-        repos.maven { url mirrorUrl; name 'kern-central-mirror' }
+        // allowInsecureProtocol: the fleet LAN pull-through mirror is
+        // plain http on the trusted segment; Gradle >= 7 refuses http
+        // repos without the opt-in or every resolve fails outright.
+        repos.maven { url mirrorUrl; name 'kern-central-mirror'; allowInsecureProtocol = true }
         def repo = repos.findByName('kern-central-mirror')
         repos.remove(repo)
         repos.add(0, repo)
