@@ -11,7 +11,7 @@ RUN CGO_ENABLED=0 go build -trimpath \
     -ldflags "-X github.com/dvorinka/kern/internal/version.Version=${VERSION}" \
     -o /out/kern-api ./cmd/api
 
-FROM node:22-alpine AS web
+FROM node:26-alpine AS web
 WORKDIR /web
 RUN corepack enable
 COPY apps/web/package.json apps/web/pnpm-lock.yaml ./
