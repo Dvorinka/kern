@@ -150,9 +150,18 @@ func memInfo() (total, available int64, ok bool) {
 // finishJob payload. Host executors have no container — the field stays empty.
 
 type jobMetrics struct {
-	mu           sync.Mutex
-	CPUPeakPct   float64 `json:"cpu_pct_peak,omitempty"`
-	MemPeakBytes int64   `json:"mem_bytes_peak,omitempty"`
+	mu            sync.Mutex
+	CPUPeakPct    float64 `json:"cpu_pct_peak,omitempty"`
+	MemPeakBytes  int64   `json:"mem_bytes_peak,omitempty"`
+	DiskPeakBytes int64   `json:"disk_bytes_peak,omitempty"`
+}
+
+func (m *jobMetrics) observeDisk(b int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if b > m.DiskPeakBytes {
+		m.DiskPeakBytes = b
+	}
 }
 
 func (m *jobMetrics) observe(cpu float64, mem int64) {

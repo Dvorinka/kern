@@ -362,6 +362,14 @@ func agentConfig(o options) runner.Config {
 	} else {
 		cfg.MemMinFreeBytes = 1 << 30
 	}
+	if v := os.Getenv("KERN_JOB_DISK"); v != "" {
+		cfg.JobDiskBytes = parseHumanBytes(v)
+	}
+	if v := os.Getenv("KERN_STEP_SILENCE_TIMEOUT"); v != "" {
+		cfg.StepSilenceSeconds, _ = strconv.Atoi(v)
+	} else {
+		cfg.StepSilenceSeconds = 600
+	}
 	cfg.Executor = os.Getenv("KERN_RUNNER_EXECUTOR")
 	if cfg.Executor == "" {
 		// Host executors are the only substrate on platforms without a
@@ -534,4 +542,31 @@ func writeUserUnit(exe, envFile string) (string, error) {
 		return "", err
 	}
 	return path, nil
+}
+
+// parseHumanBytes reads "20g"/"512m"/"1024k" style sizes (case-insensitive,
+// binary units) — the runner-side mirror of metrics.go's parser, kept here
+// so cmd stays free of internal helpers.
+func parseHumanBytes(s string) int64 {
+	s = strings.TrimSpace(strings.ToLower(s))
+	i := 0
+	for i < len(s) && (s[i] == '.' || (s[i] >= '0' && s[i] <= '9')) {
+		i++
+	}
+	n, _ := strconv.ParseFloat(s[:i], 64)
+	mult := float64(1)
+	switch strings.TrimSpace(s[i:]) {
+	case "k", "kb", "kib":
+		mult = 1 << 10
+	case "m", "mb", "mib":
+		mult = 1 << 20
+	case "g", "gb", "gib":
+		mult = 1 << 30
+	case "t", "tb", "tib":
+		mult = 1 << 40
+	case "", "b":
+	default:
+		return 0
+	}
+	return int64(n * mult)
 }

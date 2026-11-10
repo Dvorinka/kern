@@ -25,6 +25,21 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
   registry 429/5xx, connection resets and socket timeouts classify as
   `network` instead of `script_failure`.
 
+- Persistent Rust + global npm caches: `CARGO_HOME` points at
+  `_cache/cargo` (registry/git db survives jobs — the Tauri release legs
+  re-downloaded gigabytes of crates cold every run) and `NPM_CONFIG_PREFIX`
+  at a writable per-job dir so `npm i -g` inside actions (tauri-action)
+  stops failing on the image's root-owned prefix.
+- Per-job resource hints: trusted workflows may set `KERN_JOB_MEMORY`,
+  `KERN_JOB_CPUS` and `KERN_JOB_DISK` in job env to override the runner's
+  container ceilings; untrusted runs keep defaults. `KERN_JOB_DISK` (also
+  runner-side, e.g. `30g`) arms a work-root sampler that aborts the job
+  with a `disk_quota` diagnosis instead of letting it die on ENOSPC.
+- No-output watchdog: a step silent for `KERN_STEP_SILENCE_TIMEOUT`
+  (default 600s) gets a `ps`/`jstack` dump into its log; at twice the
+  interval it is killed and classified `hang` — distinct from wall-clock
+  `step_timeout` and diagnosable instead of opaque.
+
 - Per-workflow disable switch: `PATCH /projects/:project/workflows/:id`
   `{disabled}` (project page gets Disable/Enable buttons) gates every run
   path — webhook deliveries report the workflow as skipped, schedules stop

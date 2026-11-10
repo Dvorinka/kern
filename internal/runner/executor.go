@@ -132,7 +132,11 @@ type executor struct {
 	stopped  sync.WaitGroup
 	killFn   context.CancelFunc // kills the docker exec of the step in flight
 	lastTail string             // log tail of the most recent step, for diagnosis
-	ann      annotationSink     // ::error::/::warning:: commands seen by the step's log pumps
+	// diskQuotaExceeded / hangDetected latch when the resource watchdogs
+	// kill a step, so the diagnosis classifies the real cause.
+	diskQuotaExceeded atomic.Bool
+	hangDetected      atomic.Bool
+	ann               annotationSink // ::error::/::warning:: commands seen by the step's log pumps
 
 	scriptSeq         int               // unique script filenames across composite sub-steps
 	sumBuf            bytes.Buffer      // composite sub-step summaries, folded into the parent step
@@ -380,6 +384,7 @@ func (e *executor) prepare(ctx context.Context) error {
 		return fmt.Errorf("start container: %w", err)
 	}
 	e.startMetricsSampler(ctx)
+	e.startDiskSampler(ctx)
 	if err := e.startServices(ctx); err != nil {
 		e.goStop()
 		return fmt.Errorf("start services: %w", err)
@@ -564,8 +569,8 @@ func (e *executor) startContainer(ctx context.Context) error {
 		actionsMount += ":ro"
 	}
 	args = append(args,
-		"--memory", valueOr(e.cfg.JobMemory, "1g"),
-		"--cpus", valueOr(e.cfg.JobCPUs, "1"),
+		"--memory", e.jobMemoryLimit(),
+		"--cpus", e.jobCPUsLimit(),
 		"-v", filepath.Join(workRoot, "workspace")+":"+e.wsContainer(),
 		"-v", cmdHome+":"+containerCmdDir,
 		"-v", scriptDir+":"+containerScriptDir+":ro",
@@ -681,6 +686,12 @@ func (e *executor) jobEnv() map[string]string {
 		// mirror. A workflow-set GRADLE_USER_HOME in job or step env still
 		// wins — the per-step env file overrides docker -e.
 		"GRADLE_USER_HOME": e.cachePath() + "/gradle",
+		// Same story for Rust: without CARGO_HOME every job re-downloads
+		// the registry index and gigabytes of crates.
+		"CARGO_HOME": e.cachePath() + "/cargo",
+		// Actions that run `npm i -g` (tauri-action) need a writable
+		// global prefix; the image's is root-owned.
+		"NPM_CONFIG_PREFIX": e.actionHomePath() + "/.npm-global",
 		// RUNNER_TEMP must be exec-allowed: setup-* actions extract and run
 		// installers there, and the container's /tmp tmpfs is noexec.
 		"RUNNER_TEMP": e.tmpPath(),
@@ -785,6 +796,35 @@ func (e *executor) dockerEnvArgs() []string {
 // privileged reports whether this job runs with GitHub parity — root, a
 // writable rootfs, and the docker socket. Maintainer-controlled trust levels
 // ("trusted", "protected") opt in; fork/untrusted runs keep the sandbox.
+// jobMemoryLimit / jobCPUsLimit honor per-job resource hints declared in
+// the workflow env (KERN_JOB_MEMORY / KERN_JOB_CPUS). Trusted runs only —
+// a fork could otherwise pin the host's cgroup ceilings.
+func (e *executor) jobMemoryLimit() string {
+	if v := e.claim.Job.Env["KERN_JOB_MEMORY"]; e.privileged() && v != "" {
+		return v
+	}
+	return valueOr(e.cfg.JobMemory, "1g")
+}
+
+func (e *executor) jobCPUsLimit() string {
+	if v := e.claim.Job.Env["KERN_JOB_CPUS"]; e.privileged() && v != "" {
+		return v
+	}
+	return valueOr(e.cfg.JobCPUs, "1")
+}
+
+// jobDiskBudget is the job's work-root ceiling: a KERN_JOB_DISK value in
+// the workflow env (trusted runs) wins over the runner-wide default.
+// Zero means unbounded.
+func (e *executor) jobDiskBudget() int64 {
+	if v := e.claim.Job.Env["KERN_JOB_DISK"]; e.privileged() && v != "" {
+		if n := parseHumanBytes(v); n > 0 {
+			return n
+		}
+	}
+	return e.cfg.JobDiskBytes
+}
+
 func (e *executor) privileged() bool {
 	return e.claim.Run.TrustLevel == "trusted" || e.claim.Run.TrustLevel == "protected"
 }
