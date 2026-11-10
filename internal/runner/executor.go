@@ -732,6 +732,12 @@ func (e *executor) jobEnv() map[string]string {
 		// Actions that run `npm i -g` (tauri-action) need a writable
 		// global prefix; the image's is root-owned.
 		"NPM_CONFIG_PREFIX": e.actionHomePath() + "/.npm-global",
+		// The provisioned node bin dir leads PATH so its bundled yarn,
+		// yarnpkg and corepack shims resolve inside JS actions too —
+		// setup-node@v4 runs `yarn --version` on seeing a lockfile and
+		// hard-fails when PATH lacks it (the per-step env file only
+		// covers run steps, not the action's own process).
+		"PATH": e.nodeBinDir("node20") + ":/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 		// RUNNER_TEMP must be exec-allowed: setup-* actions extract and run
 		// installers there, and the container's /tmp tmpfs is noexec.
 		"RUNNER_TEMP": e.tmpPath(),
