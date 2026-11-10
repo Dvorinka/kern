@@ -3,7 +3,7 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
-## Unreleased
+## [0.8.0] - 2026-11-10
 
 ### Added
 - First-class failure classification: `jobs.classification` rolls the first
@@ -17,6 +17,27 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
   first step's log at job start listing every materialized env var, secret,
   and var NAME — never a value — so missing or stale env is a 30-second
   diagnosis instead of a guess. Untrusted runs simply show no secrets.
+- Maven mirror insecure-protocol opt-in: the seeded Gradle init script now
+  sets `allowInsecureProtocol` when `KERN_MAVEN_MIRROR` is plain http, so a
+  LAN pull-through cache no longer fails plugin resolution with "Using
+  insecure protocols with repositories, without explicit opt-in, is
+  unsupported". https mirrors are unaffected.
+
+### Changed
+- Web dashboard mobile + touch polish: horizontally scrollable run/artifact
+  tables, always-visible row actions on touch devices, tighter gutters.
+- Toolchain pins moved to Go 1.27 across `go.mod`, the KERN CI container,
+  `release.yml` setup-go and both build-stage Dockerfiles.
+- Release web stage builds on `node:26-alpine` (was 22).
+- Baseline job image rebased to `ubuntu:26.04` with the matching package set
+  (`libicu78`, `libvpx12`, `libx264-165`); the published tag is now
+  `ghcr.io/dvorinka/kern-ubuntu:26.04`. Fleets pinned to `:24.04` keep the
+  frozen 24.04 image — upgrading is an operator `.env` change.
+- Dependency bumps: actions/upload-artifact v7, actions/download-artifact
+  v8, docker/login-action v4, docker/setup-buildx-action v4,
+  softprops/action-gh-release v3, apps/web npm group (tailwind 4.3.5,
+  react-query 5.107, lucide 1.70, vite 8.3.6, oxlint 1.92, oxfmt 0.77),
+  golang.org/x/sys 0.50.0.
 
 ## [0.7.9] - 2026-11-10
 
