@@ -343,6 +343,13 @@ func compileJob(wf Workflow, id string, job *Job, matrix map[string]any, c Compi
 			env = merged
 		}
 	}
+	// resources: is a KERN extension folded into the KERN_JOB_* env the
+	// executor honours; explicit env values win over the block.
+	env, resErr := applyResources(env, job.Resources)
+	if resErr != nil {
+		return JobPlan{}, resErr
+	}
+
 
 	// runs-on accepts expressions (GitHub evaluates them against matrix and
 	// other contexts). Only matrix is knowable at compile time; the seed pass
@@ -496,6 +503,30 @@ func displayNameOf(s Step) string {
 		return "Run"
 	}
 	return firstLine
+}
+
+// applyResources folds a job's resources: block into KERN_JOB_* env vars.
+// Declared env values win — the block is sugar over the primitive, not an
+// override. Unknown keys fail at compile rather than silently no-op.
+func applyResources(env map[string]string, res map[string]any) (map[string]string, error) {
+	if len(res) == 0 {
+		return env, nil
+	}
+	keys := map[string]string{"memory": "KERN_JOB_MEMORY", "cpus": "KERN_JOB_CPUS", "disk": "KERN_JOB_DISK"}
+	for k := range res {
+		if _, ok := keys[k]; !ok {
+			return nil, fmt.Errorf("resources: unknown key %q (want memory, cpus or disk)", k)
+		}
+	}
+	if env == nil {
+		env = map[string]string{}
+	}
+	for k, envKey := range keys {
+		if v, ok := res[k]; ok && v != nil && env[envKey] == "" {
+			env[envKey] = asString(v)
+		}
+	}
+	return env, nil
 }
 
 func mergeEnv(base, overlay map[string]any) map[string]string {

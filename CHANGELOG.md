@@ -5,6 +5,12 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 
 ## [Unreleased]
 
+### Added
+- `jobs.<id>.resources` workflow key (KERN extension): `{memory, cpus,
+  disk}` folds into the `KERN_JOB_*` env the executor already honours —
+  cgroup memory/CPU limits and the work-root disk budget. Explicit env
+  values win; trusted tiers only. GitHub ignores the key.
+
 ### Fixed
 - Runner `version` and work-root disk capacity now ride every heartbeat
   instead of staying at their register-time values. A token-mode runner
