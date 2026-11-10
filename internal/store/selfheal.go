@@ -5,15 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
-// SelfHealPolicy resolves the remediation ladder for a run: the project's
-// self_heal setting wins; "inherit"/missing falls back to the org's; the
-// default is "off" — remediation is strictly opt-in.
-func (s *Store) SelfHealPolicy(ctx context.Context, runID uuid.UUID) (string, error) {
+// runSettings returns the org and project settings documents for a run.
+func (s *Store) runSettings(ctx context.Context, runID uuid.UUID) (json.RawMessage, json.RawMessage, error) {
 	var orgSettings, projSettings json.RawMessage
 	err := s.pool.QueryRow(ctx, `
 		SELECT o.settings, p.settings
@@ -21,6 +20,14 @@ func (s *Store) SelfHealPolicy(ctx context.Context, runID uuid.UUID) (string, er
 		JOIN projects p ON p.id = r.project_id
 		JOIN orgs o ON o.id = p.org_id
 		WHERE r.id = $1`, runID).Scan(&orgSettings, &projSettings)
+	return orgSettings, projSettings, err
+}
+
+// SelfHealPolicy resolves the remediation ladder for a run: the project's
+// self_heal setting wins; "inherit"/missing falls back to the org's; the
+// default is "off" — remediation is strictly opt-in.
+func (s *Store) SelfHealPolicy(ctx context.Context, runID uuid.UUID) (string, error) {
+	orgSettings, projSettings, err := s.runSettings(ctx, runID)
 	if err != nil {
 		return "off", err
 	}
@@ -31,6 +38,35 @@ func (s *Store) SelfHealPolicy(ctx context.Context, runID uuid.UUID) (string, er
 		return v, nil
 	}
 	return "off", nil
+}
+
+// TransientRetryLimit resolves how many automatic requeues a failed job may
+// get for transient-class failures (network, oom): the project's
+// max_transient_retries setting wins; missing falls back to the org's; the
+// default is 1. "0" disables automatic retries.
+func (s *Store) TransientRetryLimit(ctx context.Context, runID uuid.UUID) (int, error) {
+	orgSettings, projSettings, err := s.runSettings(ctx, runID)
+	if err != nil {
+		return 0, err
+	}
+	parse := func(raw json.RawMessage) (int, bool) {
+		v := settingsGet(raw, "max_transient_retries")
+		if v == "" {
+			return 0, false
+		}
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 || n > 10 {
+			return 0, false
+		}
+		return n, true
+	}
+	if n, ok := parse(projSettings); ok {
+		return n, nil
+	}
+	if n, ok := parse(orgSettings); ok {
+		return n, nil
+	}
+	return 1, nil
 }
 
 func settingsGet(raw json.RawMessage, key string) string {

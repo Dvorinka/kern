@@ -479,25 +479,13 @@ func (a *Agent) maybePruneDisk(ctx context.Context) {
 	if !diskUnderPressure(free, total, pct) && !critical {
 		return
 	}
-	if a.active.Load() > 0 {
-		a.log.Warn("disk pressure: jobs active, reclaim deferred",
-			zap.Int64("free_bytes", free), zap.Int64("total_bytes", total),
-			zap.Float64("min_free_pct", pct), zap.Bool("critical", critical))
-		return
-	}
-	if critical {
-		a.log.Warn("disk critical: escalating reclaim",
-			zap.Int64("free_bytes", free), zap.Int64("total_bytes", total),
-			zap.Float64("critical_free_pct", a.cfg.DiskCriticalFreePct),
-			zap.Int64("critical_floor_bytes", a.cfg.DiskCriticalFloorBytes))
-		a.sweepImagesOlder(ctx, criticalImageAge)
-		a.sweepWorkspacesOlderThan(criticalWorkspaceAge)
-		a.sweepBoundedCacheTo(a.cfg.CacheMaxBytes / 2)
-		a.sweepTmpStale(criticalTmpAge)
-	}
+	// Docker prunes only touch stopped/unused objects — a running job's
+	// containers, images, volumes and networks are in use and skipped by the
+	// daemon. Deferring all reclaim to idle was the defect that let jobs die
+	// on ENOSPC mid-write: pressure is worst exactly while jobs hold space.
 	a.log.Warn("disk pressure: pruning docker",
 		zap.Int64("free_bytes", free), zap.Int64("total_bytes", total),
-		zap.Float64("min_free_pct", pct))
+		zap.Float64("min_free_pct", pct), zap.Bool("critical", critical))
 	prune := [][]string{
 		{"builder", "prune", "-af"},  // all reclaimable build cache
 		{"container", "prune", "-f"}, // stopped containers only
@@ -518,6 +506,24 @@ func (a *Agent) maybePruneDisk(ctx context.Context) {
 		a.log.Info("disk prune complete",
 			zap.Int64("reclaimed_bytes", free2-free),
 			zap.Int64("free_before", free), zap.Int64("free_after", free2))
+	}
+	// Deep reclaim can remove objects a live job is reading (ledger images,
+	// job workspaces, _cache entries mid-build) — it stays idle-gated.
+	if a.active.Load() > 0 {
+		a.log.Warn("disk pressure: jobs active, deep reclaim deferred",
+			zap.Int64("free_bytes", free), zap.Int64("total_bytes", total),
+			zap.Float64("min_free_pct", pct), zap.Bool("critical", critical))
+		return
+	}
+	if critical {
+		a.log.Warn("disk critical: escalating reclaim",
+			zap.Int64("free_bytes", free), zap.Int64("total_bytes", total),
+			zap.Float64("critical_free_pct", a.cfg.DiskCriticalFreePct),
+			zap.Int64("critical_floor_bytes", a.cfg.DiskCriticalFloorBytes))
+		a.sweepImagesOlder(ctx, criticalImageAge)
+		a.sweepWorkspacesOlderThan(criticalWorkspaceAge)
+		a.sweepBoundedCacheTo(a.cfg.CacheMaxBytes / 2)
+		a.sweepTmpStale(criticalTmpAge)
 	}
 }
 

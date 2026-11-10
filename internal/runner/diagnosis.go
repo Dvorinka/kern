@@ -61,7 +61,9 @@ var libPackage = map[string]string{
 
 // diagnose maps a step failure onto a rule. Order matters: runner-side errors
 // first, then exit-code signatures, then log patterns, then generic.
-func diagnose(step StepSpec, exitCode int, logTail, stepErr string) *diagnosis {
+// jobMemory is the job container's cgroup ceiling (KERN_JOB_MEMORY); it is
+// surfaced in OOM diagnoses so the operator sees the limit that was hit.
+func diagnose(step StepSpec, exitCode int, logTail, stepErr, jobMemory string) *diagnosis {
 	d := &diagnosis{}
 	fail := func(kind, summary, suggestion string) *diagnosis {
 		d.Kind, d.Summary, d.Suggestion = kind, summary, suggestion
@@ -84,9 +86,15 @@ func diagnose(step StepSpec, exitCode int, logTail, stepErr string) *diagnosis {
 		return fail("unsupported_action",
 			"The step uses an action KERN does not support yet",
 			"replace the uses: step with a run: equivalent; see docs/compatibility.md")
-	case exitCode == 137 || strings.Contains(lower, "killed\n") || strings.Contains(lower, "out of memory"):
-		return fail("oom", "Process was killed, likely OOM or SIGKILL (exit 137)",
-			"raise KERN_JOB_MEMORY on the runner or reduce the step's memory footprint")
+	case exitCode == 137 || strings.Contains(lower, "killed\n") ||
+		strings.Contains(lower, "out of memory") || strings.Contains(lower, "outofmemoryerror") ||
+		strings.Contains(lower, "daemon disappeared") || strings.Contains(lower, "signal: killed"):
+		// Gradle's "daemon disappeared unexpectedly" and the Go compiler's
+		// "signal: killed" are the cgroup OOM-killer's calling cards — the
+		// kernel kills the fattest process in the container's memory group.
+		return fail("oom",
+			"Process was killed — likely cgroup OOM or SIGKILL (job memory ceiling "+jobMemory+")",
+			"raise KERN_JOB_MEMORY on the runner (currently "+jobMemory+") or reduce the step's memory footprint")
 	case strings.Contains(lower, "no space left on device"):
 		return fail("disk_full", "The job container ran out of disk space",
 			"free disk on the runner host or raise the work-root quota")
@@ -139,9 +147,28 @@ func diagnose(step StepSpec, exitCode int, logTail, stepErr string) *diagnosis {
 		strings.Contains(lower, "connection refused") ||
 		strings.Contains(lower, "network is unreachable") ||
 		strings.Contains(lower, "i/o timeout") ||
-		strings.Contains(lower, "tls handshake timeout"):
+		strings.Contains(lower, "tls handshake timeout") ||
+		strings.Contains(lower, "connection reset") ||
+		strings.Contains(lower, "econnreset") ||
+		strings.Contains(lower, "esockettimedout") ||
+		strings.Contains(lower, "etimedout") ||
+		strings.Contains(lower, "read timed out") ||
+		strings.Contains(lower, "connect timed out") ||
+		strings.Contains(lower, "too many requests") ||
+		strings.Contains(lower, "rate limit") ||
+		strings.Contains(lower, "status code 408") ||
+		strings.Contains(lower, "status code 409") ||
+		strings.Contains(lower, "status code 425") ||
+		strings.Contains(lower, "status code 429") ||
+		strings.Contains(lower, "status code 500") ||
+		strings.Contains(lower, "status code 502") ||
+		strings.Contains(lower, "status code 503") ||
+		strings.Contains(lower, "status code 504"):
+		// Registry 429s, reset connections and gateway 5xx are the fleet's
+		// dominant flake — external, transient, retryable (unlike 4xx
+		// auth/not-found, which stay script_failure).
 		return fail("network", "A network call failed in the step",
-			"verify outbound connectivity from the runner host; retry if transient")
+			"transient registry/network flake — retry usually resolves it; verify outbound connectivity from the runner host if persistent")
 	default:
 		return fail("script_failure",
 			"Step exited with code "+itoa(exitCode),

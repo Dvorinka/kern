@@ -350,12 +350,13 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 	switch args[0] {
 	case "get":
 		var out struct {
-			SelfHeal        string `json:"self_heal"`
-			PublicCI        string `json:"public_ci"`
-			AutoUpdate      string `json:"auto_update"`
-			RunnerAutostart string `json:"runner_autostart"`
-			ForkGate        string `json:"fork_gate"`
-			PrTrust         string `json:"pr_trust"`
+			SelfHeal            string `json:"self_heal"`
+			PublicCI            string `json:"public_ci"`
+			AutoUpdate          string `json:"auto_update"`
+			RunnerAutostart     string `json:"runner_autostart"`
+			ForkGate            string `json:"fork_gate"`
+			PrTrust             string `json:"pr_trust"`
+			MaxTransientRetries string `json:"max_transient_retries"`
 		}
 		if err := c.api().get(ctx, path, nil, &out); err != nil {
 			return err
@@ -392,6 +393,11 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 				}
 				fmt.Println("pr_trust:", v)
 			}
+			v := out.MaxTransientRetries
+			if v == "" {
+				v = "1"
+			}
+			fmt.Println("max_transient_retries:", v)
 		}
 	case "set":
 		if len(pos) < 2 {
@@ -451,6 +457,17 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 				return fmt.Errorf("usage: kern settings set pr_trust off|trusted --project S")
 			}
 			body["pr_trust"] = pos[1]
+		case "max_transient_retries":
+			if pos[1] != "inherit" {
+				n, err := strconv.Atoi(pos[1])
+				if err != nil || n < 0 || n > 10 {
+					return fmt.Errorf("usage: kern settings set max_transient_retries <0-10|inherit> [--project S]")
+				}
+			}
+			if path == "/settings" && pos[1] == "inherit" {
+				return fmt.Errorf("inherit is only valid with --project S (org default is 1)")
+			}
+			body["max_transient_retries"] = pos[1]
 		default:
 			return fmt.Errorf("usage: kern settings set self_heal off|auto|approve [--project S] | public_ci on|off | auto_update on|off | fork_gate off|all|first-time --project S | pr_trust off|trusted --project S")
 		}

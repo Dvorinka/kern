@@ -329,6 +329,37 @@ func TestRunnerContextSecretsVarsAndEnvResolution(t *testing.T) {
 	}
 }
 
+// $GITHUB_ENV writes persist into the env expression context for later
+// steps, matching GitHub — the Nothing_Modes keystore decode incident was a
+// persisted value resolving empty in the next step's env:.
+func TestRunnerContextPersistedEnv(t *testing.T) {
+	cfg := Config{WorkRoot: t.TempDir()}
+	claim := &Claim{}
+	claim.Job.Image = "ubuntu:24.04"
+	claim.Job.ID = "test-job-env"
+	claim.Job.Env = map[string]string{"MODE": "job"}
+	e, err := newJobExecutor(cfg, &client{}, claim, nil, nil, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.enc.persistKV("NOTHING_MODES_KEYSTORE", "/kern/home/keystore.jks")
+	e.enc.persistKV("MODE", "persisted") // later writes win, like GitHub
+	ctx := e.runnerContext()
+	env := ctx["env"].(map[string]any)
+	if env["NOTHING_MODES_KEYSTORE"] != "/kern/home/keystore.jks" {
+		t.Errorf("persisted env missing: %v", env)
+	}
+	if env["MODE"] != "persisted" {
+		t.Errorf("persisted value should override job env, got %v", env["MODE"])
+	}
+	// The step's own env: belongs to the env context for that step.
+	e.stepEnvCtx = map[string]string{"STEP_ONLY": "yes"}
+	env = e.runnerContext()["env"].(map[string]any)
+	if env["STEP_ONLY"] != "yes" {
+		t.Errorf("step env missing from context: %v", env)
+	}
+}
+
 func TestRunnerContextSecretsEmptyWhenWithheld(t *testing.T) {
 	cfg := Config{WorkRoot: t.TempDir()}
 	claim := &Claim{}
