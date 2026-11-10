@@ -12,7 +12,7 @@ jobs:
     # NOTE: jobs.<id>.priority is a KERN extension — GitHub Actions rejects
     # unknown job keys and fails the whole file, so it cannot live here.
     container:
-      image: golang:1.26
+      image: golang:1.27
     env:
       # job containers are read-only and /tmp is a small tmpfs; Go dirs live on
       # the /github/cmd bind mount. GOMODCACHE/GOCACHE/GOPATH point at the

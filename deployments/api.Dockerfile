@@ -1,4 +1,4 @@
-ARG GOLANG=1.26
+ARG GOLANG=1.27
 FROM golang:${GOLANG}-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
