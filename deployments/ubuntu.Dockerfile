@@ -6,7 +6,7 @@
 # Deliberately NOT included: language toolchains (Go, Node, Rust, Android SDK).
 # Those are installed by setup-* actions, which keep working and stay pinned by
 # the workflow. This image only covers the always-expected POSIX/CI baseline.
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
