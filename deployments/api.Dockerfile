@@ -13,8 +13,9 @@ RUN CGO_ENABLED=0 go build -trimpath \
 
 FROM node:26-alpine AS web
 WORKDIR /web
-RUN corepack enable
 COPY apps/web/package.json apps/web/pnpm-lock.yaml ./
+# Node >=25 ships no corepack; install pnpm at the packageManager pin.
+RUN npm i -g "pnpm@$(node -p "require('./package.json').packageManager.split('@')[1]")"
 RUN pnpm install --frozen-lockfile
 COPY apps/web/ ./
 RUN pnpm build
