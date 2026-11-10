@@ -25,7 +25,7 @@ func (c *cli) cmdExec(ctx context.Context, args []string) error {
 	if err := c.requireAuth(); err != nil {
 		return err
 	}
-	opts, pos := parseFlags(args, "workflow", "dir", "pull", "event", "ref", "sha")
+	opts, pos := parseFlags(args, "workflow", "workflow-file", "dir", "pull", "event", "ref", "sha")
 	wf := opts["workflow"]
 	if wf == "" && len(pos) > 0 {
 		wf = pos[0]
@@ -34,8 +34,22 @@ func (c *cli) cmdExec(ctx context.Context, args []string) error {
 	if slug == "" {
 		return fmt.Errorf("project required — --project or `kern config set project <slug>`")
 	}
-	if wf == "" {
-		return fmt.Errorf("usage: kern exec <workflow> [--dir DIR] [--pull DIR] [--ref R] [--sha S]")
+	var wfYAML, wfPath string
+	if file := opts["workflow-file"]; file != "" {
+		b, err := os.ReadFile(file)
+		if err != nil {
+			return fmt.Errorf("--workflow-file: %w", err)
+		}
+		wfYAML = string(b)
+		abs, _ := filepath.Abs(file)
+		base, _ := filepath.Abs(first(opts["dir"], "."))
+		wfPath = filepath.Base(file)
+		if rel, rerr := filepath.Rel(base, abs); rerr == nil && !strings.HasPrefix(rel, "..") {
+			wfPath = filepath.ToSlash(rel)
+		}
+	}
+	if wf == "" && wfYAML == "" {
+		return fmt.Errorf("usage: kern exec <workflow> [--workflow-file F] [--dir DIR] [--pull DIR] [--ref R] [--sha S]")
 	}
 	dir, err := filepath.Abs(first(opts["dir"], "."))
 	if err != nil {
@@ -86,18 +100,27 @@ func (c *cli) cmdExec(ctx context.Context, args []string) error {
 		return resolveErr
 	}
 
-	workflowID, err := c.resolveWorkflow(ctx, slug, wf)
-	if err != nil {
-		return err
-	}
 	var trig struct {
 		Run run `json:"run"`
 	}
-	err = c.api().post(ctx, "/projects/"+slug+"/workflows/"+workflowID+"/runs", map[string]any{
+	body := map[string]any{
 		"event": first(opts["event"], "workflow_dispatch"),
 		"ref":   opts["ref"], "sha": opts["sha"],
 		"bundle_ref": up.BundleRef,
-	}, &trig)
+	}
+	if wfYAML != "" {
+		// Inline workflow: the file need not exist in the repo or be a
+		// synced workflow — unmerged and ad-hoc workflow testing.
+		body["workflow_path"] = wfPath
+		body["workflow_yaml"] = wfYAML
+		err = c.api().post(ctx, "/projects/"+slug+"/runs", body, &trig)
+	} else {
+		workflowID, werr := c.resolveWorkflow(ctx, slug, wf)
+		if werr != nil {
+			return werr
+		}
+		err = c.api().post(ctx, "/projects/"+slug+"/workflows/"+workflowID+"/runs", body, &trig)
+	}
 	if err != nil {
 		return err
 	}

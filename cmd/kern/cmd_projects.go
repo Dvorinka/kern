@@ -203,22 +203,20 @@ func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 		}
 		return c.waitRun(ctx, id, opts["interval"], opts["timeout"])
 	case "trigger":
-		opts, pos := parseFlags(rest, "event", "ref", "sha", "inputs")
+		opts, pos := parseFlags(rest, "event", "ref", "sha", "inputs", "workflow-path")
 		var slug, wf string
 		switch len(pos) {
+		case 0:
+			slug = c.project
 		case 1:
 			slug, wf = c.project, pos[0]
 		case 2:
 			slug, wf = pos[0], pos[1]
 		default:
-			return fmt.Errorf("usage: kern runs trigger [<project>] <workflow> [--event] [--ref] [--sha] [--inputs '{\"k\":\"v\"}']")
+			return fmt.Errorf("usage: kern runs trigger [<project>] <workflow> [--event] [--ref] [--sha] [--inputs '{\"k\":\"v\"}'] [--workflow-path P]")
 		}
 		if slug == "" {
 			return fmt.Errorf("project required — positional arg, --project or kern config set project")
-		}
-		workflowID, err := c.resolveWorkflow(ctx, slug, wf)
-		if err != nil {
-			return err
 		}
 		body := map[string]any{
 			"event": opts["event"], "ref": opts["ref"], "sha": opts["sha"],
@@ -233,7 +231,22 @@ func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 		var out struct {
 			Run run `json:"run"`
 		}
-		err = c.api().post(ctx, "/projects/"+slug+"/workflows/"+workflowID+"/runs", body, &out)
+		var err error
+		if wp := opts["workflow-path"]; wp != "" {
+			// By-path trigger: the file lives at --ref/--sha in the repo and
+			// need not be a synced workflow — unmerged workflow testing.
+			body["workflow_path"] = wp
+			err = c.api().post(ctx, "/projects/"+slug+"/runs", body, &out)
+		} else {
+			if wf == "" {
+				return fmt.Errorf("usage: kern runs trigger [<project>] <workflow> [--event] [--ref] [--sha] [--inputs '{\"k\":\"v\"}'] [--workflow-path P]")
+			}
+			workflowID, werr := c.resolveWorkflow(ctx, slug, wf)
+			if werr != nil {
+				return werr
+			}
+			err = c.api().post(ctx, "/projects/"+slug+"/workflows/"+workflowID+"/runs", body, &out)
+		}
 		if err != nil {
 			return err
 		}

@@ -403,6 +403,35 @@ paths:
                 inputs: { type: object, additionalProperties: true }
       responses:
         "201": { description: Run created }
+  /projects/{project}/runs:
+    post:
+      tags: [runs]
+      summary: Trigger a run for a workflow path that need not be synced
+      description: >-
+        Runs a workflow file fetched from the repo at ref/sha, a local-path
+        checkout, or shipped inline as workflow_yaml — for unmerged or
+        ad-hoc workflow testing. The workflow row is upserted.
+      parameters:
+        - { $ref: "#/components/parameters/Project" }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [workflow_path]
+              properties:
+                workflow_path: { type: string }
+                workflow_yaml: { type: string }
+                workflow_name: { type: string }
+                ref: { type: string }
+                sha: { type: string }
+                event: { type: string }
+                trust_level: { type: string }
+                bundle_ref: { type: string }
+                inputs: { type: object, additionalProperties: true }
+      responses:
+        "201": { description: Run created }
+        "422": { description: Workflow file missing or does not compile }
   /projects/{project}/workflows/{workflowID}:
     patch:
       tags: [projects]
