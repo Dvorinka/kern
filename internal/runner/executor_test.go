@@ -360,6 +360,55 @@ func TestRunnerContextPersistedEnv(t *testing.T) {
 	}
 }
 
+// Release run 92c54930 wrote NOTHING_MODES_KEYSTORE to $GITHUB_ENV in the
+// Decode step; the next step's `env:` evaluated ${{ env.X }} as empty and
+// failed "Cannot convert '' to File". Cover the whole chain: file write →
+// harvestEnv → per-step env: interpolation → env-file render.
+func TestGithubEnvParityPerStep(t *testing.T) {
+	cfg := Config{WorkRoot: t.TempDir()}
+	claim := &Claim{}
+	claim.Job.Image = "ubuntu:24.04"
+	claim.Job.ID = "test-env-parity"
+	e, err := newJobExecutor(cfg, &client{}, claim, nil, nil, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmdDir := filepath.Join(e.workRoot(), "cmd")
+	if err := os.MkdirAll(cmdDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cmdDir, "GITHUB_ENV"),
+		[]byte("NOTHING_MODES_KEYSTORE=/kern/home/keystore.jks\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e.harvestEnv()
+
+	step := StepSpec{Number: 2, Env: map[string]string{
+		"KS":   "${{ env.NOTHING_MODES_KEYSTORE }}",
+		"DER":  "${{ env.NOTHING_MODES_KEYSTORE }}.der",
+		"LIT":  "plain",
+		"MISS": "${{ env.NO_SUCH_VAR }}",
+	}}
+	step.Env = e.interpolateEnv(step.Env)
+	if step.Env["KS"] != "/kern/home/keystore.jks" {
+		t.Fatalf("env: interpolation of persisted var = %q", step.Env["KS"])
+	}
+	if step.Env["DER"] != "/kern/home/keystore.jks.der" {
+		t.Fatalf("compound interpolation = %q", step.Env["DER"])
+	}
+	if step.Env["MISS"] != "" {
+		t.Fatalf("missing var should interpolate empty, got %q", step.Env["MISS"])
+	}
+
+	content, _ := e.enc.render(step)
+	if !strings.Contains(content, "KS=/kern/home/keystore.jks\n") {
+		t.Fatalf("env file missing resolved step env:\n%s", content)
+	}
+	if !strings.Contains(content, "NOTHING_MODES_KEYSTORE=/kern/home/keystore.jks\n") {
+		t.Fatalf("env file missing persisted var:\n%s", content)
+	}
+}
+
 func TestRunnerContextSecretsEmptyWhenWithheld(t *testing.T) {
 	cfg := Config{WorkRoot: t.TempDir()}
 	claim := &Claim{}
