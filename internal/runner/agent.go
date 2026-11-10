@@ -668,6 +668,9 @@ func (a *Agent) runSteps(ctx context.Context, log *zap.Logger, claim *Claim) (st
 	if err := exec.prepare(ctx); err != nil {
 		return "", nil, nil, err
 	}
+	if len(claim.Steps) > 0 {
+		exec.logEnvAudit(claim.Steps[0])
+	}
 
 	// The container is up: publish its name so heartbeat-delivered exec
 	// requests can docker exec into it. Host executors store "" — their

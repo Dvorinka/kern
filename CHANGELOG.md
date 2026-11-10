@@ -13,6 +13,10 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
   timeout watchdogs classify `infra`/`timeout`). Exposed on `/runs` items
   (run-level rollup of the first classified job), run detail, `kern runs
   list --json`, and `kern_jobs_finished_total{conclusion,classification}`.
+- Env/secret audit trail: the runner writes a `KERN: env:` line into the
+  first step's log at job start listing every materialized env var, secret,
+  and var NAME — never a value — so missing or stale env is a 30-second
+  diagnosis instead of a guess. Untrusted runs simply show no secrets.
 
 ## [0.7.9] - 2026-11-10
 
