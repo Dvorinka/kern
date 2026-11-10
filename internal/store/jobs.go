@@ -116,7 +116,7 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 		       j.image, j.matrix, j.env, j.if_condition, j.timeout_seconds, j.continue_on_error,
 		       j.fail_fast, j.priority, j.attempt, j.runner_id, j.queued_at, j.started_at, j.completed_at,
 		       j.lease_expires_at, j.error, j.outputs, j.outputs_spec, j.environment, j.environment_url,
-		       j.inputs, j.services, j.permissions,
+		       j.inputs, j.services, j.permissions, j.classification,
 		       r.id, r.project_id, r.workflow_id, r.workflow_version_id, r.run_number, r.event,
 		       r.ref, r.sha, r.commit_message, r.actor, r.status, r.conclusion, r.trust_level,
 		       r.source, r.concurrency_group, r.started_at, r.completed_at, r.created_at,
@@ -134,7 +134,7 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 			&out.Job.FailFast, &out.Job.Priority, &out.Job.Attempt, &out.Job.RunnerID, &out.Job.QueuedAt,
 			&out.Job.StartedAt, &out.Job.CompletedAt, &out.Job.LeaseExpiresAt, &out.Job.Error,
 			&out.Job.Outputs, &out.Job.OutputsSpec, &out.Job.Environment, &out.Job.EnvironmentURL,
-			&out.Job.Inputs, &out.Job.Services, &out.Job.Permissions,
+			&out.Job.Inputs, &out.Job.Services, &out.Job.Permissions, &out.Job.Classification,
 			&out.Run.ID, &out.Run.ProjectID, &runID, &versionID, &out.Run.RunNumber, &out.Run.Event,
 			&out.Run.Ref, &out.Run.SHA, &out.Run.CommitMessage, &out.Run.Actor, &out.Run.Status,
 			&out.Run.Conclusion, &out.Run.TrustLevel, &out.Run.Source, &out.Run.ConcurrencyGroup,
@@ -250,7 +250,8 @@ func (s *Store) StepLogRef(ctx context.Context, jobID uuid.UUID, number int) (st
 }
 
 // FinishJob records the terminal state of a job and releases its lease.
-func (s *Store) FinishJob(ctx context.Context, runnerID, jobID uuid.UUID, conclusion, errMsg string, outputs map[string]string, metrics json.RawMessage) (bool, error) {
+// classification is the rolled-up failure class (” for non-failures).
+func (s *Store) FinishJob(ctx context.Context, runnerID, jobID uuid.UUID, conclusion, errMsg string, outputs map[string]string, metrics json.RawMessage, classification string) (bool, error) {
 	outputsJSON, err := json.Marshal(outputs)
 	if err != nil {
 		return false, err
@@ -269,9 +270,10 @@ func (s *Store) FinishJob(ctx context.Context, runnerID, jobID uuid.UUID, conclu
 			lease_expires_at = NULL,
 			error = $4,
 			outputs = $5,
-			metrics = COALESCE($6, metrics)
+			metrics = COALESCE($6, metrics),
+			classification = $7
 		WHERE id = $1 AND runner_id = $2 AND status = 'in_progress'
-		RETURNING id`, jobID, runnerID, conclusion, errMsg, outputsJSON, metrics).Scan(&jobID)
+		RETURNING id`, jobID, runnerID, conclusion, errMsg, outputsJSON, metrics, classification).Scan(&jobID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -298,13 +300,16 @@ func (s *Store) FinishJob(ctx context.Context, runnerID, jobID uuid.UUID, conclu
 }
 
 // JobFailureKinds returns the distinct diagnosis kinds of the job's failed
-// steps — the basis for transient-retry decisions. Empty when no step has a
-// recorded failure diagnosis (e.g. prepare-phase failures, #209).
+// steps, ordered by the step that produced each kind — kinds[0] is the first
+// failed step's class, used both for transient-retry decisions and for the
+// job's rolled-up classification. Empty when no step has a recorded failure
+// diagnosis (e.g. prepare-phase failures, #209).
 func (s *Store) JobFailureKinds(ctx context.Context, jobID uuid.UUID) ([]string, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT DISTINCT diagnosis->>'kind' FROM steps
+		SELECT diagnosis->>'kind' FROM steps
 		WHERE job_id = $1 AND status = 'completed' AND conclusion = 'failure'
-		  AND diagnosis IS NOT NULL`, jobID)
+		  AND diagnosis IS NOT NULL
+		GROUP BY 1 ORDER BY min(number)`, jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -372,6 +377,7 @@ func (s *Store) ReapExpiredLeases(ctx context.Context, maxAttempts int) ([]uuid.
 			UPDATE jobs j SET
 				status = CASE WHEN e.attempt >= $1 THEN 'completed' ELSE 'queued' END,
 				conclusion = CASE WHEN e.attempt >= $1 THEN 'failure' ELSE '' END,
+				classification = CASE WHEN e.attempt >= $1 THEN 'infra' ELSE '' END,
 				error = CASE WHEN e.attempt >= $1
 					THEN 'lease expired: runner stopped reporting'
 					ELSE 'lease expired: requeued' END,
@@ -431,6 +437,7 @@ func (s *Store) ReapExpiredLeases(ctx context.Context, maxAttempts int) ([]uuid.
 func (s *Store) TimeoutOverdueJobs(ctx context.Context) (int64, error) {
 	rows, err := s.pool.Query(ctx, `
 		UPDATE jobs SET status = 'completed', conclusion = 'failure',
+			classification = 'timeout',
 			error = 'job exceeded timeout-minutes', completed_at = now(),
 			lease_expires_at = NULL
 		WHERE status = 'in_progress'

@@ -59,6 +59,7 @@ export interface Run {
   workflow_path: string;
   project_slug: string;
   project_name: string;
+  classification?: string;
 }
 
 export interface Step {
@@ -145,6 +146,7 @@ export interface Job {
   started_at: string | null;
   completed_at: string | null;
   error: string;
+  classification?: string;
   outputs: Record<string, string> | null;
   environment: string;
   environment_url: string;

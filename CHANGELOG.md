@@ -3,6 +3,17 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
+## Unreleased
+
+### Added
+- First-class failure classification: `jobs.classification` rolls the first
+  failed step's diagnosis kind up to the job (prepare-phase failures that
+  never reached a step get a class derived from the job error —
+  `disk_full`, `network`, `timeout`, `infra`, `prepare`; lease-reaper and
+  timeout watchdogs classify `infra`/`timeout`). Exposed on `/runs` items
+  (run-level rollup of the first classified job), run detail, `kern runs
+  list --json`, and `kern_jobs_finished_total{conclusion,classification}`.
+
 ## [0.7.9] - 2026-11-10
 
 ### Added
