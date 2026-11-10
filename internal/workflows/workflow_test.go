@@ -69,6 +69,63 @@ func TestCompileSimple(t *testing.T) {
 	}
 }
 
+func TestJobResources(t *testing.T) {
+	res, err := Compile(`on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    resources:
+      memory: 8g
+      cpus: 4
+      disk: 30g
+    steps:
+      - run: echo hi
+  pinned:
+    runs-on: ubuntu-latest
+    env:
+      KERN_JOB_MEMORY: 2g
+    resources:
+      memory: 8g
+    steps:
+      - run: echo hi
+`, testCompiler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Valid {
+		t.Fatalf("expected valid workflow, diagnostics: %+v", res.Diagnostics)
+	}
+	var build, pinned JobPlan
+	for _, j := range res.Plan.Jobs {
+		switch j.JobID {
+		case "build":
+			build = j
+		case "pinned":
+			pinned = j
+		}
+	}
+	if build.Env["KERN_JOB_MEMORY"] != "8g" || build.Env["KERN_JOB_CPUS"] != "4" || build.Env["KERN_JOB_DISK"] != "30g" {
+		t.Fatalf("resources env = %+v", build.Env)
+	}
+	// Explicit env wins over the resources block.
+	if pinned.Env["KERN_JOB_MEMORY"] != "2g" {
+		t.Fatalf("env should win over resources, got %q", pinned.Env["KERN_JOB_MEMORY"])
+	}
+
+	res, _ = Compile(`on: push
+jobs:
+  bad:
+    runs-on: ubuntu-latest
+    resources:
+      mem: 8g
+    steps:
+      - run: echo hi
+`, testCompiler)
+	if res.Valid {
+		t.Fatal("unknown resources key should fail validation")
+	}
+}
+
 func TestMatrixExpansion(t *testing.T) {
 	res := compileFile(t, "matrix.yml")
 	if !res.Valid {

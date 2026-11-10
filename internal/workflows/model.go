@@ -121,6 +121,11 @@ type Job struct {
 	// runner polls the queue. GitHub ignores the key, so the same file
 	// stays valid on both platforms.
 	Priority int `yaml:"priority"`
+	// Resources is a KERN extension: per-job container limits
+	// ({memory: 8g, cpus: 4, disk: 30g}). The compiler folds them into the
+	// KERN_JOB_* env the executor already honours; explicit env values win.
+	// Trusted tiers only — a fork run cannot pin the host's cgroup ceilings.
+	Resources map[string]any `yaml:"resources"`
 }
 
 type Strategy struct {

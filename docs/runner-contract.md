@@ -71,6 +71,24 @@ with a higher number is claimed before lower-priority jobs. Use it to
 keep short urgent work (e.g. this repo's dogfood CI) ahead of long
 builds on a shared fleet. GitHub ignores the key.
 
+## Per-job resources
+
+`jobs.<id>.resources` (KERN extension) sets the job container's cgroup
+limits without spelling env vars:
+
+```yaml
+jobs:
+  build:
+    resources:
+      memory: 8g   # KERN_JOB_MEMORY — docker --memory
+      cpus: 4      # KERN_JOB_CPUS — docker --cpus
+      disk: 30g    # KERN_JOB_DISK — work-root budget; breach = disk_quota abort
+```
+
+An explicit `KERN_JOB_*` value in `env:` wins over the block. Limits only
+apply on trusted tiers (trusted/protected runs); a fork pull_request job
+declaring `resources:` keeps the runner defaults. GitHub ignores the key.
+
 ## Job container hardening (untrusted tiers)
 
 uid 1000, `--cap-drop ALL`, `no-new-privileges`, `--read-only`, `/tmp` and
