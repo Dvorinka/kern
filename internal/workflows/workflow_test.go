@@ -126,6 +126,37 @@ jobs:
 	}
 }
 
+func TestPwshOnWindowsWarns(t *testing.T) {
+	res, err := Compile(`on: push
+jobs:
+  win:
+    runs-on: [windows-latest]
+    steps:
+      - run: echo hi
+        shell: pwsh
+  lin:
+    runs-on: [ubuntu-latest]
+    steps:
+      - run: echo hi
+        shell: pwsh
+`, testCompiler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found int
+	for _, d := range res.Diagnostics {
+		if d.Code == "pwsh-windows" {
+			found++
+			if d.Level != "warning" {
+				t.Fatalf("pwsh diagnostic level = %q, want warning", d.Level)
+			}
+		}
+	}
+	if found != 1 {
+		t.Fatalf("expected 1 pwsh-windows warning (windows job only), got %d: %+v", found, res.Diagnostics)
+	}
+}
+
 func TestMatrixExpansion(t *testing.T) {
 	res := compileFile(t, "matrix.yml")
 	if !res.Valid {

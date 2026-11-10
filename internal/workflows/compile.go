@@ -210,6 +210,25 @@ func compile(content string, c Compiler, depth int, calls *int, deps map[string]
 					fmt.Sprintf("runs-on label %q uses a context KERN cannot resolve at compile time; the literal label must exist on a runner", label))
 			}
 		}
+		// KERN windows runners have no pwsh provisioned — steps declaring it
+		// silently fall back to Git Bash and die on PowerShell syntax. Flag
+		// the declared form (defaults and per-step) so the footgun is loud.
+		if windowsJob(job.RunsOn) {
+			shell := wf.Defaults.Run.Shell
+			if job.Defaults != nil && job.Defaults.Run.Shell != "" {
+				shell = wf.Defaults.Run.Shell
+			}
+			if shell == "pwsh" {
+				d.warnf("pwsh-windows", "jobs."+id+".defaults.run.shell",
+					"shell: pwsh is not provisioned on KERN windows runners — steps run under Git Bash; use bash or `powershell.exe -File`")
+			}
+			for i, s := range job.Steps {
+				if s.Shell == "pwsh" {
+					d.warnf("pwsh-windows", fmt.Sprintf("jobs.%s.steps[%d].shell", id, i),
+						"shell: pwsh is not provisioned on KERN windows runners — steps run under Git Bash; use bash or `powershell.exe -File`")
+				}
+			}
+		}
 		if job.Strategy != nil && len(job.Strategy.Matrix) > 0 {
 			d.info("matrix", "jobs."+id+".strategy.matrix", "matrix expansion is limited to 256 combinations")
 		}
@@ -527,6 +546,18 @@ func applyResources(env map[string]string, res map[string]any) (map[string]strin
 		}
 	}
 	return env, nil
+}
+
+// windowsJob reports whether runs-on labels target a windows runner —
+// matching the labels the fleet registers (windows, windows-latest,
+// windows-amd64). Used to warn on pwsh steps KERN cannot honour.
+func windowsJob(runsOn StringList) bool {
+	for _, l := range runsOn {
+		if strings.HasPrefix(l, "windows") {
+			return true
+		}
+	}
+	return false
 }
 
 func mergeEnv(base, overlay map[string]any) map[string]string {
