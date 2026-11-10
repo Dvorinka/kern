@@ -473,3 +473,32 @@ func TestPathExists(t *testing.T) {
 		t.Error("pathExists(missing) = true, want false")
 	}
 }
+
+// The audit line carries names only — a secret VALUE in the log header would
+// defeat the masker. Assert names appear and no value does.
+func TestEnvAuditLine(t *testing.T) {
+	e := &executor{
+		cfg: Config{WorkRoot: t.TempDir(), Name: "test"},
+		c:   &client{},
+		claim: &Claim{Run: ClaimRun{
+			Ref: "refs/heads/main", RepoFullName: "o/r",
+		}},
+		secrets: map[string]string{"NPM_TOKEN": "s3cr3t-value", "GITHUB_TOKEN": "ghp_x"},
+		vars:    map[string]string{"REGISTRY": "npm.example"},
+	}
+	e.claim.Job.Env = map[string]string{"MY_FLAG": "on"}
+	line := e.envAuditLine()
+	for _, name := range []string{"MY_FLAG", "NPM_TOKEN", "GITHUB_TOKEN", "REGISTRY", "GITHUB_SHA"} {
+		if !strings.Contains(line, name) {
+			t.Errorf("audit line missing %s: %s", name, line)
+		}
+	}
+	for _, val := range []string{"s3cr3t-value", "ghp_x", "npm.example"} {
+		if strings.Contains(line, val) {
+			t.Errorf("audit line leaked value %q: %s", val, line)
+		}
+	}
+	if !strings.HasPrefix(line, "KERN: env: ") {
+		t.Errorf("bad prefix: %q", line)
+	}
+}

@@ -432,6 +432,46 @@ func hostShell() string {
 	return "/bin/sh"
 }
 
+// logEnvAudit writes the materialized environment into the first step's
+// log — NAMES only, never values. A missing or stale env var (or a secret
+// that never reached the job) is then a 30-second diagnosis instead of a
+// guess; untrusted runs simply show an empty secrets list.
+func (e *executor) logEnvAudit(step StepSpec) {
+	e.logStep(step, e.envAuditLine())
+}
+
+func (e *executor) envAuditLine() string {
+	envNames := make([]string, 0, 64)
+	for k := range e.jobEnv() {
+		envNames = append(envNames, k)
+	}
+	for k := range e.claim.Job.Env {
+		envNames = append(envNames, k)
+	}
+	sort.Strings(envNames)
+	var b strings.Builder
+	b.WriteString("KERN: env: ")
+	b.WriteString(strings.Join(envNames, " "))
+	if names := sortedKeys(e.secrets); len(names) > 0 {
+		b.WriteString(" | secrets: ")
+		b.WriteString(strings.Join(names, " "))
+	}
+	if names := sortedKeys(e.vars); len(names) > 0 {
+		b.WriteString(" | vars: ")
+		b.WriteString(strings.Join(names, " "))
+	}
+	return b.String()
+}
+
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func (e *executor) goStop() {
 	select {
 	case <-e.stop:
