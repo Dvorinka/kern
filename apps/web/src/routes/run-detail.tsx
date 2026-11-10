@@ -216,6 +216,7 @@ function StepsPanel({
 						` · job ${jobs.findIndex((j) => j.id === job.id) + 1} of ${jobs.length}`}
 					{job.runner_id && runners.get(job.runner_id) && ` · on ${runners.get(job.runner_id)}`}
 					{job.environment && ` · ${job.environment}`}
+					{job.classification && ` · ${job.classification}`}
 				</span>
 				{jobs.length > 1 && (
 					<span className="jpick">

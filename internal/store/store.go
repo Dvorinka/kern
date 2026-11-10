@@ -141,6 +141,9 @@ type Run struct {
 	// ClearedAt hides the run from default lists (rerun of a cancelled run,
 	// or an explicit clear). The row and its history remain.
 	ClearedAt *time.Time `json:"cleared_at,omitempty"`
+	// Classification rolls up the first failed job's classification so a
+	// runs list can name the failure mode without loading every job.
+	Classification string `json:"classification,omitempty"`
 	// Joined fields.
 	WorkflowName string `json:"workflow_name"`
 	WorkflowPath string `json:"workflow_path"`
@@ -187,6 +190,10 @@ type Job struct {
 	// at finish (cpu_pct_peak, mem_bytes_peak); '{}' for host executors and
 	// jobs finished before the runner sampled (#134).
 	Metrics json.RawMessage `json:"metrics"`
+	// Classification is the rolled-up failure class: the first failed
+	// step's diagnosis kind, or a class derived from the job error for
+	// prepare-phase failures that never reached a step.
+	Classification string `json:"classification"`
 	// QueueReason is advisory, computed at read time (never stored): why a
 	// queued job cannot be claimed, e.g. no online runner matches runs-on.
 	QueueReason string `json:"queue_reason,omitempty"`

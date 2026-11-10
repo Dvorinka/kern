@@ -54,6 +54,7 @@ func (h *histogram) write(b *strings.Builder, name, help string) {
 type kernMetrics struct {
 	mu             sync.Mutex
 	cacheLookups   map[string]uint64
+	jobFinishes    map[string]uint64 // "conclusion|classification"
 	claimQuery     *histogram
 	webhookProcess *histogram
 }
@@ -61,6 +62,7 @@ type kernMetrics struct {
 func newKernMetrics() *kernMetrics {
 	return &kernMetrics{
 		cacheLookups: map[string]uint64{},
+		jobFinishes:  map[string]uint64{},
 		// ClaimJob runs every 500ms per idle worker; p99 should stay well
 		// under a second even with a deep queue.
 		claimQuery: newHistogram([]float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5}),
@@ -87,15 +89,25 @@ func (m *kernMetrics) observeWebhook(d time.Duration) {
 	m.mu.Unlock()
 }
 
+func (m *kernMetrics) observeJobFinish(conclusion, classification string) {
+	m.mu.Lock()
+	m.jobFinishes[conclusion+"|"+classification]++
+	m.mu.Unlock()
+}
+
 // snapshot returns a stable copy for rendering.
-func (m *kernMetrics) snapshot() (map[string]uint64, *histogram, *histogram) {
+func (m *kernMetrics) snapshot() (map[string]uint64, map[string]uint64, *histogram, *histogram) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	lookups := make(map[string]uint64, len(m.cacheLookups))
 	for k, v := range m.cacheLookups {
 		lookups[k] = v
 	}
-	return lookups, m.claimQuery, m.webhookProcess
+	finishes := make(map[string]uint64, len(m.jobFinishes))
+	for k, v := range m.jobFinishes {
+		finishes[k] = v
+	}
+	return lookups, finishes, m.claimQuery, m.webhookProcess
 }
 
 // writeDurationHistogram emits a store.DurationHistogram (non-cumulative

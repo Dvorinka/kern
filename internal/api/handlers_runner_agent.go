@@ -597,14 +597,24 @@ func (s *Server) finishJob(c *gin.Context) {
 	}
 	// Job errors surface in the dashboard and status payloads; mask like logs.
 	req.Error = s.maskerForJob(c, job).Mask(req.Error)
-	if req.Conclusion == "failure" && s.maybeRequeueTransient(c, job, runner.ID, req.Error) {
+	// Failed-step kinds feed both the transient-requeue check and the
+	// job's rolled-up classification — fetch once.
+	var kinds []string
+	if req.Conclusion == "failure" {
+		kinds, _ = s.Store.JobFailureKinds(c.Request.Context(), job.ID)
+	}
+	if req.Conclusion == "failure" && s.maybeRequeueTransient(c, job, runner.ID, req.Error, kinds) {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "requeued": true})
 		return
 	}
 	if len(req.Metrics) > 0 && !json.Valid(req.Metrics) {
 		req.Metrics = nil
 	}
-	updated, err := s.Store.FinishJob(c.Request.Context(), runner.ID, job.ID, req.Conclusion, req.Error, req.Outputs, req.Metrics)
+	classification := ""
+	if req.Conclusion == "failure" {
+		classification = classifyJobFailure(kinds, req.Error)
+	}
+	updated, err := s.Store.FinishJob(c.Request.Context(), runner.ID, job.ID, req.Conclusion, req.Error, req.Outputs, req.Metrics, classification)
 	if err != nil {
 		s.internalError(c, err)
 		return
@@ -616,6 +626,9 @@ func (s *Server) finishJob(c *gin.Context) {
 	if run, rerr := s.Store.Run(c.Request.Context(), job.RunID); rerr == nil {
 		job.Conclusion = req.Conclusion
 		s.postJobCheck(c.Request.Context(), run, job, "completed")
+	}
+	if s.metrics != nil {
+		s.metrics.observeJobFinish(req.Conclusion, classification)
 	}
 	// A finished job's container is going away; no exec session may outlive it.
 	_ = s.Store.FailExecsForJob(c.Request.Context(), job.ID, "job finished")
@@ -635,14 +648,11 @@ var transientRetryKinds = map[string]bool{"network": true, "oom": true}
 // failed step carries a transient diagnosis and the project's
 // max_transient_retries budget is not spent. Prepare-phase failures record
 // no step diagnosis (#209), so the runner-reported job error is scanned
-// with the same transient signatures as a fallback.
-func (s *Server) maybeRequeueTransient(c *gin.Context, job store.Job, runnerID uuid.UUID, jobErr string) bool {
+// with the same transient signatures as a fallback. kinds is the caller's
+// JobFailureKinds result (nil = fetch skipped, treated as no step kinds).
+func (s *Server) maybeRequeueTransient(c *gin.Context, job store.Job, runnerID uuid.UUID, jobErr string, kinds []string) bool {
 	limit, err := s.Store.TransientRetryLimit(c.Request.Context(), job.RunID)
 	if err != nil || limit <= 0 || job.Attempt >= 1+limit {
-		return false
-	}
-	kinds, err := s.Store.JobFailureKinds(c.Request.Context(), job.ID)
-	if err != nil {
 		return false
 	}
 	if len(kinds) == 0 {
@@ -672,6 +682,38 @@ func (s *Server) maybeRequeueTransient(c *gin.Context, job store.Job, runnerID u
 		_ = s.Store.FailExecsForJob(c.Request.Context(), job.ID, "job requeued")
 	}
 	return ok
+}
+
+// classifyJobFailure rolls a failed job's diagnosis kinds up to a single
+// class: the first failed step's kind when a step diagnosis exists, or a
+// class derived from the job error for prepare-phase failures that never
+// reached a step (#209).
+func classifyJobFailure(kinds []string, jobErr string) string {
+	if len(kinds) > 0 {
+		return kinds[0]
+	}
+	return classifyJobError(jobErr)
+}
+
+// classifyJobError maps the runner-reported job error onto the diagnosis
+// vocabulary for failures that produced no step diagnosis. Order matters:
+// ENOSPC before the transient signatures, since looksTransientError lists
+// "no space left on device" under network.
+func classifyJobError(msg string) string {
+	m := strings.ToLower(msg)
+	switch {
+	case strings.Contains(m, "no space left on device"), strings.Contains(m, "disk full"),
+		strings.Contains(m, "disk_quota"):
+		return "disk_full"
+	case looksTransientError(msg):
+		return "network"
+	case strings.Contains(m, "timed out"), strings.Contains(m, "timeout"):
+		return "timeout"
+	case strings.Contains(m, "panic"):
+		return "infra"
+	default:
+		return "prepare"
+	}
 }
 
 // looksTransientError matches the transient network signatures a

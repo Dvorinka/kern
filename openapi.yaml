@@ -1239,6 +1239,7 @@ components:
         workflow_path: { type: string }
         project_slug: { type: string }
         project_name: { type: string }
+        classification: { type: string, description: "Failure class of the first failed job (disk_full, network, timeout, infra, prepare, or a step diagnosis kind); empty until recorded" }
     Runner:
       type: object
       properties:

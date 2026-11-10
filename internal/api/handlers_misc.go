@@ -115,11 +115,20 @@ func (s *Server) prometheus(c *gin.Context) {
 
 	// Process-local series.
 	if s.metrics != nil {
-		lookups, claim, webhook := s.metrics.snapshot()
+		lookups, finishes, claim, webhook := s.metrics.snapshot()
 		b.WriteString("# HELP kern_cache_lookups_total Cache restore lookups by result\n" +
 			"# TYPE kern_cache_lookups_total counter\n")
 		for _, result := range []string{"exact", "prefix", "miss"} {
 			fmt.Fprintf(&b, "kern_cache_lookups_total{result=\"%s\"} %d\n", result, lookups[result])
+		}
+		if len(finishes) > 0 {
+			b.WriteString("# HELP kern_jobs_finished_total Finished jobs by conclusion and failure classification\n" +
+				"# TYPE kern_jobs_finished_total counter\n")
+			for k, n := range finishes {
+				concl, class, _ := strings.Cut(k, "|")
+				fmt.Fprintf(&b, "kern_jobs_finished_total{conclusion=\"%s\",classification=\"%s\"} %d\n",
+					labelValue(concl), labelValue(class), n)
+			}
 		}
 		claim.write(&b, "kern_claim_query_seconds", "Job claim query duration")
 		webhook.write(&b, "kern_webhook_process_seconds", "Webhook delivery processing time")

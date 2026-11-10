@@ -428,7 +428,9 @@ function RunRow({
 				{duration(r.started_at, r.completed_at)}
 				{live && <small className="block text-[11px] text-[var(--faint)]">elapsed</small>}
 				{r.conclusion === "failure" && (
-					<small className="block text-[11px] text-[var(--faint)]">failed</small>
+					<small className="block text-[11px] text-[var(--faint)]">
+						{r.classification || "failed"}
+					</small>
 				)}
 				{r.status === "cancelled" && (
 					<small className="block text-[11px] text-[var(--faint)]">cancelled</small>
