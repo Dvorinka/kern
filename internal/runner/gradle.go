@@ -16,7 +16,12 @@ import (
 // never removed: artifacts the mirror lacks still resolve from their
 // original source. Projects on RepositoriesMode.FAIL_ON_PROJECT_REPOS get
 // the mirror only through dependencyResolutionManagement — project-level
-// additions are skipped so their declared mode keeps working.
+// additions are skipped so their declared mode keeps working. Under
+// PREFER_PROJECT (the Gradle default) an injected repo counts as a project
+// declaration and shadows every settings repository — google() included —
+// so project injection happens only for handlers the project populated
+// itself; empty ones fall through to the settings list, which already
+// carries the mirror.
 const gradleMirrorInit = `// KERN-managed: fleet Maven Central mirror. Do not edit — the runner
 // rewrites this file on every job.
 // Inserted FIRST everywhere Gradle resolves artifacts so repo.maven.apache.org
@@ -45,7 +50,17 @@ gradle.settingsEvaluated { settings ->
             settings.gradle.rootProject { root ->
                 root.allprojects { p ->
                     addMirror(p.buildscript.repositories)
-                    addMirror(p.repositories)
+                    // An injected repo counts as a project declaration:
+                    // under PREFER_PROJECT a non-empty handler shadows all
+                    // settings repositories (google() included), so only top
+                    // up handlers the project populated itself. Emptied-out
+                    // or undeclared projects resolve through the settings
+                    // list, which already carries the mirror.
+                    p.afterEvaluate {
+                        if (!p.repositories.isEmpty()) {
+                            addMirror(p.repositories)
+                        }
+                    }
                 }
             }
         }
