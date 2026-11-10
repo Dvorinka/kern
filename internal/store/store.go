@@ -297,6 +297,8 @@ type HostMetrics struct {
 	CPUPercent    *float64 `json:"cpu_percent"`
 	MemUsedBytes  *int64   `json:"mem_used_bytes"`
 	DiskFreeBytes *int64   `json:"disk_free_bytes"`
+	DiskBytes     *int64   `json:"disk_bytes"`
+	Version       string   `json:"version"`
 }
 
 type Secret struct {

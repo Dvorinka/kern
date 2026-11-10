@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/dvorinka/kern/internal/version"
 )
 
 // heartbeatMetrics is the utilization snapshot sent with each heartbeat.
@@ -18,8 +20,15 @@ type heartbeatMetrics struct {
 	CPUPercent    *float64 `json:"cpu_percent,omitempty"`
 	MemUsedBytes  *int64   `json:"mem_used_bytes,omitempty"`
 	DiskFreeBytes *int64   `json:"disk_free_bytes,omitempty"`
-	ActiveJobs    int      `json:"active_jobs"`
-	SelfUpdate    bool     `json:"self_update,omitempty"`
+	// DiskBytes is the work-root filesystem total — refresh on heartbeat so
+	// a moved/resized work root stops reporting register-time capacity.
+	DiskBytes *int64 `json:"disk_bytes,omitempty"`
+	// Version refreshes runners.version every heartbeat. Without it a
+	// token-mode runner (no re-register on boot) reports its enroll-time
+	// version forever, and the auto-update offer never converges.
+	Version    string `json:"version,omitempty"`
+	ActiveJobs int    `json:"active_jobs"`
+	SelfUpdate bool   `json:"self_update,omitempty"`
 	// Deregister asks the control plane to delete this runner's row — the
 	// ephemeral-runner exit path, refused server-side while jobs are in flight.
 	Deregister bool `json:"deregister,omitempty"`
@@ -45,9 +54,11 @@ func (h *hostSampler) sample(workRoot string, activeJobs int) heartbeatMetrics {
 	if used, ok := memUsed(); ok {
 		m.MemUsedBytes = &used
 	}
-	if free, _ := diskSpace(workRoot); free > 0 {
+	if free, total := diskSpace(workRoot); free > 0 {
 		m.DiskFreeBytes = &free
+		m.DiskBytes = &total
 	}
+	m.Version = version.Version
 	return m
 }
 

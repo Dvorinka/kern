@@ -154,6 +154,40 @@ func TestWebhookDeliveryIsIdempotent(t *testing.T) {
 	}
 }
 
+// Token-mode runners never re-register, so version and disk capacity must
+// ride the heartbeat or they report enroll-time values forever — a stale
+// version made the auto-update offer loop on the same binary.
+func TestHeartbeatRefreshesVersionAndDisk(t *testing.T) {
+	s, ctx := testStore(t)
+	r := runner(t, ctx, s, "hb-refresh")
+	if _, err := s.pool.Exec(ctx, `UPDATE runners SET version = 'v0.0.1', disk_bytes = 1 WHERE id = $1`, r.ID); err != nil {
+		t.Fatal(err)
+	}
+	free := int64(5)
+	total := int64(50)
+	if err := s.Heartbeat(ctx, r.ID, HostMetrics{DiskFreeBytes: &free, DiskBytes: &total, Version: "v0.9.9"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Runner(ctx, r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Version != "v0.9.9" || got.DiskBytes != 50 {
+		t.Fatalf("version=%q disk=%d, want v0.9.9/50", got.Version, got.DiskBytes)
+	}
+	// An empty version or nil total must not clobber the stored values.
+	if err := s.Heartbeat(ctx, r.ID, HostMetrics{}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.Runner(ctx, r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Version != "v0.9.9" || got.DiskBytes != 50 {
+		t.Fatalf("after empty heartbeat version=%q disk=%d, want v0.9.9/50", got.Version, got.DiskBytes)
+	}
+}
+
 func TestMarkStaleRunnersOffline(t *testing.T) {
 	s, ctx := testStore(t)
 	fresh := runner(t, ctx, s, "fresh-hb")
