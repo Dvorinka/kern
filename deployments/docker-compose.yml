@@ -43,9 +43,9 @@ services:
       KERN_PUBLIC_URL: ${KERN_PUBLIC_URL:-http://localhost:8080}
       KERN_ALLOWED_ORIGINS: ${KERN_ALLOWED_ORIGINS:-}
       # Job image for `runs-on: ubuntu-latest` / no container:. The published
-      # base image carries the GitHub-parity toolset; a bare ubuntu:24.04 is
+      # base image carries the GitHub-parity toolset; a bare ubuntu:26.04 is
       # the fallback when the image is not reachable. No compose default: a
-      # bare `up` without --env-file must fail loudly, not ship ubuntu:24.04.
+      # bare `up` without --env-file must fail loudly, not ship ubuntu:26.04.
       KERN_DEFAULT_IMAGE: ${KERN_DEFAULT_IMAGE:?set KERN_DEFAULT_IMAGE (see .env.example)}
       # Optional arm64 substitute for KERN_DEFAULT_IMAGE (see .env.example).
       KERN_ARM64_IMAGE: ${KERN_ARM64_IMAGE:-}

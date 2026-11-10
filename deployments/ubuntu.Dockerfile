@@ -1,12 +1,12 @@
-# KERN base job image — ubuntu:24.04 with the baseline toolset GitHub-hosted
+# KERN base job image — ubuntu:26.04 with the baseline toolset GitHub-hosted
 # runners ship. Workflows written for `runs-on: ubuntu-latest` assume curl,
 # make, gcc, jq, sudo and friends exist without a setup step; a bare
-# ubuntu:24.04 fails them with `command not found`.
+# ubuntu:26.04 fails them with `command not found`.
 #
 # Deliberately NOT included: language toolchains (Go, Node, Rust, Android SDK).
 # Those are installed by setup-* actions, which keep working and stay pinned by
 # the workflow. This image only covers the always-expected POSIX/CI baseline.
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
@@ -39,7 +39,7 @@ RUN mkdir -p /etc/apt/keyrings \
 # git-lfs needs its smudge filter registered for checkouts that use it.
 RUN git lfs install --system || true
 
-# Playwright's Ubuntu 24.04 dependency set (tools + chromium + firefox +
+# Playwright's Ubuntu 26.04 dependency set (tools + chromium + firefox +
 # webkit, from playwright's nativeDeps for noble) so `npx playwright install
 # --with-deps` and `install-deps` are no-ops instead of per-job apt installs.
 # Trusted lanes run as root and could apt these; untrusted lanes cannot
@@ -59,12 +59,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gstreamer1.0-libav gstreamer1.0-plugins-bad gstreamer1.0-plugins-base \
     gstreamer1.0-plugins-good libgstreamer1.0-0 libgstreamer-gl1.0-0 \
     libgstreamer-plugins-bad1.0-0 libgstreamer-plugins-base1.0-0 \
-    libgtk-4-1 libicu74 libenchant-2-2 libepoxy0 libevent-2.1-7t64 \
+    libgtk-4-1 libicu78 libenchant-2-2 libepoxy0 libevent-2.1-7t64 \
     libflite1 libgles2 libharfbuzz-icu0 libharfbuzz0b libhyphen0 \
     libjpeg-turbo8 liblcms2-2 libmanette-0.2-0 libopus0 libpng16-16t64 \
-    libsecret-1-0 libvpx9 libwayland-client0 libwayland-egl1 \
+    libsecret-1-0 libvpx12 libwayland-client0 libwayland-egl1 \
     libwayland-server0 libwebp7 libwebpdemux2 libwoff1 libxslt1.1 \
-    libx264-164 libavif16 \
+    libx264-165 libavif16 \
     && rm -rf /var/lib/apt/lists/*
 
 # Tauri build deps every release lane installs per job (Invico, Primora,
