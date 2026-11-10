@@ -19,3 +19,22 @@ func TestPrNumberFromRef(t *testing.T) {
 		}
 	}
 }
+
+func TestNormWorkflowPath(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"kern/ci.yml", "kern/ci.yml"},
+		{".github/workflows/x.yml", ".github/workflows/x.yml"},
+		{"./kern/ci.yml", "kern/ci.yml"},
+		{"/kern/ci.yml", "kern/ci.yml"},
+		{" kern\\ci.yml ", "kern/ci.yml"},
+		{"", ""},
+		{".", ""},
+		{"../x.yml", ""},
+		{"a/../../b.yml", ""},
+		{"a/../b.yml", ""},
+	} {
+		if got := normWorkflowPath(tc.in); got != tc.want {
+			t.Fatalf("normWorkflowPath(%q) = %q want %q", tc.in, got, tc.want)
+		}
+	}
+}

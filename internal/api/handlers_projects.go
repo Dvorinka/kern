@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"os/exec"
@@ -13,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/dvorinka/kern/internal/github"
 	"github.com/dvorinka/kern/internal/store"
 	"github.com/dvorinka/kern/internal/workflows"
 )
@@ -258,6 +260,12 @@ type triggerRequest struct {
 	TrustLevel    string         `json:"trust_level"`
 	BundleRef     string         `json:"bundle_ref"`
 	Inputs        map[string]any `json:"inputs"`
+	// WorkflowPath + WorkflowYAML drive the by-path trigger route: a workflow
+	// file that is not (yet) a synced workflow row — an unmerged branch file
+	// or a local file shipped inline by `kern exec --workflow-file`.
+	WorkflowPath string `json:"workflow_path"`
+	WorkflowYAML string `json:"workflow_yaml"`
+	WorkflowName string `json:"workflow_name"`
 }
 
 func (s *Server) triggerRun(c *gin.Context) {
@@ -334,27 +342,13 @@ func (s *Server) triggerRun(c *gin.Context) {
 	// between syncs (a manual dispatch once ran a month-old commit and the
 	// month-old workflow definition because of it). GitHub-backed projects
 	// get webhook parity; local-path projects keep the stored version.
-	sha := req.SHA
-	if p.RepoFullName != "" {
-		if sha == "" {
-			refName := strings.TrimPrefix(req.Ref, "refs/heads/")
-			refName = strings.TrimPrefix(refName, "refs/tags/")
-			if gh, gerr := s.githubClient(c.Request.Context(), p.RepoFullName); gerr == nil {
-				if resolved, rerr := gh.HeadSHA(c.Request.Context(), p.RepoFullName, refName); rerr == nil {
-					sha = resolved
-				} else {
-					s.Log.Warn("trigger ref resolution failed; using workflow-version sha",
-						zap.String("ref", req.Ref), zap.Error(rerr))
-				}
-			}
-		}
-		if sha != "" {
-			if v, _, verr := s.workflowAtSHA(c, p.RepoFullName, p.ID, wf, sha); verr == nil {
-				version = v
-			} else {
-				s.Log.Warn("trigger workflow fetch failed; using stored version",
-					zap.String("sha", sha), zap.Error(verr))
-			}
+	sha := s.resolveTriggerSHA(c.Request.Context(), p, req.Ref, req.SHA)
+	if p.RepoFullName != "" && sha != "" {
+		if v, _, verr := s.workflowAtSHA(c, p.RepoFullName, p.ID, wf, sha); verr == nil {
+			version = v
+		} else {
+			s.Log.Warn("trigger workflow fetch failed; using stored version",
+				zap.String("sha", sha), zap.Error(verr))
 		}
 	}
 	// A manual dispatch against a PR ref must look like the webhook run it
@@ -406,6 +400,180 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// resolveTriggerSHA resolves req.Ref to its head sha for repo-backed
+// projects; an explicit req.SHA always wins. Returns "" when the project is
+// local or resolution fails — callers fall back to their stored version.
+func (s *Server) resolveTriggerSHA(ctx context.Context, p store.Project, ref, sha string) string {
+	if p.RepoFullName == "" || sha != "" {
+		return sha
+	}
+	refName := strings.TrimPrefix(ref, "refs/heads/")
+	refName = strings.TrimPrefix(refName, "refs/tags/")
+	gh, err := s.githubClient(ctx, p.RepoFullName)
+	if err != nil {
+		return ""
+	}
+	resolved, err := gh.HeadSHA(ctx, p.RepoFullName, refName)
+	if err != nil {
+		s.Log.Warn("trigger ref resolution failed; using workflow-version sha",
+			zap.String("ref", ref), zap.Error(err))
+		return ""
+	}
+	return resolved
+}
+
+// normWorkflowPath cleans a client-supplied workflow file path into the
+// repo-relative form stored on workflow rows. Empty or escaping paths are
+// rejected.
+func normWorkflowPath(p string) string {
+	p = strings.TrimSpace(strings.ReplaceAll(p, "\\", "/"))
+	for strings.HasPrefix(p, "./") {
+		p = strings.TrimPrefix(p, "./")
+	}
+	p = strings.TrimPrefix(p, "/")
+	if p == "" || p == "." || strings.HasPrefix(p, "../") || strings.Contains(p, "/../") {
+		return ""
+	}
+	return p
+}
+
+// triggerRunByPath starts a run for a workflow file that need not be a
+// synced workflow row: an unmerged branch file (fetched at the resolved
+// ref) or inline YAML shipped by `kern exec --workflow-file`. The workflow
+// row is upserted so run history and versions stay first-class.
+func (s *Server) triggerRunByPath(c *gin.Context) {
+	user, _ := currentUser(c)
+	p, err := s.Store.Project(c.Request.Context(), user.OrgID, c.Param("project"))
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	var req triggerRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		fail(c, http.StatusBadRequest, "invalid_body", "invalid trigger body")
+		return
+	}
+	path := normWorkflowPath(req.WorkflowPath)
+	if path == "" {
+		fail(c, http.StatusBadRequest, "invalid_path", "workflow_path is required and must be repo-relative")
+		return
+	}
+	if req.Event == "" {
+		req.Event = "workflow_dispatch"
+	}
+	if req.Ref == "" {
+		req.Ref = "refs/heads/" + p.DefaultBranch
+	}
+	if req.Actor == "" {
+		req.Actor = user.Email
+	}
+	if req.TrustLevel == "" {
+		req.TrustLevel = "trusted"
+	}
+	switch req.TrustLevel {
+	case "trusted", "protected", "pull_request", "fork", "deployment":
+	default:
+		fail(c, http.StatusBadRequest, "invalid_trust", "unknown trust level")
+		return
+	}
+
+	sha := s.resolveTriggerSHA(c.Request.Context(), p, req.Ref, req.SHA)
+	content := req.WorkflowYAML
+	if content == "" {
+		switch {
+		case p.RepoFullName != "" && sha != "":
+			gh, gerr := s.githubClient(c.Request.Context(), p.RepoFullName)
+			if gerr != nil {
+				s.internalError(c, gerr)
+				return
+			}
+			fc, ferr := gh.FileContent(c.Request.Context(), p.RepoFullName, path, sha)
+			if ferr != nil {
+				fail(c, http.StatusUnprocessableEntity, "workflow_fetch",
+					"no workflow file at "+path+" on "+req.Ref+": "+ferr.Error())
+				return
+			}
+			content = fc
+		case p.LocalPath != "":
+			b, rerr := os.ReadFile(filepath.Join(p.LocalPath, filepath.FromSlash(path)))
+			if rerr != nil {
+				fail(c, http.StatusUnprocessableEntity, "workflow_fetch",
+					"no workflow file at "+path+" in the project checkout")
+				return
+			}
+			content = string(b)
+		default:
+			fail(c, http.StatusUnprocessableEntity, "workflow_fetch",
+				"could not resolve "+req.Ref+" to a commit; pass sha explicitly or ship workflow_yaml")
+			return
+		}
+	}
+	var gh *github.Client
+	if p.RepoFullName != "" {
+		if g, gerr := s.githubClient(c.Request.Context(), p.RepoFullName); gerr == nil {
+			gh = g
+		}
+	}
+	cc := s.Orch.Compiler
+	cc.Resolve = s.reusableResolver(c.Request.Context(), p.LocalPath, p.RepoFullName, sha, gh)
+	res, err := workflows.Compile(content, cc)
+	if err != nil || !res.Valid || res.Plan == nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{
+			"error":       gin.H{"code": "invalid_workflow", "message": "workflow does not compile"},
+			"diagnostics": res.Diagnostics,
+		})
+		return
+	}
+	name := firstNonEmpty(req.WorkflowName, res.Name, filepath.Base(path))
+	wf, err := s.Store.UpsertWorkflow(c.Request.Context(), p.ID, path, name)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	version, err := s.Store.PutWorkflowVersion(c.Request.Context(), wf.ID,
+		firstNonEmpty(sha, "adhoc"), content, res.Plan, res.Valid, res.Diagnostics, res.Deps)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+
+	source := map[string]any{
+		"repo_url":       p.RepoURL,
+		"repo_full_name": p.RepoFullName,
+		"local_path":     p.LocalPath,
+		"default_branch": p.DefaultBranch,
+	}
+	if req.BundleRef != "" {
+		prefix := "sources/" + p.Slug + "/"
+		size, sizeErr := s.Blobs.Size(req.BundleRef)
+		if !strings.HasPrefix(req.BundleRef, prefix) || sizeErr != nil || size == 0 {
+			fail(c, http.StatusBadRequest, "invalid_bundle_ref",
+				"bundle_ref does not reference an uploaded source bundle for this project")
+			return
+		}
+		source["bundle_ref"] = req.BundleRef
+	}
+	run, err := s.Orch.StartRun(c.Request.Context(), store.CreateRunParams{
+		ProjectID:         p.ID,
+		WorkflowID:        wf.ID,
+		WorkflowVersionID: version.ID,
+		Event:             req.Event,
+		Ref:               req.Ref,
+		SHA:               firstNonEmpty(sha, version.CommitSHA),
+		CommitMessage:     req.CommitMessage,
+		Actor:             req.Actor,
+		TrustLevel:        req.TrustLevel,
+		Source:            source,
+		Inputs:            req.Inputs,
+	})
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "run.trigger", run.ID.String())
+	c.JSON(http.StatusCreated, gin.H{"run": run})
 }
 
 func gitHead(dir string) string {
