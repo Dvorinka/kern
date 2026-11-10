@@ -228,7 +228,7 @@ export function Layout() {
 			</header>
 			{menu && <div className="mscrim" onClick={() => setMenu(false)} />}
 			<main className="console-bg min-w-0 flex-1 overflow-y-auto">
-				<div className="mx-auto max-w-[1360px] px-[22px] pb-16 pt-[18px]">
+				<div className="mx-auto max-w-[1360px] px-3 pb-16 pt-[18px] sm:px-[22px]">
 					<Outlet />
 				</div>
 			</main>
