@@ -39,7 +39,7 @@ feature matrix is [docs/compatibility.md](docs/compatibility.md).
 
 ## Quickstart
 
-Requires Go 1.26+, Docker, PostgreSQL 16, and [`just`](https://github.com/casey/just).
+Requires Go 1.27+, Docker, PostgreSQL 16, and [`just`](https://github.com/casey/just).
 
 ```sh
 # 1. Postgres (any reachable instance)
