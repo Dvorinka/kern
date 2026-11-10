@@ -108,6 +108,10 @@ type executor struct {
 	// stepEnvExtra holds the multi-line vars docker's env-file cannot carry;
 	// set per step by writeStepEnv and passed as -e args.
 	stepEnvExtra map[string]string
+	// stepEnvCtx is the current step's env: map, folded into the env
+	// expression context for that step's interpolation and run body —
+	// GitHub exposes a step's own env through ${{ env.* }}.
+	stepEnvCtx map[string]string
 	// eventPayload is the github.event expression context, built once at
 	// container start and shared with the GITHUB_EVENT_PATH file.
 	eventPayload map[string]any
@@ -340,6 +344,7 @@ func (e *executor) prepare(ctx context.Context) error {
 		e.goStop()
 		return fmt.Errorf("checkout: %w", err)
 	}
+	e.ensureGradleMirror()
 	if e.host {
 		return e.prepareHost()
 	}
@@ -670,6 +675,12 @@ func (e *executor) jobEnv() map[string]string {
 		// dir so every invocation agrees — and doubles as a warm cross-job
 		// store on the persistent cache mount.
 		"pnpm_config_store_dir": e.cachePath() + "/pnpm-store",
+		// Persistent Gradle home: every job on the runner shares the
+		// dependency/wrapper/build cache, and the init.d script seeded by
+		// ensureGradleMirror steers Maven Central fetches to the fleet
+		// mirror. A workflow-set GRADLE_USER_HOME in job or step env still
+		// wins — the per-step env file overrides docker -e.
+		"GRADLE_USER_HOME": e.cachePath() + "/gradle",
 		// RUNNER_TEMP must be exec-allowed: setup-* actions extract and run
 		// installers there, and the container's /tmp tmpfs is noexec.
 		"RUNNER_TEMP": e.tmpPath(),

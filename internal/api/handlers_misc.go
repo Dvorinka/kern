@@ -259,40 +259,43 @@ func (s *Server) getOrgSettings(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"settings":          raw,
-		"self_heal":         settingsValue(raw, "self_heal", "off"),
-		"public_ci":         settingsValue(raw, "public_ci", "off"),
-		"auto_update":       settingsValue(raw, "auto_update", "off"),
-		"runner_autostart":  settingsValue(raw, "runner_autostart", "on"),
-		"notify_url":        settingsValue(raw, "notify_url", ""),
-		"notify_secret_set": settingsValue(raw, "notify_secret", "") != "",
-		"notify_events":     settingsValue(raw, "notify_events", ""),
-		"notify_format":     settingsValue(raw, "notify_format", "kern"),
-		"disk_alert_pct":    settingsValue(raw, "disk_alert_pct", "10"),
+		"settings":              raw,
+		"self_heal":             settingsValue(raw, "self_heal", "off"),
+		"public_ci":             settingsValue(raw, "public_ci", "off"),
+		"auto_update":           settingsValue(raw, "auto_update", "off"),
+		"runner_autostart":      settingsValue(raw, "runner_autostart", "on"),
+		"notify_url":            settingsValue(raw, "notify_url", ""),
+		"notify_secret_set":     settingsValue(raw, "notify_secret", "") != "",
+		"notify_events":         settingsValue(raw, "notify_events", ""),
+		"notify_format":         settingsValue(raw, "notify_format", "kern"),
+		"disk_alert_pct":        settingsValue(raw, "disk_alert_pct", "10"),
+		"max_transient_retries": settingsValue(raw, "max_transient_retries", "1"),
 	})
 }
 
 type settingsRequest struct {
-	SelfHeal        string  `json:"self_heal"`
-	ForkGate        string  `json:"fork_gate"`
-	PrTrust         string  `json:"pr_trust"`
-	IconPath        *string `json:"icon_path"`
-	NotifyURL       *string `json:"notify_url"`
-	ArtifactQuotaMB *int64  `json:"artifact_quota_mb"`
+	SelfHeal            string  `json:"self_heal"`
+	ForkGate            string  `json:"fork_gate"`
+	PrTrust             string  `json:"pr_trust"`
+	IconPath            *string `json:"icon_path"`
+	NotifyURL           *string `json:"notify_url"`
+	ArtifactQuotaMB     *int64  `json:"artifact_quota_mb"`
+	MaxTransientRetries *string `json:"max_transient_retries"`
 }
 
 // orgSettingsRequest accepts either key. A self_heal-only body, which the
 // runners page sends, must keep working.
 type orgSettingsRequest struct {
-	SelfHeal        *string `json:"self_heal"`
-	PublicCI        *string `json:"public_ci"`
-	AutoUpdate      *string `json:"auto_update"`
-	RunnerAutostart *string `json:"runner_autostart"`
-	NotifyURL       *string `json:"notify_url"`
-	NotifySecret    *string `json:"notify_secret"`
-	NotifyEvents    *string `json:"notify_events"`
-	NotifyFormat    *string `json:"notify_format"`
-	DiskAlertPct    *string `json:"disk_alert_pct"`
+	SelfHeal            *string `json:"self_heal"`
+	PublicCI            *string `json:"public_ci"`
+	AutoUpdate          *string `json:"auto_update"`
+	RunnerAutostart     *string `json:"runner_autostart"`
+	NotifyURL           *string `json:"notify_url"`
+	NotifySecret        *string `json:"notify_secret"`
+	NotifyEvents        *string `json:"notify_events"`
+	NotifyFormat        *string `json:"notify_format"`
+	DiskAlertPct        *string `json:"disk_alert_pct"`
+	MaxTransientRetries *string `json:"max_transient_retries"`
 }
 
 var notifyConclusions = map[string]bool{
@@ -310,9 +313,14 @@ func validNotifyEvents(v string) bool {
 	return true
 }
 
-func orgSettingWrites(selfHeal, publicCI, autoUpdate, runnerAutostart, notifyURL, notifySecret, notifyEvents, notifyFormat, diskAlertPct *string) (map[string]string, string) {
-	if selfHeal == nil && publicCI == nil && autoUpdate == nil && runnerAutostart == nil && notifyURL == nil && notifySecret == nil && notifyEvents == nil && notifyFormat == nil && diskAlertPct == nil {
-		return nil, "self_heal, public_ci, auto_update, runner_autostart, notify_url, notify_secret, notify_events, notify_format or disk_alert_pct is required"
+func validMaxTransientRetries(v string) bool {
+	n, err := strconv.Atoi(v)
+	return err == nil && n >= 0 && n <= 10
+}
+
+func orgSettingWrites(selfHeal, publicCI, autoUpdate, runnerAutostart, notifyURL, notifySecret, notifyEvents, notifyFormat, diskAlertPct, maxTransientRetries *string) (map[string]string, string) {
+	if selfHeal == nil && publicCI == nil && autoUpdate == nil && runnerAutostart == nil && notifyURL == nil && notifySecret == nil && notifyEvents == nil && notifyFormat == nil && diskAlertPct == nil && maxTransientRetries == nil {
+		return nil, "self_heal, public_ci, auto_update, runner_autostart, notify_url, notify_secret, notify_events, notify_format, disk_alert_pct or max_transient_retries is required"
 	}
 	out := map[string]string{}
 	if selfHeal != nil {
@@ -369,6 +377,12 @@ func orgSettingWrites(selfHeal, publicCI, autoUpdate, runnerAutostart, notifyURL
 		}
 		out["disk_alert_pct"] = *diskAlertPct
 	}
+	if maxTransientRetries != nil {
+		if !validMaxTransientRetries(*maxTransientRetries) {
+			return nil, "max_transient_retries must be a number between 0 and 10"
+		}
+		out["max_transient_retries"] = *maxTransientRetries
+	}
 	return out, ""
 }
 
@@ -379,7 +393,7 @@ func (s *Server) putOrgSettings(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_body", "self_heal, public_ci or auto_update is required")
 		return
 	}
-	writes, msg := orgSettingWrites(req.SelfHeal, req.PublicCI, req.AutoUpdate, req.RunnerAutostart, req.NotifyURL, req.NotifySecret, req.NotifyEvents, req.NotifyFormat, req.DiskAlertPct)
+	writes, msg := orgSettingWrites(req.SelfHeal, req.PublicCI, req.AutoUpdate, req.RunnerAutostart, req.NotifyURL, req.NotifySecret, req.NotifyEvents, req.NotifyFormat, req.DiskAlertPct, req.MaxTransientRetries)
 	if msg != "" {
 		fail(c, http.StatusBadRequest, "invalid_body", msg)
 		return
@@ -419,14 +433,15 @@ func (s *Server) getProjectSettings(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"settings":          raw,
-		"self_heal":         settingsValue(raw, "self_heal", "inherit"),
-		"fork_gate":         settingsValue(raw, "fork_gate", "off"),
-		"pr_trust":          settingsValue(raw, "pr_trust", "off"),
-		"icon_path":         settingsValue(raw, "icon_path", ""),
-		"notify_url":        settingsValue(raw, "notify_url", ""),
-		"artifact_quota_mb": settingsValue(raw, "artifact_quota_mb", "0"),
-		"artifact_bytes":    s.projectArtifactBytes(c, p.ID),
+		"settings":              raw,
+		"self_heal":             settingsValue(raw, "self_heal", "inherit"),
+		"fork_gate":             settingsValue(raw, "fork_gate", "off"),
+		"pr_trust":              settingsValue(raw, "pr_trust", "off"),
+		"icon_path":             settingsValue(raw, "icon_path", ""),
+		"notify_url":            settingsValue(raw, "notify_url", ""),
+		"artifact_quota_mb":     settingsValue(raw, "artifact_quota_mb", "0"),
+		"artifact_bytes":        s.projectArtifactBytes(c, p.ID),
+		"max_transient_retries": settingsValue(raw, "max_transient_retries", "inherit"),
 	})
 }
 
@@ -493,8 +508,8 @@ func (s *Server) putProjectSettings(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_body", "invalid JSON body")
 		return
 	}
-	if req.SelfHeal == "" && req.ForkGate == "" && req.PrTrust == "" && req.IconPath == nil && req.NotifyURL == nil && req.ArtifactQuotaMB == nil {
-		fail(c, http.StatusBadRequest, "invalid_body", "self_heal, fork_gate, pr_trust, icon_path, notify_url or artifact_quota_mb is required")
+	if req.SelfHeal == "" && req.ForkGate == "" && req.PrTrust == "" && req.IconPath == nil && req.NotifyURL == nil && req.ArtifactQuotaMB == nil && req.MaxTransientRetries == nil {
+		fail(c, http.StatusBadRequest, "invalid_body", "self_heal, fork_gate, pr_trust, icon_path, notify_url, artifact_quota_mb or max_transient_retries is required")
 		return
 	}
 	writes := map[string]string{}
@@ -550,6 +565,17 @@ func (s *Server) putProjectSettings(c *gin.Context) {
 		}
 		writes["artifact_quota_mb"] = strconv.FormatInt(*req.ArtifactQuotaMB, 10)
 	}
+	if req.MaxTransientRetries != nil {
+		v := *req.MaxTransientRetries
+		if v != "inherit" && !validMaxTransientRetries(v) {
+			fail(c, http.StatusBadRequest, "invalid_body", "max_transient_retries must be a number between 0 and 10, or inherit")
+			return
+		}
+		if v == "inherit" {
+			v = "" // deleting the key falls back to the org setting
+		}
+		writes["max_transient_retries"] = v
+	}
 	for k, v := range writes {
 		if err := s.Store.PutProjectSetting(c.Request.Context(), p.ID, k, v); err != nil {
 			s.internalError(c, err)
@@ -567,6 +593,9 @@ func (s *Server) putProjectSettings(c *gin.Context) {
 	}
 	if _, ok := writes["pr_trust"]; ok {
 		resp["pr_trust"] = req.PrTrust
+	}
+	if _, ok := writes["max_transient_retries"]; ok {
+		resp["max_transient_retries"] = *req.MaxTransientRetries
 	}
 	c.JSON(http.StatusOK, resp)
 }

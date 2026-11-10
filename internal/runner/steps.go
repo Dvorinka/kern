@@ -69,7 +69,7 @@ func (e *executor) runStep(ctx context.Context, step StepSpec) (string, error) {
 		if stepErr != nil {
 			errText = stepErr.Error()
 		}
-		diag = diagnose(step, code, e.lastTail, errText)
+		diag = diagnose(step, code, e.lastTail, errText, valueOr(e.cfg.JobMemory, "1g"))
 		// self_heal=auto: apply the allow-listed fix and retry the step once.
 		if diag.Fixable && diag.Remediation != nil && e.claim.SelfHeal == "auto" {
 			e.logStep(step, "KERN: self-heal auto — applying fix: "+strings.Join(diag.Remediation.Fix, "; "))
@@ -146,7 +146,11 @@ func (e *executor) runStepUnit(ctx context.Context, step StepSpec) (string, int,
 	// Already-resolved values contain no ${{ and pass through untouched, so
 	// the self-heal retry path is idempotent.
 	if len(step.Env) > 0 {
+		e.stepEnvCtx = step.Env // literal values, for env: self-reference
 		step.Env = e.interpolateEnv(step.Env)
+		e.stepEnvCtx = step.Env // resolved values for the run body
+	} else {
+		e.stepEnvCtx = nil
 	}
 	outcome, code, stepErr := e.runStepBody(ctx, step)
 	if stepErr != nil {
@@ -476,6 +480,16 @@ func (e *executor) runnerContext() map[string]any {
 	// both as process env (envBuilder) and as the env expression context.
 	env := map[string]any{}
 	for k, v := range e.resolvedJobEnv(ctx) {
+		env[k] = v
+	}
+	// $GITHUB_ENV writes join the env context for later steps — on GitHub a
+	// var exported in step N resolves in step N+1's ${{ env.X }}.
+	for k, v := range e.enc.persisted() {
+		env[k] = v
+	}
+	// The step's own env: belongs to the env context on GitHub; populated
+	// by runStepUnit for the step in flight.
+	for k, v := range e.stepEnvCtx {
 		env[k] = v
 	}
 	ctx["env"] = env
@@ -813,6 +827,17 @@ func (b *envBuilder) persistKV(k, v string) {
 	b.mu.Lock()
 	b.persist[k] = v
 	b.mu.Unlock()
+}
+
+// persisted returns a copy of env values harvested from GITHUB_ENV writes.
+func (b *envBuilder) persisted() map[string]string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make(map[string]string, len(b.persist))
+	for k, v := range b.persist {
+		out[k] = v
+	}
+	return out
 }
 
 func (b *envBuilder) persistPaths(paths []string) {

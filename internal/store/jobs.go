@@ -297,6 +297,69 @@ func (s *Store) FinishJob(ctx context.Context, runnerID, jobID uuid.UUID, conclu
 	return true, nil
 }
 
+// JobFailureKinds returns the distinct diagnosis kinds of the job's failed
+// steps — the basis for transient-retry decisions. Empty when no step has a
+// recorded failure diagnosis (e.g. prepare-phase failures, #209).
+func (s *Store) JobFailureKinds(ctx context.Context, jobID uuid.UUID) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT diagnosis->>'kind' FROM steps
+		WHERE job_id = $1 AND status = 'completed' AND conclusion = 'failure'
+		  AND diagnosis IS NOT NULL`, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var kinds []string
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			return nil, err
+		}
+		kinds = append(kinds, k)
+	}
+	return kinds, rows.Err()
+}
+
+// RequeueJob puts an in-progress job back on the queue for another claim.
+// The caller decides eligibility (transient diagnosis, attempt budget);
+// attempt increments on the next claim, matching the lease-reaper.
+func (s *Store) RequeueJob(ctx context.Context, runnerID, jobID uuid.UUID, reason string) (bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+	tag, err := tx.Exec(ctx, `
+		UPDATE jobs SET status = 'queued', queued_at = now(), runner_id = NULL,
+			lease_expires_at = NULL, started_at = NULL, completed_at = NULL,
+			conclusion = '', error = $3
+		WHERE id = $1 AND runner_id = $2 AND status = 'in_progress'`,
+		jobID, runnerID, reason)
+	if err != nil {
+		return false, err
+	}
+	if tag.RowsAffected() == 0 {
+		return false, nil
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE job_leases SET released_at = now() WHERE job_id = $1 AND released_at IS NULL`, jobID); err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE steps SET status = 'queued', conclusion = '', started_at = NULL,
+			completed_at = NULL, exit_code = NULL
+		WHERE job_id = $1 AND status <> 'completed'`, jobID); err != nil {
+		return false, err
+	}
+	// A requeued job returns its deployment to queued, matching lease reaping.
+	if _, err := tx.Exec(ctx, `
+		UPDATE deployments SET status = 'queued', completed_at = NULL
+		WHERE job_id = $1 AND status IN ('queued', 'in_progress')`, jobID); err != nil {
+		return false, err
+	}
+	return true, tx.Commit(ctx)
+}
+
 // ReapExpiredLeases requeues jobs whose runner stopped reporting. Returns affected run IDs.
 func (s *Store) ReapExpiredLeases(ctx context.Context, maxAttempts int) ([]uuid.UUID, error) {
 	rows, err := s.pool.Query(ctx, `

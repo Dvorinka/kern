@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -596,6 +597,10 @@ func (s *Server) finishJob(c *gin.Context) {
 	}
 	// Job errors surface in the dashboard and status payloads; mask like logs.
 	req.Error = s.maskerForJob(c, job).Mask(req.Error)
+	if req.Conclusion == "failure" && s.maybeRequeueTransient(c, job, runner.ID, req.Error) {
+		c.JSON(http.StatusOK, gin.H{"ok": true, "requeued": true})
+		return
+	}
 	if len(req.Metrics) > 0 && !json.Valid(req.Metrics) {
 		req.Metrics = nil
 	}
@@ -618,6 +623,73 @@ func (s *Server) finishJob(c *gin.Context) {
 		s.Log.Error("advance after job finish", zap.Error(err))
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// transientRetryKinds are diagnosis classes that flake on infrastructure
+// rather than code — a registry 429, a reset connection, a cgroup OOM.
+// script_failure-class results are deterministic; retrying them only
+// doubles the bill.
+var transientRetryKinds = map[string]bool{"network": true, "oom": true}
+
+// maybeRequeueTransient puts a failed job back on the queue when every
+// failed step carries a transient diagnosis and the project's
+// max_transient_retries budget is not spent. Prepare-phase failures record
+// no step diagnosis (#209), so the runner-reported job error is scanned
+// with the same transient signatures as a fallback.
+func (s *Server) maybeRequeueTransient(c *gin.Context, job store.Job, runnerID uuid.UUID, jobErr string) bool {
+	limit, err := s.Store.TransientRetryLimit(c.Request.Context(), job.RunID)
+	if err != nil || limit <= 0 || job.Attempt >= 1+limit {
+		return false
+	}
+	kinds, err := s.Store.JobFailureKinds(c.Request.Context(), job.ID)
+	if err != nil {
+		return false
+	}
+	if len(kinds) == 0 {
+		if !looksTransientError(jobErr) {
+			return false
+		}
+	} else {
+		for _, k := range kinds {
+			if !transientRetryKinds[k] {
+				return false
+			}
+		}
+	}
+	reason := "transient failure (" + strings.Join(kinds, ",") + "): auto-requeued"
+	if len(kinds) == 0 {
+		reason = "transient failure: auto-requeued"
+	}
+	ok, err := s.Store.RequeueJob(c.Request.Context(), runnerID, job.ID, reason)
+	if err != nil {
+		s.Log.Warn("transient requeue failed", zap.String("job", job.ID.String()), zap.Error(err))
+		return false
+	}
+	if ok {
+		s.Log.Info("job requeued after transient failure",
+			zap.String("job", job.ID.String()), zap.Strings("kinds", kinds),
+			zap.Int("attempt", job.Attempt))
+		_ = s.Store.FailExecsForJob(c.Request.Context(), job.ID, "job requeued")
+	}
+	return ok
+}
+
+// looksTransientError matches the transient network signatures a
+// prepare-phase failure leaves in the job error instead of a step
+// diagnosis — image-pull timeouts, registry 429s, disk pressure.
+func looksTransientError(msg string) bool {
+	m := strings.ToLower(msg)
+	for _, sig := range []string{
+		"i/o timeout", "tls handshake timeout", "connection reset",
+		"too many requests", "status code 429", "status code 502",
+		"status code 503", "status code 504", "temporary failure",
+		"network is unreachable", "econnreset", "no space left on device",
+	} {
+		if strings.Contains(m, sig) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) cancelCheck(c *gin.Context) {

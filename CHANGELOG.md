@@ -6,12 +6,42 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 ## [Unreleased]
 
 ### Added
+- Fleet Maven Central mirror: the runner seeds
+  `<work-root>/_cache/gradle/init.d/kern-mirror.init.gradle` and sets
+  `GRADLE_USER_HOME` to the shared cache, so every job image resolves
+  dependencies through the Google pull-through mirror first (declared
+  repositories kept as fallback; `FAIL_ON_PROJECT_REPOS` projects get the
+  mirror via `dependencyResolutionManagement` only). `KERN_MAVEN_MIRROR`
+  overrides the URL — a LAN pull-through cache slots in with no code change.
+  Side effect: Gradle dependencies/wrappers/build-cache persist across jobs.
+- Transient-failure auto-retry: a failed job whose failed steps are all
+  `network`/`oom` class (or whose prepare-phase error matches the same
+  transient signatures) is requeued automatically, bounded by the new
+  `max_transient_retries` org/project setting (default 1, 0 disables,
+  `inherit` at project level). Script/test/lint failures never retry.
+- Diagnosis taxonomy: Gradle daemon disappearance,
+  `DaemonDisappearedException`, `OutOfMemoryError`, and `signal: killed`
+  classify as `oom` with the job's `KERN_JOB_MEMORY` ceiling in the message;
+  registry 429/5xx, connection resets and socket timeouts classify as
+  `network` instead of `script_failure`.
+
 - Per-workflow disable switch: `PATCH /projects/:project/workflows/:id`
   `{disabled}` (project page gets Disable/Enable buttons) gates every run
   path — webhook deliveries report the workflow as skipped, schedules stop
   minting, dispatch and rerun refuse. Sync preserves the flag, so a disable
   survives re-syncs; useful for keeping GitHub-Actions-owned pipelines
   (e.g. `release.yml`) from double-firing on KERN.
+
+### Fixed
+- `$GITHUB_ENV` parity: values a step appends to `GITHUB_ENV` now join the
+  `env` expression context, so `${{ env.X }}` in a later step's `env:` or
+  `run:` resolves the exported value like GitHub does. A step's own `env:`
+  map is also part of the context for its expressions and run body.
+- Disk reclaim under load: `maybePruneDisk` ran nothing while jobs were
+  active, so pressure only ever grew during builds. Docker prunes
+  (stopped containers, dangling images, unused networks, build cache) now
+  run under load — running resources count as in-use and are skipped —
+  while ledger-image/workspace/cache sweeps stay idle-gated.
 
 ## [0.7.8] - 2026-11-09
 
