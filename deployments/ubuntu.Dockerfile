@@ -1,7 +1,7 @@
-# KERN base job image — ubuntu:24.04 with the baseline toolset GitHub-hosted
+# KERN base job image — ubuntu:26.04 with the baseline toolset GitHub-hosted
 # runners ship. Workflows written for `runs-on: ubuntu-latest` assume curl,
 # make, gcc, jq, sudo and friends exist without a setup step; a bare
-# ubuntu:24.04 fails them with `command not found`.
+# ubuntu:26.04 fails them with `command not found`.
 #
 # Deliberately NOT included: language toolchains (Go, Node, Rust, Android SDK).
 # Those are installed by setup-* actions, which keep working and stay pinned by
@@ -39,7 +39,7 @@ RUN mkdir -p /etc/apt/keyrings \
 # git-lfs needs its smudge filter registered for checkouts that use it.
 RUN git lfs install --system || true
 
-# Playwright's Ubuntu 24.04 dependency set (tools + chromium + firefox +
+# Playwright's Ubuntu 26.04 dependency set (tools + chromium + firefox +
 # webkit, from playwright's nativeDeps for noble) so `npx playwright install
 # --with-deps` and `install-deps` are no-ops instead of per-job apt installs.
 # Trusted lanes run as root and could apt these; untrusted lanes cannot
