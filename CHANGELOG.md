@@ -3,7 +3,7 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
-## [Unreleased]
+## [0.8.1] - 2026-11-10
 
 ### Added
 - `jobs.<id>.resources` workflow key (KERN extension): `{memory, cpus,
