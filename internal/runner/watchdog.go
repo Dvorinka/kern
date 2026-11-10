@@ -113,16 +113,16 @@ func (e *executor) watchSilence(ctx context.Context, step StepSpec, pump *logPum
 		}
 		if !dumped {
 			dumped = true
-			pump.write([]byte(fmt.Sprintf(
+			pump.writeQuiet([]byte(fmt.Sprintf(
 				"KERN: no output for %s — dumping process state (kill at %s silence)\n",
 				silent.Round(time.Second), (2 * limit).Round(time.Second))))
 			if ps := e.procDump(ctx); ps != "" {
-				pump.write([]byte("KERN: process dump:\n" + ps))
+				pump.writeQuiet([]byte("KERN: process dump:\n" + ps))
 			}
 			continue
 		}
 		if silent >= 2*limit {
-			pump.write([]byte(fmt.Sprintf(
+			pump.writeQuiet([]byte(fmt.Sprintf(
 				"KERN: no output for %s — killing step as hung\n", silent.Round(time.Second))))
 			e.hangDetected.Store(true)
 			e.mu.Lock()

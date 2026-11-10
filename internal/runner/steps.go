@@ -750,6 +750,17 @@ func newLogPump(c *client, jobID string, step int, mask *secrets.Masker, anns *a
 // per-run tokens are masked here before they can reach the wire.
 func (p *logPump) write(line []byte) {
 	p.lastWrite.Store(time.Now().UnixNano())
+	p.append(line)
+}
+
+// writeQuiet buffers runner-generated lines without touching lastWrite —
+// the silence watchdog's own messages must not reset the hang timer they
+// measure, or the kill point slides out by a whole interval per dump.
+func (p *logPump) writeQuiet(line []byte) {
+	p.append(line)
+}
+
+func (p *logPump) append(line []byte) {
 	if p.mask != nil {
 		line = p.mask.MaskBytes(line)
 	}
