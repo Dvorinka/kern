@@ -35,7 +35,7 @@ Projects:
   migrate <owner/name|github-url>        import workflows into a new/existing project
 
 Runs:
-  runs list [--status S] [--limit N] [--ref R|BRANCH] [--pr N] [--workflow W]
+  runs list [--status S] [--limit N] [--ref R|BRANCH] [--pr N] [--workflow W] [--classification C]
   runs show <run-id>
   runs trigger [<project>] <workflow-id|path|name> [--event E] [--ref R] [--sha S] [--inputs JSON]
   runs cancel|approve|rerun <run-id>

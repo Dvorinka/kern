@@ -262,6 +262,9 @@ type RunFilter struct {
 	PR string
 	// Workflow matches the workflow name or path (.github/workflows/ci.yml).
 	Workflow string
+	// Classification matches runs whose first classified job carries this
+	// failure class (disk_full, oom, network, hang, ...).
+	Classification string
 	// Since/Until bound created_at — the chart's day drill-down.
 	Since, Until time.Time
 	Limit        int
@@ -286,9 +289,11 @@ func (s *Store) Runs(ctx context.Context, f RunFilter) ([]Run, int, error) {
 		  AND ($9 = '' OR w.name = $9 OR w.path = $9 OR w.path LIKE '%/' || $9)
 		  AND ($10::timestamptz IS NULL OR r.created_at >= $10)
 		  AND ($11::timestamptz IS NULL OR r.created_at < $11)
+		  AND ($12 = '' OR EXISTS (
+		    SELECT 1 FROM jobs jc WHERE jc.run_id = r.id AND jc.classification = $12))
 		ORDER BY r.created_at DESC
 		LIMIT $5 OFFSET $6`, f.ProjectID, statuses, f.Conclusion, f.IncludeCleared, limit, offset,
-		f.Ref, f.PR, f.Workflow, nilTime(f.Since), nilTime(f.Until))
+		f.Ref, f.PR, f.Workflow, nilTime(f.Since), nilTime(f.Until), f.Classification)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -309,9 +314,11 @@ func (s *Store) Runs(ctx context.Context, f RunFilter) ([]Run, int, error) {
 		  AND ($3 = '' OR r.conclusion = $3)
 		  AND ($4::bool OR r.cleared_at IS NULL)
 		  AND ($5::timestamptz IS NULL OR r.created_at >= $5)
-		  AND ($6::timestamptz IS NULL OR r.created_at < $6)`,
+		  AND ($6::timestamptz IS NULL OR r.created_at < $6)
+		  AND ($7 = '' OR EXISTS (
+		    SELECT 1 FROM jobs jc WHERE jc.run_id = r.id AND jc.classification = $7))`,
 		f.ProjectID, statuses, f.Conclusion, f.IncludeCleared,
-		nilTime(f.Since), nilTime(f.Until)).Scan(&total); err != nil {
+		nilTime(f.Since), nilTime(f.Until), f.Classification).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	return out, total, rows.Err()
