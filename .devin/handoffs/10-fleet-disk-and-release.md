@@ -23,49 +23,44 @@ editing memory; commit + push after.
   - Android APK + AAB build green.
   - All publish steps failed ONLY on `gh release view` → "release not found"
     because the GitHub release was never created (each waits ~30min then dies).
-- CURRENT BLOCKER: server job, last goreleaser action:
-  `POST /repos/Dvorinka/Cloudreve/releases → 403 Resource not accessible
-  by integration` (after 34m50s). Images pushed fine — it's the SCM release.
-- jobs.permissions row for every job in this run IS correct:
-  `{"contents": "write", "packages": "write"}` — so the workflow ceiling
-  reached the claim payload.
-- PROBE RESULTS (2026-11-10, decisive): minted an installation token
-  locally via the kern-ci app (id 5607782, key at
-  `deployments-api-1:/run/kern-app.pem` on CT908) with the EXACT
-  permissions KERN would send — `{repositories:["cloudreve"],
-  permissions:{contents:write, packages:read}}` — and POST
-  /repos/Dvorinka/cloudreve/releases SUCCEEDED (draft created, deleted).
-  Live installation perms: contents:write, packages:read (+checks,
-  statuses, PRs, deployments, issues RW; environments/actions/etc R).
-  NOTE: user granted "Packages: read and write" but the installation
-  still reports `packages: read` — either the grant wasn't saved or
-  it's still pending approval. GHCR_TOKEN covers the push anyway.
-  Zero "github token mint failed" warns in api logs over 6h.
-  ⇒ A correctly-minted token works. The 403 means the goreleaser step
-  either got a DIFFERENT/empty credential, or the DEPLOYED api image
-  (`kern-api:local`, started 2026-11-09T22:51Z) mints differently than
-  current source (RunToken is correct in HEAD). Remaining checks:
-  a) Instrument: log effective perms at claim (never the token) and/or
-     dump `claim.Run.GitHubToken != ""` per claim; rebuild api:local,
-     redeploy, re-claim.
-  b) In the job, `secrets.GITHUB_TOKEN` → secretMap["GITHUB_TOKEN"] =
-     claim.Run.GitHubToken → env file → step.Env override. The chain
-     looks sound in HEAD; verify the deployed binary actually does it
-     (source vs image drift — image is `kern-api:local`, hand-built).
-  c) Workaround if unfixable fast: classic PAT with `repo` scope as a
-     project secret, `env: GITHUB_TOKEN: ${{ secrets.X }}` on the
-     goreleaser step. Check scopes first — GHCR_TOKEN may lack `repo`.
-- A server-job rerun was triggered ~09:55Z 2026-11-10 to confirm the
-  403 reproduces; check it first before debugging further.
+- RESOLVED (2026-11-10 ~14:20Z): the release is COMPLETE — 25 assets on
+  https://github.com/Dvorinka/cloudreve/releases/tag/v4.23.8
+  (12 server archives + checksums + APK/AAB + desktop bundles w/ .sig +
+  latest.json) and GHCR images `v4.23.8-*`/`:slim` pushed. All KERN lanes
+  green; only the `server` job shows failed — cosmetic (see below).
+- ROOT CAUSE of the 403 — **NOT a mint problem**: GitHub's releases API
+  returns `403 Resource not accessible by integration` for APP tokens
+  (both installation tokens AND PAT-app tokens) whenever
+  `target_commitish` is a commit SHA. Probed exhaustively on CT908 with
+  the kern-ci app key:
+  - POST /releases without target_commitish → succeeds
+  - POST /releases with target_commitish=<SHA> → 403
+  - goreleaser also PATCHes the release with target_commitish → 403 even
+    on an existing release (observed on rerun: PATCH /releases/440261077).
+  `.goreleaser.yaml` had `release.target_commitish: "{{ .Commit }}"` —
+  fixed on master @ `55f45f8c` (now `{{ .Tag }}`; tag exists before
+  goreleaser runs so behavior is identical, and the prepare-job +
+  existing-release path also avoids the create call).
+- HOW IT WAS FINISHED (manual path, in case it recurs): built artifacts
+  by running goreleaser manually on CT903 host with toolcache
+  go/node/yarn + minted token — `goreleaser release --clean
+  --parallelism 4 --skip=docker` (images already pushed). It also 403'd
+  at release-create → root cause found → created the release via
+  installation-token POST (no commitish) + `GH_TOKEN=<tok> gh release
+  upload` of dist/*. Then `POST /runs/…/rerun {"failed":true}` — all
+  publish lanes went green instantly on `gh release view`.
+- SECOND BLOCKER seen en route: rerun OOM'd (`compile: signal: killed`)
+  — job containers are cgroup-capped at `KERN_JOB_MEMORY=6GiB`
+  (executor HostConfig.Memory) and goreleaser defaults
+  `--parallelism` to CPU count → 12 concurrent `go build`s. The
+  `--parallelism 4` flag exists and works; consider adding it to the
+  workflow's goreleaser args or raising the ceiling for heavy builds.
 
-- After the 403 is fixed: rerun ONLY `server`
-  (`POST /api/v1/runs/835f4f90…/rerun {"jobs":["server"]}` — the internal
-  `rerunSeed` pulls in dependents only via `needs`, and updater-manifest
-  needs the desktop legs, so it stays out). Server creates the release,
-  then `POST …/rerun {"failed": true}` — publish steps then find the
-  release instantly and upload; `updater-manifest` was `skipped` and
-  re-queues as a dependent of the desktop legs (needs-propagation).
-  All publish steps poll `gh release view` 90×20s = 30min.
+- NOTE: cloudreve master has since moved — another agent pushed
+  ee5983da (prepare job creates the release up front + docker disk
+  reclaim around goreleaser; version bumped to 4.23.12) and I pushed
+  55f45f8c (target_commitish fix). The v4.23.8 tag stays at 5486af3d —
+  releases for v4.23.9+ get the new machinery; do NOT move the tag.
 - API base: use `https://kern.tdvorak.dev` — `10.0.0.240:8080` is flaky
   from this host (VPN-dependent). Job-status polling:
   `ssh nab9 "pct exec 908 -- docker exec deployments-postgres-1 psql -U kern
