@@ -95,6 +95,17 @@ type Config struct {
 	// evicted until it fits (KERN_RUNNER_CACHE_MAX_BYTES, default 8 GiB).
 	// Zero disables the bound; eviction never runs while a job is active.
 	CacheMaxBytes int64
+	// JobDiskBytes is the runner-wide ceiling on a job's work-root usage
+	// (KERN_JOB_DISK, e.g. "20g"). Breaching it aborts the job early with a
+	// disk_quota diagnosis instead of letting it die on ENOSPC mid-write.
+	// Zero means unbounded.
+	JobDiskBytes int64
+	// StepSilenceSeconds is the no-output watchdog interval
+	// (KERN_STEP_SILENCE_TIMEOUT, default 600). After this many seconds
+	// without step output the runner dumps process state into the log; at
+	// twice the interval it kills the step, classifying the failure as a
+	// hang rather than a wall-clock timeout. Zero disables the watchdog.
+	StepSilenceSeconds int
 }
 
 type Agent struct {

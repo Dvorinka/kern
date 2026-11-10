@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -69,7 +70,21 @@ func (e *executor) runStep(ctx context.Context, step StepSpec) (string, error) {
 		if stepErr != nil {
 			errText = stepErr.Error()
 		}
-		diag = diagnose(step, code, e.lastTail, errText, valueOr(e.cfg.JobMemory, "1g"))
+		diag = diagnose(step, code, e.lastTail, errText, e.jobMemoryLimit())
+		// Watchdog kills outrank the log-based rules: a hung or quota-breaching
+		// step's tail is whatever noise preceded the kill.
+		switch {
+		case e.diskQuotaExceeded.Load():
+			diag = &diagnosis{Kind: "disk_quota",
+				Summary:     "Job exceeded its work-root disk budget (KERN_JOB_DISK)",
+				Suggestion:  "raise KERN_JOB_DISK on the job or runner, or reduce workspace growth",
+				AgentPrompt: "A CI job was aborted for exceeding its disk budget. Trim workspace growth (build outputs, caches, downloaded artifacts) or raise the KERN_JOB_DISK budget."}
+		case e.hangDetected.Load():
+			diag = &diagnosis{Kind: "hang",
+				Summary:     "Step produced no output past the silence watchdog and was killed",
+				Suggestion:  "inspect the process dump above; split the step, add progress output, or raise KERN_STEP_SILENCE_TIMEOUT",
+				AgentPrompt: "A CI step hung (no output) and was killed by the watchdog. Diagnose from the process dump in the log."}
+		}
 		// self_heal=auto: apply the allow-listed fix and retry the step once.
 		if diag.Fixable && diag.Remediation != nil && e.claim.SelfHeal == "auto" {
 			e.logStep(step, "KERN: self-heal auto — applying fix: "+strings.Join(diag.Remediation.Fix, "; "))
@@ -206,6 +221,7 @@ func (e *executor) runStepBody(ctx context.Context, step StepSpec) (string, int,
 
 	pump := newLogPump(e.c, e.jobID, step.Number, e.logMask, &e.ann)
 	defer pump.close()
+	go e.watchSilence(stepCtx, step, pump)
 	if hdr := runStepHeader(step); hdr != "" {
 		pump.write([]byte(hdr))
 	}
@@ -701,6 +717,9 @@ type logPump struct {
 	tail   []byte // last bytes seen, for failure diagnosis
 	stop   chan struct{}
 	closed sync.WaitGroup
+	// lastWrite is the unix-nano timestamp of the most recent chunk; the
+	// silence watchdog reads it to tell a live-but-quiet step from a hang.
+	lastWrite atomic.Int64
 }
 
 const (
@@ -730,6 +749,7 @@ func newLogPump(c *client, jobID string, step int, mask *secrets.Masker, anns *a
 // write buffers a chunk (a full line); stored secrets are masked server-side,
 // per-run tokens are masked here before they can reach the wire.
 func (p *logPump) write(line []byte) {
+	p.lastWrite.Store(time.Now().UnixNano())
 	if p.mask != nil {
 		line = p.mask.MaskBytes(line)
 	}
