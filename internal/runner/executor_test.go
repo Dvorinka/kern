@@ -362,7 +362,7 @@ func TestRunnerContextPersistedEnv(t *testing.T) {
 
 // Release run 92c54930 wrote NOTHING_MODES_KEYSTORE to $GITHUB_ENV in the
 // Decode step; the next step's `env:` evaluated ${{ env.X }} as empty and
-// failed "Cannot convert '' to File". Cover the whole chain: file write →
+// failed "Cannot convert ” to File". Cover the whole chain: file write →
 // harvestEnv → per-step env: interpolation → env-file render.
 func TestGithubEnvParityPerStep(t *testing.T) {
 	cfg := Config{WorkRoot: t.TempDir()}
@@ -549,5 +549,36 @@ func TestEnvAuditLine(t *testing.T) {
 	}
 	if !strings.HasPrefix(line, "KERN: env: ") {
 		t.Errorf("bad prefix: %q", line)
+	}
+}
+
+// jobEnv PATH must lead with the provisioned node bin dir but keep the
+// image's own PATH tail — docker -e replaces PATH wholesale, and a fixed
+// base list once dropped golang:'s /usr/local/go/bin (#283 regression).
+// On the host executor PATH stays untouched: steps inherit os.Environ.
+func TestJobEnvPathComposition(t *testing.T) {
+	cfg := Config{WorkRoot: t.TempDir()}
+	claim := &Claim{}
+	claim.Job.Image = "golang:1.27"
+	claim.Job.ID = "test-job-path"
+	e, err := newJobExecutor(cfg, &client{}, claim, nil, nil, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeBin := e.nodeBinDir("node20")
+	imgPath := "/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	base := "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+	e.imagePath = imgPath
+	if got := e.jobEnv()["PATH"]; got != nodeBin+":"+imgPath {
+		t.Fatalf("PATH = %q, want node bin + image PATH", got)
+	}
+	e.imagePath = ""
+	if got := e.jobEnv()["PATH"]; got != nodeBin+":"+base {
+		t.Fatalf("PATH = %q, want node bin + base fallback", got)
+	}
+	e.host = true
+	if got, ok := e.jobEnv()["PATH"]; ok {
+		t.Fatalf("host executor must not override PATH, got %q", got)
 	}
 }
