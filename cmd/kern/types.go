@@ -125,6 +125,7 @@ type runnerRow struct {
 	DiskFreeBytes   *int64     `json:"disk_free_bytes"`
 	MetricsAt       *time.Time `json:"metrics_at"`
 	ActiveJobs      int        `json:"active_jobs"`
+	ClaimsPaused    string     `json:"claims_paused"`
 }
 
 type artifact struct {

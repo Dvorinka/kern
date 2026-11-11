@@ -161,6 +161,10 @@ func (c *cli) doctorFleet(ctx context.Context, add func(string, string, string))
 				d += " (last heartbeat " + rel(r.LastHeartbeatAt) + ")"
 			}
 			add("runner "+r.Name, "warn", d)
+			continue
+		}
+		if r.ClaimsPaused != "" {
+			add("runner "+r.Name, "warn", "claims paused: "+r.ClaimsPaused)
 		}
 	}
 }

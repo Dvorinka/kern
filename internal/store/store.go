@@ -262,6 +262,10 @@ type Runner struct {
 	// WakeOnDemand marks the runner's host as safe for an external scaler
 	// (deployments/vm-scaler.sh) to power on for queued work. Advisory only.
 	WakeOnDemand    bool       `json:"wake_on_demand"`
+	// ClaimsPaused carries the runner's live claim-gate reasons
+	// (disk,memory,overload; '' = claiming normally), reported on each
+	// heartbeat so a gated runner stops reading as merely idle.
+	ClaimsPaused    string     `json:"claims_paused"`
 	Ephemeral       bool       `json:"ephemeral"`
 	LastHeartbeatAt *time.Time `json:"last_heartbeat_at"`
 	CPUPercent      *float64   `json:"cpu_percent"`
@@ -299,6 +303,9 @@ type HostMetrics struct {
 	DiskFreeBytes *int64   `json:"disk_free_bytes"`
 	DiskBytes     *int64   `json:"disk_bytes"`
 	Version       string   `json:"version"`
+	// ClaimsPaused is the runner's live claim-gate state: '' while claiming,
+	// comma-joined engaged gates (disk,memory,overload) otherwise.
+	ClaimsPaused string `json:"claims_paused"`
 }
 
 type Secret struct {

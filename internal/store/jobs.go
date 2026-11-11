@@ -200,9 +200,10 @@ func (s *Store) Heartbeat(ctx context.Context, runnerID uuid.UUID, m HostMetrics
 			status = CASE WHEN draining THEN 'draining' ELSE 'online' END,
 			cpu_percent = $2, mem_used_bytes = $3, disk_free_bytes = $4, metrics_at = now(),
 			version = COALESCE(NULLIF($5, ''), version),
-			disk_bytes = COALESCE($6, disk_bytes)
+			disk_bytes = COALESCE($6, disk_bytes),
+			claims_paused = $7
 		WHERE id = $1`, runnerID, m.CPUPercent, m.MemUsedBytes, m.DiskFreeBytes,
-		m.Version, m.DiskBytes)
+		m.Version, m.DiskBytes, m.ClaimsPaused)
 	return err
 }
 
@@ -629,17 +630,30 @@ type UnmatchedJob struct {
 	JobID  uuid.UUID `json:"job_id"`
 	RunID  uuid.UUID `json:"run_id"`
 	RunsOn []string  `json:"runs_on"`
+	// PausedMatches counts runners matching the job's labels and trust tier
+	// whose claim gate is engaged — the job waits on pressure, not absence.
+	PausedMatches int `json:"paused_matches"`
 }
 
 // UnmatchedQueuedJobs lists queued jobs that would starve silently: the
 // label subset check from ClaimJob finds no online, non-draining runner in
 // the job's org whose labels cover runs_on (plus the implicit
-// self-hosted/kern pair), or the only matches are host executors the run's
-// trust tier forbids. Capacity is deliberately not part of the predicate —
-// a job matching a busy runner is queueing, not starvation.
+// self-hosted/kern pair) and whose claim gates are open, or the only
+// matches are host executors the run's trust tier forbids. Capacity is
+// deliberately not part of the predicate — a job matching a busy runner is
+// queueing, not starvation. PausedMatches counts runners that DO match on
+// labels but sit behind an engaged claim gate, so callers can phrase the
+// reason honestly ("paused" vs "no runner").
 func (s *Store) UnmatchedQueuedJobs(ctx context.Context) ([]UnmatchedJob, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT j.id, j.run_id, j.runs_on
+		SELECT j.id, j.run_id, j.runs_on,
+			(SELECT count(*) FROM runners rn
+			 WHERE rn.org_id = p.org_id
+			   AND rn.status = 'online'
+			   AND NOT rn.draining
+			   AND j.runs_on <@ (rn.labels || ARRAY['self-hosted', 'kern'])
+			   AND (rn.executor <> 'host' OR r.trust_level NOT IN ('fork', 'pull_request'))
+			   AND rn.claims_paused <> '') AS paused_matches
 		FROM jobs j
 		JOIN workflow_runs r ON r.id = j.run_id
 		JOIN projects p ON p.id = r.project_id
@@ -652,6 +666,7 @@ func (s *Store) UnmatchedQueuedJobs(ctx context.Context) ([]UnmatchedJob, error)
 			  AND NOT rn.draining
 			  AND j.runs_on <@ (rn.labels || ARRAY['self-hosted', 'kern'])
 			  AND (rn.executor <> 'host' OR r.trust_level NOT IN ('fork', 'pull_request'))
+			  AND rn.claims_paused = ''
 		  )
 		ORDER BY j.queued_at`)
 	if err != nil {
@@ -661,7 +676,7 @@ func (s *Store) UnmatchedQueuedJobs(ctx context.Context) ([]UnmatchedJob, error)
 	var out []UnmatchedJob
 	for rows.Next() {
 		var u UnmatchedJob
-		if err := rows.Scan(&u.JobID, &u.RunID, &u.RunsOn); err != nil {
+		if err := rows.Scan(&u.JobID, &u.RunID, &u.RunsOn, &u.PausedMatches); err != nil {
 			return nil, err
 		}
 		out = append(out, u)

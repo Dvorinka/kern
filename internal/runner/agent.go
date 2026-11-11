@@ -347,6 +347,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 			sample := a.sampler.sample(a.cfg.WorkRoot, int(a.active.Load()))
 			sample.SelfUpdate = a.cfg.SelfUpdate
 			sample.Deregister = a.retire.Load()
+			sample.ClaimsPaused = a.claimsPaused()
 			resp, err := a.c.heartbeat(hctx, sample)
 			cancel()
 			if err != nil {
@@ -501,6 +502,24 @@ func (a *Agent) ephemeralLoop(ctx context.Context) {
 		a.retire.Store(true)
 		a.log.Info("ephemeral idle timeout; requesting deregistration", zap.Duration("idle", idle))
 	}
+}
+
+// claimsPaused renders the engaged claim gates as a comma-joined reason for
+// the heartbeat, in the same order the worker loop consults them. The
+// disk/memory latches are written by the gate probes themselves so the
+// heartbeat reports the last decision, not a fresh probe.
+func (a *Agent) claimsPaused() string {
+	var gates []string
+	if a.overLoaded() {
+		gates = append(gates, "overload")
+	}
+	if a.diskPaused.Load() {
+		gates = append(gates, "disk")
+	}
+	if a.memPaused.Load() {
+		gates = append(gates, "memory")
+	}
+	return strings.Join(gates, ",")
 }
 
 // diskSpaceFn stubs the filesystem probe in tests.

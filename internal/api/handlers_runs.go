@@ -171,15 +171,19 @@ func (s *Server) getRun(c *gin.Context) {
 	}
 	// Advisory only: a diagnostic failure must not take the run page down.
 	if unmatched, err := s.Store.UnmatchedQueuedJobs(c.Request.Context()); err == nil {
-		starved := make(map[uuid.UUID]bool, len(unmatched))
+		starved := make(map[uuid.UUID]int, len(unmatched))
 		for _, u := range unmatched {
 			if u.RunID == run.ID {
-				starved[u.JobID] = true
+				starved[u.JobID] = u.PausedMatches
 			}
 		}
 		for i := range jobs {
-			if starved[jobs[i].ID] {
-				jobs[i].QueueReason = "no online runner matches runs-on labels"
+			if paused, ok := starved[jobs[i].ID]; ok {
+				if paused > 0 {
+					jobs[i].QueueReason = "matching runner(s) paused by claim gate (disk/memory/overload)"
+				} else {
+					jobs[i].QueueReason = "no online runner matches runs-on labels"
+				}
 			}
 		}
 	}
