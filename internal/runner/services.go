@@ -260,8 +260,9 @@ func isPortBindErr(err error) bool {
 // startService attempt may have left behind.
 func (e *executor) removeServiceContainers(ctx context.Context, svc ClaimService) {
 	prefix := e.serviceContainerName(svc)
+	// -q alone: bare IDs are all we need; --format would be ignored anyway.
 	out, err := exec.CommandContext(ctx, "docker", "ps", "-aq",
-		"--filter", "name="+prefix, "--format", "{{.ID}}").Output()
+		"--filter", "name="+prefix).Output()
 	if err != nil {
 		return
 	}

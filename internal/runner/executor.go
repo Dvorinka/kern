@@ -1129,7 +1129,8 @@ func (e *executor) cleanup() {
 
 // containerIDs snapshots every container ID the daemon knows about.
 func containerIDs(ctx context.Context) map[string]bool {
-	out, err := exec.CommandContext(ctx, "docker", "ps", "-aq", "--format", "{{.ID}}").Output()
+	// -q alone: --format would be ignored alongside it.
+	out, err := exec.CommandContext(ctx, "docker", "ps", "-aq").Output()
 	if err != nil {
 		return nil
 	}
@@ -1153,7 +1154,9 @@ func (e *executor) reapOrphanContainers(ctx context.Context) {
 	if e.preJobContainers == nil {
 		return
 	}
-	out, err := exec.CommandContext(ctx, "docker", "ps", "-aq", "--format", "{{.ID}}|{{.Names}}").Output()
+	// No -q: docker ignores --format when --quiet is set and prints bare
+	// IDs, which carry no name — orphanedContainers would see no rows.
+	out, err := exec.CommandContext(ctx, "docker", "ps", "-a", "--format", "{{.ID}}|{{.Names}}").Output()
 	if err != nil {
 		return
 	}
