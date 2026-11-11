@@ -427,7 +427,7 @@ func (e *executor) prepareHost(ctx context.Context) error {
 			}
 			for _, svc := range e.claim.Job.Services {
 				if len(svc.Ports) == 0 {
-					svcNote = "service '" + svc.Name + "' has no ports: — DNS-only between services; declare ports: for loopback access"
+					svcNote = "service '" + svc.Name + "' has no ports — DNS-only between services; declare ports: for loopback access"
 					break
 				}
 			}
