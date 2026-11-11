@@ -237,6 +237,9 @@ export interface Runner {
   active_jobs?: number;
   // Live claim-gate reasons (disk,memory,overload); '' = claiming normally.
   claims_paused?: string;
+  // Fork-tier proxy traffic this runner carried in the last 24h, summed
+  // from jobs.metrics — untrusted egress only.
+  egress_24h_bytes?: number;
 }
 
 export interface FleetMapPin {

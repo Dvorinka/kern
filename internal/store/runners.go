@@ -125,6 +125,35 @@ func (s *Store) FleetSlots(ctx context.Context, orgID uuid.UUID, runsOn []string
 	return n, err
 }
 
+// RunnerEgress24h totals the fork-tier proxy traffic each runner proxied in
+// the last 24 hours, summed from jobs.metrics. Trusted jobs have no proxy —
+// this measures untrusted egress only.
+func (s *Store) RunnerEgress24h(ctx context.Context, orgID uuid.UUID) (map[uuid.UUID]int64, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT j.runner_id, COALESCE(SUM((j.metrics->>'egress_bytes')::bigint), 0)
+		FROM jobs j
+		JOIN workflow_runs r ON r.id = j.run_id
+		JOIN projects p ON p.id = r.project_id
+		WHERE p.org_id = $1 AND j.runner_id IS NOT NULL
+		  AND j.completed_at > now() - interval '24 hours'
+		  AND j.metrics ? 'egress_bytes'
+		GROUP BY j.runner_id`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[uuid.UUID]int64{}
+	for rows.Next() {
+		var id uuid.UUID
+		var n int64
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		out[id] = n
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) Runners(ctx context.Context, orgID uuid.UUID) ([]Runner, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+runnerCols+` FROM runners WHERE org_id = $1 ORDER BY created_at DESC`, orgID)
