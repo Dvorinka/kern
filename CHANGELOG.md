@@ -3,6 +3,60 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
+## [0.9.0] - 2026-11-11
+
+### Added
+- Prime runs: `each_runner` on trigger bodies (`kern runs trigger
+  --each-runner`) fans every job into one pinned copy per online runner,
+  and project settings `prime_workflow` + `prime_auto=on` fire a warm-up
+  run automatically when a new runner registers — cache/toolchain priming
+  for cold hosts through the normal compile→claim→sandbox pipeline, no
+  YAML extensions. Runners now advertise their configured name as a
+  label, so `runs-on: <runner-name>` pins a host. (#293)
+- Per-job container telemetry: peak cpu/memory/disk collected into
+  `jobs.metrics` during docker jobs now surfaces on `kern runs show` and
+  the web run detail. (#294)
+- Fork-tier egress accounting: the job egress proxy's `NetIO` is sampled
+  alongside container stats into `jobs.metrics.egress_bytes`, and the
+  runners list shows a 24h-per-runner total. (#295)
+- `kern doctor` lints the fleet: risky runner `env` overrides
+  (`PATH`/`DOCKER_HOST`/proxy vars that leak into every job), project
+  workflow health and diagnostics, and recent `missing_binary` runs —
+  the empty-toolcache symptom class. (#296)
+- Job/step profiling: `runs show` and the run detail show job duration
+  and queue wait (`queued_at`→`started_at`), plus per-step durations in
+  the CLI. (#297)
+- Live claim-gate observability: runners report their engaged claim
+  gates (`disk`, `memory`, `overload`) on every heartbeat into
+  `runners.claims_paused` (migration 0033). Queued-job diagnostics now
+  distinguish "matching runner(s) paused by claim gate" from "no online
+  runner matches", split auto-capacity excludes paused runners, the web
+  runner list renders `paused (<reasons>)`, and `kern doctor` warns.
+  (#298)
+- `daemon_gone` failure class: a dead docker daemon mid-step is
+  diagnosed by signature plus a lazy `docker version` probe — infra when
+  the daemon is gone, user error when a job's own docker client has no
+  socket. The kind joins the transient set, so the job auto-requeues
+  onto a healthy runner; the prepare-phase form is covered too. (#300)
+
+### Fixed
+- Idle-gated toolcache sweep removes markerless and empty
+  `_toolcache/<tool>/<ver>` installs that previously counted as
+  installed after interrupted fetches or partial GC (#286). The
+  `<ver>`+`.complete` eviction unit stays atomic. (#291)
+- Triggering a `disabled: true` workflow now returns HTTP 409
+  `workflow_disabled` instead of a generic 500 (#289). (#292)
+- The persistent cargo cache evicts in per-crate / per-repo units —
+  `registry/src`, `git/{db,checkouts}`, and file-level `cache`/`index`
+  entries — instead of dropping the whole registry tree as one unit at
+  the cache cap. (#299)
+
+### Changed
+- `KERN_CACHE_MAX_BYTES` default raised 1 GiB → 10 GiB, matching
+  GitHub's own per-entry cache ceiling — the old cap rejected real
+  rust-cache saves (~1.4 GB) with `cache_too_large` (#290). The env var
+  still lowers it for small deployments. (#301)
+
 ## [0.8.3] - 2026-11-11
 
 ### Fixed
