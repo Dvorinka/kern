@@ -292,7 +292,7 @@ func (s *Server) ghCacheReserve(c *gin.Context) {
 		return
 	}
 	path := filepath.Join(dir, "archive.tar.gz")
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		_ = os.RemoveAll(dir)
 		s.internalError(c, err)
