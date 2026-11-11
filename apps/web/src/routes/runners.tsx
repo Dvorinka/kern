@@ -178,9 +178,11 @@ export function RunnersPage() {
 										<StatusSq status={busy ? "in_progress" : r.status} />
 										{r.draining
 											? "draining"
-											: busy
-												? `${r.active_jobs} job${r.active_jobs === 1 ? "" : "s"}`
-												: r.status}
+											: r.claims_paused
+												? `paused (${r.claims_paused})`
+												: busy
+													? `${r.active_jobs} job${r.active_jobs === 1 ? "" : "s"}`
+													: r.status}
 										<span className="font-mono text-[11px] text-[var(--faint)]">
 											{relTime(r.last_heartbeat_at)}
 										</span>

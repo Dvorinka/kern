@@ -63,3 +63,63 @@ func TestUnmatchedQueuedJobs(t *testing.T) {
 		t.Fatalf("want only starved job unmatched, got %+v", un)
 	}
 }
+
+// A runner whose claim gate is engaged does not count as capacity: the job
+// becomes unmatched but PausedMatches phrases it as waiting on pressure.
+func TestUnmatchedQueuedJobsPaused(t *testing.T) {
+	s, ctx := testStore(t)
+	pid, wid, vid := fixture(t, ctx, s)
+	org, _ := s.FirstOrg(ctx)
+
+	r, err := s.RegisterRunner(ctx, RegisterRunnerParams{
+		OrgID: org.ID, Name: "paused-r", Hostname: "paused-r", OS: "linux", Arch: "amd64",
+		Labels: []string{"self-hosted", "linux", "ubuntu-latest"}, TokenHash: "h-paused",
+	})
+	if err != nil {
+		t.Fatalf("runner: %v", err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE runners SET claims_paused = 'disk' WHERE id = $1`, r.ID); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+
+	run, err := s.CreateRun(ctx, CreateRunParams{
+		ProjectID: pid, WorkflowID: wid, WorkflowVersionID: vid,
+		Event: "push", Ref: "refs/heads/main", TrustLevel: "trusted",
+	}, []JobSeed{{
+		Key: "j1", JobKey: "build", RunsOn: []string{"self-hosted", "linux", "ubuntu-latest"},
+		Needs: []string{}, Image: "ubuntu:24.04", TimeoutSeconds: 3600,
+	}})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	jobs, err := s.JobsForRun(ctx, run.ID)
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("jobs: %v %v", jobs, err)
+	}
+	if err := s.SetJobQueued(ctx, jobs[0].ID); err != nil {
+		t.Fatalf("queue job: %v", err)
+	}
+
+	un, err := s.UnmatchedQueuedJobs(ctx)
+	if err != nil {
+		t.Fatalf("unmatched: %v", err)
+	}
+	if len(un) != 1 || un[0].JobID != jobs[0].ID {
+		t.Fatalf("paused-only match should starve, got %+v", un)
+	}
+	if un[0].PausedMatches != 1 {
+		t.Fatalf("PausedMatches = %d, want 1", un[0].PausedMatches)
+	}
+
+	// Gate opens: the runner is capacity again, no starvation.
+	if _, err := s.pool.Exec(ctx, `UPDATE runners SET claims_paused = '' WHERE id = $1`, r.ID); err != nil {
+		t.Fatalf("unpause: %v", err)
+	}
+	un, err = s.UnmatchedQueuedJobs(ctx)
+	if err != nil {
+		t.Fatalf("unmatched: %v", err)
+	}
+	if len(un) != 0 {
+		t.Fatalf("unpaused runner should satisfy the job, got %+v", un)
+	}
+}

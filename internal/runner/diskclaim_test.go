@@ -64,3 +64,24 @@ func TestJobErrorHint(t *testing.T) {
 		t.Fatalf("unrelated errors must pass through, got %q", got)
 	}
 }
+
+func TestClaimsPaused(t *testing.T) {
+	a := &Agent{cfg: Config{}, log: zap.NewNop()}
+	if got := a.claimsPaused(); got != "" {
+		t.Fatalf("idle agent = %q", got)
+	}
+	a.diskPaused.Store(true)
+	a.memPaused.Store(true)
+	if got := a.claimsPaused(); got != "disk,memory" {
+		t.Fatalf("paused gates = %q", got)
+	}
+	// The load gate reads live probes — stub them saturated.
+	oldLoad, oldCpus := loadAvg1Fn, cpusVisibleFn
+	loadAvg1Fn = func() (float64, bool) { return 99, true }
+	cpusVisibleFn = func() int { return 1 }
+	defer func() { loadAvg1Fn, cpusVisibleFn = oldLoad, oldCpus }()
+	a.cfg.MaxLoadPerCPU = 1
+	if got := a.claimsPaused(); got != "overload,disk,memory" {
+		t.Fatalf("all gates = %q", got)
+	}
+}

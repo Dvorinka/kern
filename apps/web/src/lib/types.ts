@@ -235,6 +235,8 @@ export interface Runner {
   env: Record<string, string>;
   created_at: string;
   active_jobs?: number;
+  // Live claim-gate reasons (disk,memory,overload); '' = claiming normally.
+  claims_paused?: string;
 }
 
 export interface FleetMapPin {

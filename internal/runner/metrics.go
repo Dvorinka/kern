@@ -23,6 +23,10 @@ type heartbeatMetrics struct {
 	// DiskBytes is the work-root filesystem total — refresh on heartbeat so
 	// a moved/resized work root stops reporting register-time capacity.
 	DiskBytes *int64 `json:"disk_bytes,omitempty"`
+	// ClaimsPaused reports the live claim-gate state — comma-joined engaged
+	// gates (disk,memory,overload), '' while claiming — so a paused runner
+	// stops reading as merely idle on the dashboard.
+	ClaimsPaused string `json:"claims_paused,omitempty"`
 	// Version refreshes runners.version every heartbeat. Without it a
 	// token-mode runner (no re-register on boot) reports its enroll-time
 	// version forever, and the auto-update offer never converges.
