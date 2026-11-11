@@ -123,6 +123,10 @@ type Agent struct {
 	diskPaused atomic.Bool
 	// memPaused latches while host memory is under the claim floor.
 	memPaused atomic.Bool
+	// loadPaused latches while the load gate is engaged, for the same
+	// edge-triggered logging — overLoaded runs per heartbeat now that
+	// claimsPaused reports it.
+	loadPaused atomic.Bool
 	// retire latches once the ephemeral idle timeout fires; heartbeats carry
 	// it until the control plane confirms the row is gone. lastActivity is
 	// the unixnano of the last job completion (boot time until then). A
@@ -358,6 +362,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 			sample.SelfUpdate = a.cfg.SelfUpdate
 			sample.Deregister = a.retire.Load()
 			sample.ClaimsPaused = a.claimsPaused()
+			sample.Labels = a.labels()
 			resp, err := a.c.heartbeat(hctx, sample)
 			cancel()
 			if err != nil {
@@ -611,15 +616,17 @@ func (a *Agent) overLoaded() bool {
 		return false
 	}
 	load, ok := loadAvg1Fn()
-	if !ok {
+	gate := a.cfg.MaxLoadPerCPU * float64(cpusVisibleFn())
+	if !ok || load <= gate {
+		if a.loadPaused.CompareAndSwap(true, false) {
+			a.log.Info("load cleared: resuming claims")
+		}
 		return false
 	}
-	cpus := cpusVisibleFn()
-	if load <= a.cfg.MaxLoadPerCPU*float64(cpus) {
-		return false
+	if a.loadPaused.CompareAndSwap(false, true) {
+		a.log.Warn("load gate: host saturated, pausing claims",
+			zap.Float64("loadavg1", load), zap.Float64("gate", gate))
 	}
-	a.log.Warn("load gate: host saturated, pausing claims",
-		zap.Float64("loadavg1", load), zap.Float64("gate", a.cfg.MaxLoadPerCPU*float64(cpus)))
 	return true
 }
 
@@ -773,6 +780,17 @@ func sleepCtx(ctx context.Context, d time.Duration) {
 
 func dockerAvailable() bool {
 	return exec.Command("docker", "version", "--format", "{{.Server.Version}}").Run() == nil
+}
+
+// hostDaemonAlive backs the daemon_gone diagnosis: true while dockerd
+// answers, and — critically — true when no docker client exists at all.
+// A host without the binary never promised a daemon, so daemon-looking
+// errors in a step's tail there are the job's own tooling, not dead infra.
+func hostDaemonAlive() bool {
+	if _, err := exec.LookPath("docker"); err != nil {
+		return true
+	}
+	return dockerAvailable()
 }
 
 // dockerOK reports whether a docker daemon answers on this host, probed once.

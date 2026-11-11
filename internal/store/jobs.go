@@ -201,9 +201,10 @@ func (s *Store) Heartbeat(ctx context.Context, runnerID uuid.UUID, m HostMetrics
 			cpu_percent = $2, mem_used_bytes = $3, disk_free_bytes = $4, metrics_at = now(),
 			version = COALESCE(NULLIF($5, ''), version),
 			disk_bytes = COALESCE($6, disk_bytes),
-			claims_paused = $7
+			claims_paused = $7,
+			labels = COALESCE(NULLIF($8, '{}'::text[]), labels)
 		WHERE id = $1`, runnerID, m.CPUPercent, m.MemUsedBytes, m.DiskFreeBytes,
-		m.Version, m.DiskBytes, m.ClaimsPaused)
+		m.Version, m.DiskBytes, m.ClaimsPaused, m.Labels)
 	return err
 }
 

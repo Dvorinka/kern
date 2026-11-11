@@ -27,6 +27,11 @@ type heartbeatMetrics struct {
 	// gates (disk,memory,overload), '' while claiming — so a paused runner
 	// stops reading as merely idle on the dashboard.
 	ClaimsPaused string `json:"claims_paused,omitempty"`
+	// Labels resyncs the runner's advertised label set every heartbeat —
+	// token-mode runners never re-register, so without it a runner enrolled
+	// before name-labels keeps a stale set forever and each_runner pinning
+	// silently degrades to its one unpinned copy.
+	Labels []string `json:"labels,omitempty"`
 	// Version refreshes runners.version every heartbeat. Without it a
 	// token-mode runner (no re-register on boot) reports its enroll-time
 	// version forever, and the auto-update offer never converges.

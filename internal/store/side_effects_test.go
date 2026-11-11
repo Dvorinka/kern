@@ -188,6 +188,34 @@ func TestHeartbeatRefreshesVersionAndDisk(t *testing.T) {
 	}
 }
 
+// The label set rides the heartbeat too — a runner enrolled before the
+// name-label release keeps its stale registration-time labels until it
+// re-registers, which token-mode runners never do.
+func TestHeartbeatRefreshesLabels(t *testing.T) {
+	s, ctx := testStore(t)
+	r := runner(t, ctx, s, "hb-labels")
+	if _, err := s.pool.Exec(ctx, `UPDATE runners SET labels = '{self-hosted,kern}' WHERE id = $1`, r.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Heartbeat(ctx, r.ID, HostMetrics{Labels: []string{"self-hosted", "kern", "hb-labels", "linux-x64"}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Runner(ctx, r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Labels) != 4 || got.Labels[2] != "hb-labels" {
+		t.Fatalf("labels=%v, want name label synced", got.Labels)
+	}
+	// nil (old runner, no labels field) must not clobber the stored set.
+	if err := s.Heartbeat(ctx, r.ID, HostMetrics{}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Runner(ctx, r.ID); len(got.Labels) != 4 {
+		t.Fatalf("after empty heartbeat labels=%v, want preserved", got.Labels)
+	}
+}
+
 func TestMarkStaleRunnersOffline(t *testing.T) {
 	s, ctx := testStore(t)
 	fresh := runner(t, ctx, s, "fresh-hb")
