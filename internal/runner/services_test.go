@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,6 +73,32 @@ func trustedExecutor(ports []string) *executor {
 	e.claim.Run.TrustLevel = "trusted"
 	e.claim.Job.Services = []ClaimService{{Name: "svc", Ports: ports}}
 	return e
+}
+
+func TestServiceArgsHostExecutor(t *testing.T) {
+	e := &executor{claim: &Claim{}, log: zap.NewNop(), host: true, container: ""}
+	e.claim.Run.TrustLevel = "trusted"
+	e.claim.Job.ID = "job-1"
+
+	args := e.serviceArgs("kern-svc-net", ClaimService{Name: "pg", Image: "postgres:16", Ports: []string{"5433:5432"}})
+	joined := strings.Join(args, " ")
+	for _, want := range []string{"--network kern-svc-net", "--network-alias pg", "-p 127.0.0.1:5433:5432"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("host service args missing %q: %s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "--network container:") {
+		t.Errorf("host executor must never share a container netns: %s", joined)
+	}
+	// A port-less service joins the bridge for sibling DNS only — no -p.
+	args = e.serviceArgs("kern-svc-net", ClaimService{Name: "redis", Image: "redis:7"})
+	joined = strings.Join(args, " ")
+	if strings.Contains(joined, "-p ") {
+		t.Errorf("undeclared service must not publish: %s", joined)
+	}
+	if !strings.Contains(joined, "--network-alias redis") {
+		t.Errorf("undeclared service still needs its alias: %s", joined)
+	}
 }
 
 func TestAcquireServicePortsSerializes(t *testing.T) {

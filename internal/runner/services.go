@@ -47,10 +47,13 @@ func (e *executor) networkedServices() []ClaimService {
 
 // ensureServiceNet creates the per-job bridge when any service needs it.
 // It runs before the job container so the container can join the net.
+// Host executors need it for every service set — inter-service DNS is the
+// only name resolution available there, even for port-declaring services.
 func (e *executor) ensureServiceNet(ctx context.Context) error {
 	// The egress network is created --internal by ensureEgress; creating it
 	// here as a normal bridge would silently lift the egress restriction.
-	if e.egressRestricted() || len(e.networkedServices()) == 0 {
+	needsNet := len(e.networkedServices()) > 0 || (e.host && len(e.claim.Job.Services) > 0)
+	if e.egressRestricted() || !needsNet {
 		return nil
 	}
 	out, err := exec.CommandContext(ctx, "docker", "network", "create", e.serviceNet()).CombinedOutput()
@@ -161,12 +164,26 @@ func (e *executor) serviceContainerName(svc ClaimService) string {
 	return fmt.Sprintf("kern-svc-%s-%s", sanitizeID(e.claim.Job.ID), svc.Name)
 }
 
-func (e *executor) startService(ctx context.Context, net string, svc ClaimService) error {
+// serviceArgs assembles the docker run invocation for one service; split
+// from startService so the executor-specific placement rules stay testable
+// without a daemon.
+func (e *executor) serviceArgs(net string, svc ClaimService) []string {
 	args := []string{
 		"run", "-d", "--rm",
 		"--name", e.serviceContainerName(svc),
 	}
 	switch {
+	case e.host:
+		// Host executor: the job is a host process — the VM model applies
+		// verbatim. Declared ports publish on the host loopback; every
+		// service joins the job bridge so service-to-service name DNS
+		// works. A service without ports stays DNS-only (reachable from
+		// sibling services, not the job) — there is no job-side hosts
+		// entry on a bare-metal step.
+		args = append(args, "--network", net, "--network-alias", svc.Name)
+		for _, p := range svc.Ports {
+			args = append(args, "-p", "127.0.0.1:"+publishSpec(p))
+		}
 	case e.privileged() && len(svc.Ports) > 0:
 		// Host-net job: publish real port mappings on the host's localhost —
 		// the same netns the job sees, so host:container remaps work.
@@ -189,8 +206,11 @@ func (e *executor) startService(ctx context.Context, net string, svc ClaimServic
 	for k, v := range svcEnv {
 		args = append(args, "-e", k+"="+v)
 	}
-	args = append(args, svc.Image)
-	out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+	return append(args, svc.Image)
+}
+
+func (e *executor) startService(ctx context.Context, net string, svc ClaimService) error {
+	out, err := exec.CommandContext(ctx, "docker", e.serviceArgs(net, svc)...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("start: %s", tailStr(string(out), 300))
 	}
@@ -507,7 +527,9 @@ func (e *executor) stopServices(ctx context.Context) {
 	}
 	e.svcForwarders = nil
 	e.stopEgress(ctx)
-	if (e.egressRestricted() || len(e.networkedServices()) > 0) && !e.privileged() {
+	netCreated := e.egressRestricted() || len(e.networkedServices()) > 0 ||
+		(e.host && len(e.claim.Job.Services) > 0)
+	if netCreated && (e.host || !e.privileged()) {
 		_ = exec.CommandContext(ctx, "docker", "network", "rm", e.serviceNet()).Run()
 	}
 	e.releaseServicePorts()
