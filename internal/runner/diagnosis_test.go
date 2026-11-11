@@ -36,7 +36,7 @@ func TestDiagnose(t *testing.T) {
 		{"generic", 2, "make: *** [all] Error 1\n", "", "script_failure", false},
 	}
 	for _, tc := range cases {
-		d := diagnose(StepSpec{}, tc.code, tc.tail, tc.stepErr, "6g")
+		d := diagnose(StepSpec{}, tc.code, tc.tail, tc.stepErr, "6g", func() bool { return true })
 		if d.Kind != tc.wantKind {
 			t.Errorf("%s: kind=%s want %s", tc.name, d.Kind, tc.wantKind)
 		}
@@ -49,8 +49,27 @@ func TestDiagnose(t *testing.T) {
 	}
 }
 
+func TestDiagnoseDaemonGone(t *testing.T) {
+	tail := "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?\n"
+	dead := func() bool { return false }
+	live := func() bool { return true }
+
+	if d := diagnose(StepSpec{}, 1, tail, "", "6g", dead); d.Kind != "daemon_gone" {
+		t.Fatalf("dead daemon = %q, want daemon_gone", d.Kind)
+	}
+	// The same stderr text from a job's own docker client is user error:
+	// the host daemon still answers the probe, so it must not claim infra.
+	if d := diagnose(StepSpec{}, 1, tail, "", "6g", live); d.Kind == "daemon_gone" {
+		t.Fatalf("live daemon must not classify daemon_gone, got %q", d.Kind)
+	}
+	// A live probe also keeps docker-daemon text from stealing real classes.
+	if d := diagnose(StepSpec{}, 137, tail, "", "6g", live); d.Kind != "oom" {
+		t.Fatalf("137 with live daemon = %q, want oom", d.Kind)
+	}
+}
+
 func TestDiagnoseOOMSurfacesCeiling(t *testing.T) {
-	d := diagnose(StepSpec{}, 137, "", "", "6g")
+	d := diagnose(StepSpec{}, 137, "", "", "6g", func() bool { return true })
 	if !strings.Contains(d.Summary, "6g") || !strings.Contains(d.Suggestion, "6g") {
 		t.Fatalf("oom diagnosis must name the memory ceiling: %+v", d)
 	}

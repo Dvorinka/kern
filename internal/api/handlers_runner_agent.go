@@ -642,7 +642,7 @@ func (s *Server) finishJob(c *gin.Context) {
 // rather than code — a registry 429, a reset connection, a cgroup OOM.
 // script_failure-class results are deterministic; retrying them only
 // doubles the bill.
-var transientRetryKinds = map[string]bool{"network": true, "oom": true}
+var transientRetryKinds = map[string]bool{"network": true, "oom": true, "daemon_gone": true}
 
 // maybeRequeueTransient puts a failed job back on the queue when every
 // failed step carries a transient diagnosis and the project's
@@ -705,6 +705,9 @@ func classifyJobError(msg string) string {
 	case strings.Contains(m, "no space left on device"), strings.Contains(m, "disk full"),
 		strings.Contains(m, "disk_quota"):
 		return "disk_full"
+	case strings.Contains(m, "docker daemon"), strings.Contains(m, "error during connect"),
+		strings.Contains(m, "docker.sock: connect:"):
+		return "daemon_gone"
 	case looksTransientError(msg):
 		return "network"
 	case strings.Contains(m, "timed out"), strings.Contains(m, "timeout"):
@@ -726,6 +729,7 @@ func looksTransientError(msg string) bool {
 		"too many requests", "status code 429", "status code 502",
 		"status code 503", "status code 504", "temporary failure",
 		"network is unreachable", "econnreset", "no space left on device",
+		"docker daemon", "error during connect",
 	} {
 		if strings.Contains(m, sig) {
 			return true

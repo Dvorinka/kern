@@ -32,6 +32,7 @@ var (
 	cmdNotFoundRe  = regexp.MustCompile(`(?m)(?:^|[\s:])([a-zA-Z0-9._+\-/]+): (?:command )?not found`)
 	execNotFoundRe = regexp.MustCompile(`executable file not found`)
 	sharedLibRe    = regexp.MustCompile(`error while loading shared libraries: ([a-zA-Z0-9._+\-]+\.so[0-9.]*)`)
+	daemonSigRe    = regexp.MustCompile(`(?i)cannot connect to the docker daemon|is the docker daemon running|error during connect|docker\.sock: connect:`)
 	pkgNameRe      = regexp.MustCompile(`^[a-zA-Z0-9._+-]{1,64}$`)
 )
 
@@ -63,7 +64,10 @@ var libPackage = map[string]string{
 // first, then exit-code signatures, then log patterns, then generic.
 // jobMemory is the job container's cgroup ceiling (KERN_JOB_MEMORY); it is
 // surfaced in OOM diagnoses so the operator sees the limit that was hit.
-func diagnose(step StepSpec, exitCode int, logTail, stepErr, jobMemory string) *diagnosis {
+// daemonAlive probes the host docker daemon lazily — it runs only when the
+// log carries a docker-daemon signature, to tell a dead daemon (infra)
+// apart from a job image that lacks a working docker client (user).
+func diagnose(step StepSpec, exitCode int, logTail, stepErr, jobMemory string, daemonAlive func() bool) *diagnosis {
 	d := &diagnosis{}
 	fail := func(kind, summary, suggestion string) *diagnosis {
 		d.Kind, d.Summary, d.Suggestion = kind, summary, suggestion
@@ -86,6 +90,13 @@ func diagnose(step StepSpec, exitCode int, logTail, stepErr, jobMemory string) *
 		return fail("unsupported_action",
 			"The step uses an action KERN does not support yet",
 			"replace the uses: step with a run: equivalent; see docs/compatibility.md")
+	case daemonSigRe.MatchString(lower) && daemonAlive != nil && !daemonAlive():
+		// The daemon probe is the discriminator: the same stderr text
+		// appears when a job's own docker CLI has no socket, but then
+		// dockerd still answers the runner.
+		return fail("daemon_gone",
+			"The host docker daemon stopped answering mid-step — infrastructure failure, not the script",
+			"the job is requeued onto a healthy runner; check dockerd on the affected runner if this repeats")
 	case exitCode == 137 || strings.Contains(lower, "killed\n") ||
 		strings.Contains(lower, "out of memory") || strings.Contains(lower, "outofmemoryerror") ||
 		strings.Contains(lower, "daemon disappeared") || strings.Contains(lower, "signal: killed"):
