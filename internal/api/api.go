@@ -414,6 +414,10 @@ func (s *Server) internalError(c *gin.Context, err error) {
 		fail(c, http.StatusNotFound, "not_found", "resource not found")
 		return
 	}
+	if errors.Is(err, orchestrator.ErrWorkflowDisabled) {
+		fail(c, http.StatusConflict, "workflow_disabled", err.Error())
+		return
+	}
 	// A canceled or timed-out request context means the caller went away —
 	// routine for runner long-polls and heartbeat clients on a 5s budget.
 	// Nothing to report to and nothing broken; log at debug, not error.

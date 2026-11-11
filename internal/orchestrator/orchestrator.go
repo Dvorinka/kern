@@ -5,6 +5,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -105,6 +106,12 @@ func New(st *store.Store, log *zap.Logger, compiler workflows.Compiler) *Orchest
 	}
 }
 
+// ErrWorkflowDisabled marks StartRun refusals for disabled workflows so
+// handlers can answer a client error instead of a bare 500 (#289 — every
+// manual trigger of a disabled workflow surfaced as "internal server
+// error", which read as a seed-path crash).
+var ErrWorkflowDisabled = errors.New("workflow is disabled")
+
 // StartRun compiles the stored workflow version and persists a run plus its jobs.
 func (o *Orchestrator) StartRun(ctx context.Context, p store.CreateRunParams) (store.Run, error) {
 	wf, err := o.Store.WorkflowByID(ctx, p.WorkflowID)
@@ -112,7 +119,7 @@ func (o *Orchestrator) StartRun(ctx context.Context, p store.CreateRunParams) (s
 		return store.Run{}, err
 	}
 	if wf.Disabled {
-		return store.Run{}, fmt.Errorf("workflow %q is disabled", wf.Name)
+		return store.Run{}, fmt.Errorf("%w: %s", ErrWorkflowDisabled, wf.Name)
 	}
 	version, err := o.Store.WorkflowVersion(ctx, p.WorkflowVersionID)
 	if err != nil {
