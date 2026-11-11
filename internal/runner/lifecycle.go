@@ -76,9 +76,19 @@ func (e *executor) runPreHooks(ctx context.Context) {
 			continue // resolution already logged + marked the step
 		}
 		if !e.runPre(ctx, step, meta, actionPath, hostDir) {
-			e.preFailed[step.Number] = "pre hook failed for " + step.Uses
+			e.markPreFailed(step, "pre hook failed for "+step.Uses)
 		}
 	}
+}
+
+// markPreFailed records that a step's action resolution or pre hook failed;
+// runStep then fails the step without running main. The map lazily
+// initialises here — writing to a nil map panics the whole agent.
+func (e *executor) markPreFailed(step StepSpec, msg string) {
+	if e.preFailed == nil {
+		e.preFailed = map[int]string{}
+	}
+	e.preFailed[step.Number] = msg
 }
 
 // runNestedPre runs an unregistered action's pre inline before main — only
@@ -238,7 +248,7 @@ func (e *executor) resolveStepAction(ctx context.Context, step StepSpec) (*actio
 	case actions.KindLocal:
 		if err := actions.ValidLocal(ref); err != nil {
 			e.logStep(step, "KERN: "+err.Error())
-			e.preFailed[step.Number] = err.Error()
+			e.markPreFailed(step, err.Error())
 			return nil, "", ""
 		}
 		dir := strings.TrimPrefix(filepath.ToSlash(filepath.Clean(ref)), "./")
@@ -248,13 +258,13 @@ func (e *executor) resolveStepAction(ctx context.Context, step StepSpec) (*actio
 		r, err := actions.ParseRemote(ref)
 		if err != nil {
 			e.logStep(step, "KERN: "+err.Error())
-			e.preFailed[step.Number] = err.Error()
+			e.markPreFailed(step, err.Error())
 			return nil, "", ""
 		}
 		host, container, err := e.fetchAction(ctx, step, r)
 		if err != nil {
 			e.logStep(step, "KERN: fetch action "+ref+": "+err.Error())
-			e.preFailed[step.Number] = "fetch action: " + err.Error()
+			e.markPreFailed(step, "fetch action: "+err.Error())
 			return nil, "", ""
 		}
 		hostDir, actionPath = host, container
@@ -264,7 +274,7 @@ func (e *executor) resolveStepAction(ctx context.Context, step StepSpec) (*actio
 	meta, err := readActionMeta(hostDir)
 	if err != nil {
 		e.logStep(step, "KERN: "+err.Error())
-		e.preFailed[step.Number] = err.Error()
+		e.markPreFailed(step, err.Error())
 		return nil, "", ""
 	}
 	return meta, actionPath, hostDir

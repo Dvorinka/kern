@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/dvorinka/kern/internal/actions"
+	"go.uber.org/zap"
 )
 
 func nodeMeta(pre, post string) *actions.Meta {
@@ -72,5 +73,13 @@ func TestMergeStateAccumulates(t *testing.T) {
 	mergeState(h, map[string]string{"b": "2", "a": "3"})
 	if h.state["a"] != "3" || h.state["b"] != "2" {
 		t.Fatalf("state merge wrong: %v", h.state)
+	}
+}
+
+func TestMarkPreFailedInitializes(t *testing.T) {
+	e := &executor{claim: &Claim{}, log: zap.NewNop()}
+	e.markPreFailed(StepSpec{Number: 3}, "fetch action: boom")
+	if e.preFailed[3] != "fetch action: boom" {
+		t.Fatalf("preFailed not recorded: %v", e.preFailed)
 	}
 }
