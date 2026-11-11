@@ -217,6 +217,12 @@ function StepsPanel({
 					{job.runner_id && runners.get(job.runner_id) && ` · on ${runners.get(job.runner_id)}`}
 					{job.environment && ` · ${job.environment}`}
 					{job.classification && ` · ${job.classification}`}
+					{job.metrics?.cpu_pct_peak != null &&
+						` · cpu ${Math.round(job.metrics.cpu_pct_peak)}%`}
+					{job.metrics?.mem_bytes_peak != null &&
+						` · mem ${bytes(job.metrics.mem_bytes_peak)}`}
+					{job.metrics?.disk_bytes_peak != null &&
+						` · disk ${bytes(job.metrics.disk_bytes_peak)}`}
 				</span>
 				{jobs.length > 1 && (
 					<span className="jpick">

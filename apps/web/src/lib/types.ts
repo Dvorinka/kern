@@ -151,6 +151,13 @@ export interface Job {
   environment: string;
   environment_url: string;
   queue_reason?: string;
+  // Container resource peaks sampled by the runner at job finish; null for
+  // host executors and jobs that predate the sampler.
+  metrics?: {
+    cpu_pct_peak?: number;
+    mem_bytes_peak?: number;
+    disk_bytes_peak?: number;
+  } | null;
   steps?: Step[];
 }
 
