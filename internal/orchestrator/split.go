@@ -135,6 +135,79 @@ func (o *Orchestrator) expandRunSplits(ctx context.Context, projectID uuid.UUID,
 	})
 }
 
+// expandEachRunner fans every seed into one copy per online, non-draining
+// runner whose labels cover its runs-on, pinning each copy by the runner's
+// name label — prime/cache-warming runs warm the whole fleet in one trigger.
+// runnerNames, when set, limits the fan-out (auto-prime pins just the freshly
+// registered runner). A runner whose stored labels predate name-labels gets
+// an unpinned copy — best effort during rollout. A seed no online runner
+// matches stays unpinned so it can queue for runners that come up later.
+func (o *Orchestrator) expandEachRunner(ctx context.Context, projectID uuid.UUID, seeds []store.JobSeed, runnerNames []string) ([]store.JobSeed, error) {
+	proj, err := o.Store.ProjectByID(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	runners, err := o.Store.Runners(ctx, proj.OrgID)
+	if err != nil {
+		return nil, err
+	}
+	only := map[string]bool{}
+	for _, n := range runnerNames {
+		only[n] = true
+	}
+	var online []store.Runner
+	for _, r := range runners {
+		if r.Status != "online" || r.Draining {
+			continue
+		}
+		if len(only) > 0 && !only[r.Name] {
+			continue
+		}
+		online = append(online, r)
+	}
+	out := make([]store.JobSeed, 0, len(seeds))
+	for _, s := range seeds {
+		matched := false
+		for _, r := range online {
+			if !runsOnCovered(s.RunsOn, r.Labels) {
+				continue
+			}
+			matched = true
+			c := s
+			pinned := append(append([]string{}, s.RunsOn...), r.Name)
+			if runsOnCovered(pinned, r.Labels) {
+				c.RunsOn = pinned
+				c.Key = s.Key + " @ " + r.Name
+				c.Name = s.Name + " @ " + r.Name
+			}
+			out = append(out, c)
+		}
+		if !matched {
+			out = append(out, s)
+		}
+	}
+	if len(out) > maxSplitJobs {
+		return nil, fmt.Errorf("each-runner expansion would create %d jobs (max %d)", len(out), maxSplitJobs)
+	}
+	return out, nil
+}
+
+// runsOnCovered reports whether a runner's advertised labels satisfy a job's
+// runs-on set — the Go mirror of the claim query's
+// `j.runs_on <@ (labels || '{self-hosted,kern}')`.
+func runsOnCovered(runsOn, labels []string) bool {
+	have := map[string]bool{"self-hosted": true, "kern": true}
+	for _, l := range labels {
+		have[l] = true
+	}
+	for _, l := range runsOn {
+		if !have[l] {
+			return false
+		}
+	}
+	return true
+}
+
 func copyEnv(in map[string]string) map[string]string {
 	out := make(map[string]string, len(in)+2)
 	for k, v := range in {

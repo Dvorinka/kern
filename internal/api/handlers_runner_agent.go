@@ -104,7 +104,65 @@ func (s *Server) registerRunner(c *gin.Context) {
 	if enrollCfg.Env != nil {
 		_ = s.Store.SetRunnerEnv(c.Request.Context(), orgID, runner.ID, enrollCfg.Env)
 	}
+	go s.primeNewRunner(runner)
 	c.JSON(http.StatusCreated, gin.H{"runner_id": runner.ID, "name": runner.Name, "token": token})
+}
+
+// primeNewRunner fires each opted-in project's prime workflow pinned at the
+// freshly registered runner, so its caches are warm before real jobs land.
+// Opt-in per project: prime_workflow + prime_auto=on settings. Best effort —
+// failures log and never block registration.
+func (s *Server) primeNewRunner(r store.Runner) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	projects, err := s.Store.Projects(ctx, r.OrgID)
+	if err != nil {
+		s.Log.Warn("prime: could not list projects", zap.String("runner", r.Name), zap.Error(err))
+		return
+	}
+	for _, p := range projects {
+		raw, err := s.Store.ProjectSettings(ctx, p.ID)
+		if err != nil {
+			continue
+		}
+		wfPath := settingsValue(raw, "prime_workflow", "")
+		if settingsValue(raw, "prime_auto", "off") != "on" || wfPath == "" {
+			continue
+		}
+		wf, version, err := s.Store.LatestWorkflowVersion(ctx, p.ID, wfPath)
+		if err != nil || !version.Valid || wf.Disabled {
+			s.Log.Warn("prime: configured workflow unusable; skipping",
+				zap.String("project", p.Slug), zap.String("workflow", wfPath), zap.Error(err))
+			continue
+		}
+		run, err := s.Orch.StartRun(ctx, store.CreateRunParams{
+			ProjectID:         p.ID,
+			WorkflowID:        wf.ID,
+			WorkflowVersionID: version.ID,
+			Event:             "prime",
+			Ref:               "refs/heads/" + p.DefaultBranch,
+			SHA:               version.CommitSHA,
+			Actor:             "prime",
+			TrustLevel:        "trusted",
+			Source: map[string]any{
+				"repo_url":       p.RepoURL,
+				"repo_full_name": p.RepoFullName,
+				"local_path":     p.LocalPath,
+				"default_branch": p.DefaultBranch,
+				"prime_runner":   r.Name,
+			},
+			EachRunner:  true,
+			RunnerNames: []string{r.Name},
+		})
+		if err != nil {
+			s.Log.Warn("prime: run failed to start",
+				zap.String("project", p.Slug), zap.String("runner", r.Name), zap.Error(err))
+			continue
+		}
+		s.Log.Info("prime run fired for new runner",
+			zap.String("project", p.Slug), zap.String("runner", r.Name), zap.String("run", run.ID.String()))
+		s.Store.Audit(ctx, r.OrgID, nil, "prime.runner", p.Slug+"="+r.Name)
+	}
 }
 
 func (s *Server) runnerHeartbeat(c *gin.Context) {

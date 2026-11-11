@@ -203,7 +203,7 @@ func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 		}
 		return c.waitRun(ctx, id, opts["interval"], opts["timeout"])
 	case "trigger":
-		opts, pos := parseFlags(rest, "event", "ref", "sha", "inputs", "workflow-path")
+		opts, pos := parseFlagsEx(rest, []string{"each-runner"}, "event", "ref", "sha", "inputs", "workflow-path")
 		var slug, wf string
 		switch len(pos) {
 		case 0:
@@ -213,13 +213,16 @@ func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 		case 2:
 			slug, wf = pos[0], pos[1]
 		default:
-			return fmt.Errorf("usage: kern runs trigger [<project>] <workflow> [--event] [--ref] [--sha] [--inputs '{\"k\":\"v\"}'] [--workflow-path P]")
+			return fmt.Errorf("usage: kern runs trigger [<project>] <workflow> [--event] [--ref] [--sha] [--inputs '{\"k\":\"v\"}'] [--workflow-path P] [--each-runner]")
 		}
 		if slug == "" {
 			return fmt.Errorf("project required — positional arg, --project or kern config set project")
 		}
 		body := map[string]any{
 			"event": opts["event"], "ref": opts["ref"], "sha": opts["sha"],
+		}
+		if opts["each-runner"] == "true" {
+			body["each_runner"] = true
 		}
 		if raw := opts["inputs"]; raw != "" {
 			var inputs map[string]any
@@ -239,7 +242,7 @@ func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 			err = c.api().post(ctx, "/projects/"+slug+"/runs", body, &out)
 		} else {
 			if wf == "" {
-				return fmt.Errorf("usage: kern runs trigger [<project>] <workflow> [--event] [--ref] [--sha] [--inputs '{\"k\":\"v\"}'] [--workflow-path P]")
+				return fmt.Errorf("usage: kern runs trigger [<project>] <workflow> [--event] [--ref] [--sha] [--inputs '{\"k\":\"v\"}'] [--workflow-path P] [--each-runner]")
 			}
 			workflowID, werr := c.resolveWorkflow(ctx, slug, wf)
 			if werr != nil {

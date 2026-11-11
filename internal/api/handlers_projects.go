@@ -260,6 +260,9 @@ type triggerRequest struct {
 	TrustLevel    string         `json:"trust_level"`
 	BundleRef     string         `json:"bundle_ref"`
 	Inputs        map[string]any `json:"inputs"`
+	// EachRunner fans every job into one pinned copy per matching online
+	// runner — prime/cache-warming triggers.
+	EachRunner bool `json:"each_runner"`
 	// WorkflowPath + WorkflowYAML drive the by-path trigger route: a workflow
 	// file that is not (yet) a synced workflow row — an unmerged branch file
 	// or a local file shipped inline by `kern exec --workflow-file`.
@@ -384,6 +387,7 @@ func (s *Server) triggerRun(c *gin.Context) {
 		TrustLevel:        req.TrustLevel,
 		Source:            source,
 		Inputs:            req.Inputs,
+		EachRunner:        req.EachRunner,
 	})
 	if err != nil {
 		s.internalError(c, err)
@@ -567,6 +571,7 @@ func (s *Server) triggerRunByPath(c *gin.Context) {
 		TrustLevel:        req.TrustLevel,
 		Source:            source,
 		Inputs:            req.Inputs,
+		EachRunner:        req.EachRunner,
 	})
 	if err != nil {
 		s.internalError(c, err)
