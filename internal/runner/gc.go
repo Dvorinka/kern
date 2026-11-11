@@ -156,16 +156,19 @@ func (a *Agent) diskGCLoop(ctx context.Context) {
 // one runner per docker host is the documented model (same assumption
 // hostPortLocks already makes).
 func (a *Agent) sweepOrphanServices(ctx context.Context) {
-	if a.executor() != "docker" {
-		return
-	}
-	out, err := exec.CommandContext(ctx, "docker", "ps", "-aq", "--filter", "name=kern-", "--format", "{{.ID}}|{{.Names}}").Output()
+	// Host executors run services on the native docker daemon too — the
+	// same kern-svc-* leak applies; docker-less hosts no-op on the failed
+	// docker ps below.
+	// No -q: docker ignores --format when --quiet is set and prints bare
+	// IDs, which carry no name to match against activeJobs — the sweep
+	// would silently never remove anything.
+	out, err := exec.CommandContext(ctx, "docker", "ps", "-a", "--filter", "name=kern-", "--format", "{{.ID}}|{{.Names}}").Output()
 	if err == nil {
 		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 			id, name, ok := strings.Cut(line, "|")
 			name = strings.TrimPrefix(strings.TrimSpace(name), "/")
 			if !ok || id == "" || a.jobActive(name) ||
-				!(strings.HasPrefix(name, "kern-svc-") || strings.HasPrefix(name, "kern-job-")) {
+				!(strings.HasPrefix(name, "kern-svc-") || strings.HasPrefix(name, "kern-job-") || strings.HasPrefix(name, "kern-egro-")) {
 				continue
 			}
 			rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
