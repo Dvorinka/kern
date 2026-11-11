@@ -3,6 +3,23 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
+## [0.8.3] - 2026-11-11
+
+### Fixed
+- Job containers keep the job image's own `PATH` tail when prepending the
+  provisioned node bin dir, instead of replacing it with a fixed base list —
+  the v0.8.2 prepend broke toolchain images (`golang:1.27` jobs failed with
+  `go: command not found`). The image's `Config.Env` `PATH` is probed at
+  container create; host executors stop overriding `PATH` at all.
+- Provisioned node runtimes now run `corepack enable` at install time, so
+  `yarn`/`yarnpkg`/`pnpm`/`pnpx` shims exist in `_node` on every runner.
+  setup-node's `yarn --version` probe previously only passed where a stale
+  enable had left shims in the writable toolcache. Existing provisions
+  self-heal on next job via a shim probe.
+- The GitHub cache-service commit path no longer fails `500`: the pending
+  upload's temp file was opened `O_WRONLY` but read at commit, so every
+  cache save errored `bad file descriptor` (warn-only — restores masked it).
+
 ## [0.8.2] - 2026-11-11
 
 ### Fixed
