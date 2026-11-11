@@ -3,6 +3,48 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
+## [0.11.0] - 2026-11-11
+
+### Added
+- Host-load-aware scheduling: among equally job-loaded peers a runner now
+  yields the claim to a runner whose heartbeat `cpu_percent` is at least
+  15 points lower, so saturated hosts lose placement ties to cooler ones.
+  Peers that cannot take the job — claim-gate-paused runners, host
+  executors on fork/pull_request trust, non-docker runners while a
+  `kern-docker` peer exists — no longer suppress claims they could never
+  take. (#318, #310)
+- Cross-platform host metrics: heartbeat `cpu_percent`/`mem_used_bytes`
+  probes now populate on Windows (GetSystemTimes/GlobalMemoryStatusEx)
+  and macOS (sysctl `kern.cp_time`/`vm.loadavg` + `vm_stat`), not just
+  Linux `/proc`. The disk and memory claim gates therefore work on
+  Windows and macOS hosts; the loadavg gate works on Linux and macOS
+  (no Windows equivalent). (#318)
+- `KERN_JOB_CONTAINER_ID`/`KERN_JOB_CONTAINER` expose the job container's
+  id and name to steps for `docker inspect`/`exec` in DinD fixtures.
+  (#317, #315)
+
+### Fixed
+- Orphan sweeps silently removed nothing: `docker ps -aq --format ...`
+  makes the CLI ignore `--format` and print bare ids, so name parsing
+  always failed — `kern-svc-*`/`kern-job-*`/`kern-egro-*` containers
+  leaked indefinitely. Sweeps now use `docker ps -a --format` (no `-q`)
+  and run before service port acquisition with one retry after a
+  port-bind failure. (#317, #308)
+- Infra-classified prepare failures (port allocation, network setup,
+  `signal: killed`, OOM kills) now match transient signatures and
+  requeue instead of failing the run. (#317, #309)
+- Self-heal `java` remediation installs a real JDK per distro
+  (`default-jdk-headless`, `openjdk21`, `java-21-openjdk-headless`)
+  instead of the bare `java` package name. (#317, #313)
+- Disk claim gate gains hysteresis: claims resume only after free space
+  recovers to threshold + 3 points, ending boundary flapping on shared
+  hosts. (#317, #311, #312)
+- Trusted host-network job containers cannot `docker network connect` —
+  documented in `docs/runner-contract.md` with the loopback-port
+  workaround for DinD fixtures. (#317, #316)
+- Host-executor `$GITHUB_ENV` propagation covered by an end-to-end test.
+  (#317, #314)
+
 ## [0.10.0] - 2026-11-11
 
 ### Added
