@@ -354,7 +354,7 @@ func (e *executor) prepare(ctx context.Context) error {
 	}
 	e.ensureGradleMirror()
 	if e.host {
-		return e.prepareHost()
+		return e.prepareHost(ctx)
 	}
 	// Steps run as jobUID but checkout ran as the runner user; hand the
 	// workspace over so steps can write inside it (node_modules, dist).
@@ -401,7 +401,7 @@ func (e *executor) prepare(ctx context.Context) error {
 // already guarantees this runner only sees trusted work. Unsupported
 // substrate features surface as explicit KERN: diagnostics in the first
 // step's log rather than failing silently.
-func (e *executor) prepareHost() error {
+func (e *executor) prepareHost(ctx context.Context) error {
 	e.shell = hostShell()
 	e.eventPayload = e.eventPayloadMap()
 	if p, err := e.writeEventPayload(); err != nil {
@@ -409,18 +409,38 @@ func (e *executor) prepareHost() error {
 	} else {
 		e.eventHostPath = p
 	}
-	if len(e.claim.Steps) > 0 {
+	notes := []string{}
+	if e.claim.Job.Image != "" {
+		notes = append(notes, fmt.Sprintf("container image %q ignored (no container on host executor)", e.claim.Job.Image))
+	}
+	svcNote := ""
+	if n := len(e.claim.Job.Services); n > 0 {
+		if dockerAvailable() {
+			// kern-docker host: services run on the native daemon with the
+			// VM reachability model — declared ports answer on loopback.
+			if err := e.ensureServiceNet(ctx); err != nil {
+				return fmt.Errorf("service network: %w", err)
+			}
+			if err := e.startServices(ctx); err != nil {
+				e.goStop()
+				return fmt.Errorf("start services: %w", err)
+			}
+			for _, svc := range e.claim.Job.Services {
+				if len(svc.Ports) == 0 {
+					svcNote = "service '" + svc.Name + "' has no ports: — DNS-only between services; declare ports: for loopback access"
+					break
+				}
+			}
+		} else {
+			svcNote = fmt.Sprintf("%d service container(s) ignored (services need a docker daemon on this host)", n)
+		}
+	}
+	if svcNote != "" {
+		notes = append(notes, svcNote)
+	}
+	if len(notes) > 0 && len(e.claim.Steps) > 0 {
 		step := StepSpec{Number: e.claim.Steps[0].Number}
-		notes := []string{}
-		if e.claim.Job.Image != "" {
-			notes = append(notes, fmt.Sprintf("container image %q ignored (no container on host executor)", e.claim.Job.Image))
-		}
-		if len(e.claim.Job.Services) > 0 {
-			notes = append(notes, fmt.Sprintf("%d service container(s) ignored (services need the docker executor)", len(e.claim.Job.Services)))
-		}
-		if len(notes) > 0 {
-			e.logStep(step, "KERN: host executor on "+runtime.GOOS+"/"+runtime.GOARCH+" — "+strings.Join(notes, "; "))
-		}
+		e.logStep(step, "KERN: host executor on "+runtime.GOOS+"/"+runtime.GOARCH+" — "+strings.Join(notes, "; "))
 	}
 	return nil
 }
@@ -1075,6 +1095,8 @@ func (e *executor) cleanup() {
 		_ = exec.CommandContext(ctx, "docker", "rm", "-f", e.container).Run()
 		e.stopServices(ctx)
 		e.reapOrphanContainers(ctx)
+	} else if len(e.claim.Job.Services) > 0 {
+		e.stopServices(ctx)
 	}
 	_ = os.RemoveAll(e.workRoot())
 	if !e.host && e.privileged() && dirExists("/github") {
