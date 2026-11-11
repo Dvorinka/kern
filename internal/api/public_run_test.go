@@ -202,6 +202,8 @@ func TestLooksTransientError(t *testing.T) {
 		"received status code 429 from server: Too Many Requests",
 		"docker create: no space left on device",
 		"read tcp: connection reset by peer",
+		"create container: Cannot connect to the Docker daemon at unix:///var/run/docker.sock",
+		"docker run: error during connect: dial unix /var/run/docker.sock: connect: no such file",
 	} {
 		if !looksTransientError(msg) {
 			t.Errorf("expected transient: %s", msg)
@@ -216,7 +218,11 @@ func TestLooksTransientError(t *testing.T) {
 			t.Errorf("expected non-transient: %s", msg)
 		}
 	}
-	if !transientRetryKinds["network"] || !transientRetryKinds["oom"] || transientRetryKinds["script_failure"] {
-		t.Error("transientRetryKinds must cover network+oom and exclude script_failure")
+	if !transientRetryKinds["network"] || !transientRetryKinds["oom"] ||
+		!transientRetryKinds["daemon_gone"] || transientRetryKinds["script_failure"] {
+		t.Error("transientRetryKinds must cover network+oom+daemon_gone and exclude script_failure")
+	}
+	if got := classifyJobError("create container: Cannot connect to the Docker daemon"); got != "daemon_gone" {
+		t.Errorf("classifyJobError daemon = %q", got)
 	}
 }
