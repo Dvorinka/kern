@@ -109,26 +109,27 @@ type runDetail struct {
 }
 
 type runnerRow struct {
-	ID              string     `json:"id"`
-	Name            string     `json:"name"`
-	Hostname        string     `json:"hostname"`
-	OS              string     `json:"os"`
-	Arch            string     `json:"arch"`
-	CPUs            int        `json:"cpus"`
-	MemoryBytes     int64      `json:"memory_bytes"`
-	DiskBytes       int64      `json:"disk_bytes"`
-	Labels          []string   `json:"labels"`
-	Version         string     `json:"version"`
-	Status          string     `json:"status"`
-	Draining        bool       `json:"draining"`
-	WakeOnDemand    bool       `json:"wake_on_demand"`
-	LastHeartbeatAt *time.Time `json:"last_heartbeat_at"`
-	CPUPercent      *float64   `json:"cpu_percent"`
-	MemUsedBytes    *int64     `json:"mem_used_bytes"`
-	DiskFreeBytes   *int64     `json:"disk_free_bytes"`
-	MetricsAt       *time.Time `json:"metrics_at"`
-	ActiveJobs      int        `json:"active_jobs"`
-	ClaimsPaused    string     `json:"claims_paused"`
+	ID              string            `json:"id"`
+	Name            string            `json:"name"`
+	Hostname        string            `json:"hostname"`
+	OS              string            `json:"os"`
+	Arch            string            `json:"arch"`
+	CPUs            int               `json:"cpus"`
+	MemoryBytes     int64             `json:"memory_bytes"`
+	DiskBytes       int64             `json:"disk_bytes"`
+	Labels          []string          `json:"labels"`
+	Version         string            `json:"version"`
+	Status          string            `json:"status"`
+	Draining        bool              `json:"draining"`
+	WakeOnDemand    bool              `json:"wake_on_demand"`
+	LastHeartbeatAt *time.Time        `json:"last_heartbeat_at"`
+	CPUPercent      *float64          `json:"cpu_percent"`
+	MemUsedBytes    *int64            `json:"mem_used_bytes"`
+	DiskFreeBytes   *int64            `json:"disk_free_bytes"`
+	MetricsAt       *time.Time        `json:"metrics_at"`
+	ActiveJobs      int               `json:"active_jobs"`
+	ClaimsPaused    string            `json:"claims_paused"`
+	Env             map[string]string `json:"env"`
 }
 
 type artifact struct {

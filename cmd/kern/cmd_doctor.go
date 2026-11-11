@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -65,7 +66,8 @@ func (c *cli) cmdDoctor(ctx context.Context, args []string) error {
 	if c.token == "" {
 		add("auth", "warn", "no API token — fleet checks skipped (kern login)")
 	} else {
-		c.doctorFleet(ctx, add)
+		runners := c.doctorFleet(ctx, add)
+		c.doctorLint(ctx, add, runners)
 	}
 
 	if c.json {
@@ -90,13 +92,13 @@ func (c *cli) cmdDoctor(ctx context.Context, args []string) error {
 
 // doctorFleet runs the authenticated half: identity, queue pressure, webhook
 // failures and per-runner liveness.
-func (c *cli) doctorFleet(ctx context.Context, add func(string, string, string)) {
+func (c *cli) doctorFleet(ctx context.Context, add func(string, string, string)) []runnerRow {
 	var me struct {
 		User user `json:"user"`
 	}
 	if err := c.api().get(ctx, "/auth/me", nil, &me); err != nil {
 		add("auth", "fail", "token rejected: "+err.Error())
-		return
+		return nil
 	}
 	add("auth", "ok", fmt.Sprintf("%s (%s)", me.User.Email, me.User.Role))
 
@@ -149,7 +151,7 @@ func (c *cli) doctorFleet(ctx context.Context, add func(string, string, string))
 	}
 	if err := c.api().get(ctx, "/runners", nil, &runners); err != nil {
 		add("fleet", "warn", "runner list unavailable: "+err.Error())
-		return
+		return nil
 	}
 	for _, r := range runners.Runners {
 		if r.Draining {
@@ -165,6 +167,95 @@ func (c *cli) doctorFleet(ctx context.Context, add func(string, string, string))
 		}
 		if r.ClaimsPaused != "" {
 			add("runner "+r.Name, "warn", "claims paused: "+r.ClaimsPaused)
+		}
+	}
+	return runners.Runners
+}
+
+// riskyEnvKeys lists runner env overrides that rewrite fundamentals every
+// job inherits — the workflow never asked for them and the contract keys
+// (GITHUB_*/RUNNER_*) already win over overrides.
+func riskyEnvKeys(env map[string]string) []string {
+	risky := map[string]bool{
+		"PATH": true, "HOME": true, "DOCKER_HOST": true,
+		"HTTP_PROXY": true, "http_proxy": true, "HTTPS_PROXY": true, "https_proxy": true,
+		"LD_PRELOAD": true, "LD_LIBRARY_PATH": true, "NODE_PATH": true,
+	}
+	var keys []string
+	for k := range env {
+		if risky[k] {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// doctorLint covers project/fleet hygiene the API can see: risky runner env
+// overrides, project workflow health, and failure classifications that point
+// at broken runner state (empty toolcache is the demo case).
+func (c *cli) doctorLint(ctx context.Context, add func(string, string, string), runners []runnerRow) {
+	for _, r := range runners {
+		if keys := riskyEnvKeys(r.Env); len(keys) > 0 {
+			add("env "+r.Name, "warn",
+				fmt.Sprintf("env override shadows %s — merges into every job", strings.Join(keys, ", ")))
+		}
+	}
+
+	// Project workflow lint, when a project is configured.
+	if c.project != "" {
+		var wfs struct {
+			Workflows []struct {
+				Name        string          `json:"name"`
+				Path        string          `json:"path"`
+				Disabled    bool            `json:"disabled"`
+				Diagnostics json.RawMessage `json:"diagnostics"`
+			} `json:"workflows"`
+		}
+		if err := c.api().get(ctx, "/projects/"+c.project+"/workflows", nil, &wfs); err != nil {
+			add("workflows", "warn", "unavailable: "+err.Error())
+		} else {
+			disabled, diags := 0, 0
+			var diagNames []string
+			for _, w := range wfs.Workflows {
+				if w.Disabled {
+					disabled++
+				}
+				var d []any
+				if len(w.Diagnostics) > 0 && json.Unmarshal(w.Diagnostics, &d) == nil && len(d) > 0 {
+					diags += len(d)
+					if len(diagNames) < 3 {
+						diagNames = append(diagNames, w.Name)
+					}
+				}
+			}
+			switch {
+			case diags > 0:
+				add("workflows", "warn", fmt.Sprintf("%d compile diagnostic(s) across %s — kern lint shows detail",
+					diags, strings.Join(diagNames, ", ")))
+			case disabled > 0:
+				add("workflows", "warn", fmt.Sprintf("%d of %d workflows disabled — dispatch and webhooks refuse them",
+					disabled, len(wfs.Workflows)))
+			default:
+				add("workflows", "ok", fmt.Sprintf("%d synced, no diagnostics", len(wfs.Workflows)))
+			}
+		}
+	}
+
+	// missing_binary is the signature of a toolcache dir that lost its
+	// contents (interrupted fetch, GC mishap — the setup action reports
+	// success, the binary probe then fails).
+	var runs struct {
+		Total int `json:"total"`
+	}
+	day := time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)
+	if err := c.api().get(ctx, "/runs?classification=missing_binary&limit=1&day="+day, nil, &runs); err == nil {
+		if runs.Total > 0 {
+			add("toolcache", "warn", fmt.Sprintf(
+				"%d run(s) hit missing_binary in 24h — a toolcache install may be empty; kern runs list --classification missing_binary",
+				runs.Total))
+		} else {
+			add("toolcache", "ok", "no missing_binary jobs in 24h")
 		}
 	}
 }
