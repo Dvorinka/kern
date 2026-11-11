@@ -386,6 +386,10 @@ func (a *Agent) sweepBoundedCacheTo(limit int64) {
 //     markers resolve to the same unit.
 //   - _actions/<entry>, ms-playwright/<entry>: one checkout/install per
 //     direct child.
+//   - cargo/registry/src/<index>/<crate>-<ver>: extracted crate trees —
+//     cargo re-extracts on a miss. cargo/git/{db,checkouts}/<repo>: one
+//     repo per unit. cargo/registry/{cache,index} entries are
+//     content-addressed — file-level, a miss is a re-download.
 //   - gocache, pnpm-store, gotmp, gopath: content-addressed flat files —
 //     a missing entry is a plain cache miss.
 //   - unknown sections: direct children evict whole — coarse but always
@@ -409,6 +413,17 @@ func cacheEvictionUnit(root, rel string) (string, bool) {
 		}
 	case "_actions", "ms-playwright":
 		return filepath.Join(root, parts[0], parts[1]), true
+	case "cargo":
+		// Without a case the whole registry evicts as one multi-GB unit.
+		if len(parts) >= 5 && parts[1] == "registry" && parts[2] == "src" {
+			return filepath.Join(append([]string{root}, parts[:5]...)...), true
+		}
+		if len(parts) >= 4 && parts[1] == "git" {
+			return filepath.Join(append([]string{root}, parts[:4]...)...), true
+		}
+		// jarvis: credentials.toml can age out under cap pressure —
+		// private-registry users should pass CARGO_REGISTRIES_*_TOKEN.
+		return filepath.Join(root, rel), false
 	case "gocache", "pnpm-store", "gotmp", "gopath":
 	default:
 		return filepath.Join(root, parts[0], parts[1]), true
