@@ -3,6 +3,14 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
+## [0.8.2] - 2026-11-11
+
+### Fixed
+- Job containers now prepend the provisioned node20 bin dir to `PATH`, so
+  JavaScript actions can resolve `yarn`, `yarnpkg`, and `corepack`. This fixes
+  `setup-node@v4` failing `yarn --version` when `cache: yarn` sees a lockfile;
+  run steps already received the same path through `GITHUB_PATH`.
+
 ## [0.8.1] - 2026-11-10
 
 ### Added
