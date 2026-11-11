@@ -16,6 +16,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/dvorinka/kern/internal/actions"
 	"github.com/dvorinka/kern/internal/expressions"
+	"go.uber.org/zap"
 )
 
 const (
@@ -112,6 +114,11 @@ func (e *executor) ensureNode(ctx context.Context, using string) error {
 	release := nodeReleaseFor(using)
 	dir := e.nodeHostDir(using)
 	if _, err := os.Stat(dir + ".complete"); err == nil {
+		// Provisioned before shim support: enable once rather than force a
+		// full re-download. The probe is cheap and enable is idempotent.
+		if !shimProbe(dir) {
+			e.enableCorepackShims(ctx, dir)
+		}
 		return nil
 	}
 	archive, err := nodeArchive(release)
@@ -143,7 +150,41 @@ func (e *executor) ensureNode(ctx context.Context, using string) error {
 	if err := os.Rename(filepath.Join(tmp, root), dir); err != nil {
 		return err
 	}
+	e.enableCorepackShims(ctx, dir)
 	return os.WriteFile(dir+".complete", []byte(release+"\n"), 0o644)
+}
+
+// enableCorepackShims runs `corepack enable` inside a provisioned dist.
+// setup-* actions probe package-manager binaries (`yarn --version`) inside
+// their own node process; the shims exist only once enabled, and _node
+// mounts read-only into job containers, so they must be baked in on the
+// host at provision time. Failure is non-fatal: node itself still works.
+func (e *executor) enableCorepackShims(ctx context.Context, dir string) {
+	bin := filepath.Join(dir, "bin", "node")
+	if runtime.GOOS == "windows" {
+		bin = filepath.Join(dir, "node.exe")
+	}
+	corepack := filepath.Join(dir, "lib", "node_modules", "corepack", "dist", "corepack.js")
+	if out, err := exec.CommandContext(ctx, bin, corepack,
+		"enable", "--install-directory", filepath.Dir(bin)).CombinedOutput(); err != nil {
+		e.log.Warn("corepack enable failed; yarn/pnpm shims absent from node runtime",
+			zap.Error(err), zap.String("out", tailStr(string(out), 200)))
+	}
+}
+
+// shimProbe reports whether a provisioned dist already has the yarn shim
+// (unix bin/yarn, or the windows dist's root-level yarn.cmd/yarn).
+func shimProbe(dir string) bool {
+	for _, p := range []string{
+		filepath.Join(dir, "bin", "yarn"),
+		filepath.Join(dir, "yarn.cmd"),
+		filepath.Join(dir, "yarn"),
+	} {
+		if _, err := os.Stat(p); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // verifyDistSum checks the tarball against the SHASUMS256.txt published with
