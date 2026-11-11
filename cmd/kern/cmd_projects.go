@@ -455,6 +455,19 @@ func (c *cli) showRun(ctx context.Context, id string) error {
 				line += " (+" + dur(*j.QueuedAt, j.StartedAt) + " queue)"
 			}
 		}
+		if len(j.Metrics) > 0 {
+			var m struct {
+				CPUPct   float64 `json:"cpu_pct_peak"`
+				MemBytes int64   `json:"mem_bytes_peak"`
+				DiskPeak int64   `json:"disk_bytes_peak"`
+			}
+			if json.Unmarshal(j.Metrics, &m) == nil {
+				line += fmt.Sprintf("  cpu %.0f%% · mem %s", m.CPUPct, humanBytes(m.MemBytes))
+				if m.DiskPeak > 0 {
+					line += " · disk " + humanBytes(m.DiskPeak)
+				}
+			}
+		}
 		fmt.Println(line)
 		if j.QueueReason != "" {
 			fmt.Printf("      → queued: %s (runs-on: %s)\n", j.QueueReason, strings.Join(j.RunsOn, ", "))
