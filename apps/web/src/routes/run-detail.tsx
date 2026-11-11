@@ -237,6 +237,8 @@ function StepsPanel({
 				<span className="r">
 					{sel ? `step ${sel.number} of ${steps.length}` : `${steps.length} steps`}
 					{job.started_at && ` · ${duration(job.started_at, job.completed_at)}`}
+					{job.started_at && job.queued_at &&
+						` · queued ${duration(job.queued_at, job.started_at)}`}
 				</span>
 			</div>
 			<div className="lg">
