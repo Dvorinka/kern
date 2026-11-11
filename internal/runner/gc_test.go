@@ -284,3 +284,65 @@ func TestSweepTmpStale(t *testing.T) {
 		t.Fatal("gha-gocache removed — operator path must stay")
 	}
 }
+
+// A fetch or unpack interrupted mid-install leaves a <ver> dir with no
+// done-marker; actions report it cached and jobs fail missing_binary
+// (issue #286, ci-runner-906's empty Java toolcache). The sweep removes
+// markerless versions and the now-empty tool dirs — but never while a job
+// is active, since an in-flight install is markerless by definition.
+func TestSweepToolcacheIncomplete(t *testing.T) {
+	root := t.TempDir()
+	tc := filepath.Join(root, "_cache", "_toolcache")
+	file := func(rel string) {
+		p := filepath.Join(tc, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dir := func(rel string) {
+		if err := os.MkdirAll(filepath.Join(tc, rel), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	file("go/1.26.10/x64/bin/go")
+	file("go/1.26.10/x64.complete") // arch marker: complete
+	dir("python/3.12.0")
+	file("python/3.12.0.complete") // arch-less sibling marker: complete
+	file("Java_Temurin-Hotspot_jdk/21.0.13-9.0.LTS/x64/bin/java")
+	// markerless: evicted, leaving the tool dir empty -> also removed
+	dir("Empty_Tool") // empty tool dir: removed
+
+	a := &Agent{cfg: Config{WorkRoot: root}, log: zap.NewNop()}
+	a.sweepToolcacheIncomplete()
+
+	for _, kept := range []string{
+		"go/1.26.10",
+		"python/3.12.0",
+		"python/3.12.0.complete",
+	} {
+		if _, err := os.Stat(filepath.Join(tc, kept)); err != nil {
+			t.Errorf("%s should be kept: %v", kept, err)
+		}
+	}
+	for _, gone := range []string{
+		"Java_Temurin-Hotspot_jdk/21.0.13-9.0.LTS",
+		"Java_Temurin-Hotspot_jdk",
+		"Empty_Tool",
+	} {
+		if _, err := os.Stat(filepath.Join(tc, gone)); !os.IsNotExist(err) {
+			t.Errorf("%s should be removed", gone)
+		}
+	}
+
+	// An in-flight job freezes the sweep — its installs are markerless.
+	dir("rust/1.80.0")
+	a.active.Store(1)
+	a.sweepToolcacheIncomplete()
+	a.active.Store(0)
+	if _, err := os.Stat(filepath.Join(tc, "rust/1.80.0")); err != nil {
+		t.Error("toolcache sweep must not run while a job is active")
+	}
+}

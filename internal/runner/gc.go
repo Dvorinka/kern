@@ -125,6 +125,7 @@ const (
 func (a *Agent) diskGCLoop(ctx context.Context) {
 	a.sweepWorkspaces()
 	a.sweepBoundedCache()
+	a.sweepToolcacheIncomplete()
 	a.sweepOrphanServices(ctx)
 	a.sweepWorkspaceLinks()
 	a.pruneDangling(ctx)
@@ -138,6 +139,7 @@ func (a *Agent) diskGCLoop(ctx context.Context) {
 		case <-t.C:
 			a.sweepWorkspaces()
 			a.sweepBoundedCache()
+			a.sweepToolcacheIncomplete()
 			a.sweepOrphanServices(ctx)
 			a.sweepWorkspaceLinks()
 			a.pruneDangling(ctx)
@@ -373,6 +375,75 @@ func (a *Agent) sweepBoundedCacheTo(limit int64) {
 			zap.Int64("freed_bytes", freed), zap.Int64("remaining_bytes", total),
 			zap.Int64("cap_bytes", limit))
 	}
+}
+
+// sweepToolcacheIncomplete removes _cache/_toolcache/<tool>/<ver> dirs that
+// carry no done-marker. A fetch or unpack interrupted mid-install (disk
+// pressure, cache GC, container kill) leaves a skeleton that setup-* actions
+// still report as cached — observed on ci-runner-906, whose empty
+// Java_Temurin-Hotspot_jdk dir failed every setup-java job with
+// missing_binary: java until fixed by hand. Idle-gated like the other
+// mutating sweeps: an in-flight install is markerless by definition, so the
+// sweep must never race a running job.
+func (a *Agent) sweepToolcacheIncomplete() {
+	if a.active.Load() > 0 {
+		return
+	}
+	root := filepath.Join(a.cfg.WorkRoot, "_cache", "_toolcache")
+	tools, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	for _, tool := range tools {
+		if !tool.IsDir() {
+			continue
+		}
+		tdir := filepath.Join(root, tool.Name())
+		vers, err := os.ReadDir(tdir)
+		if err != nil {
+			continue
+		}
+		for _, ver := range vers {
+			if !ver.IsDir() {
+				continue
+			}
+			vdir := filepath.Join(tdir, ver.Name())
+			if toolcacheComplete(vdir) {
+				continue
+			}
+			if err := os.RemoveAll(vdir); err != nil {
+				a.log.Warn("toolcache sweep: remove failed", zap.String("path", vdir), zap.Error(err))
+				continue
+			}
+			a.log.Info("toolcache sweep: removed incomplete install", zap.String("path", vdir))
+		}
+		// A <tool> dir left holding only markerless versions still reads as
+		// installed to actions — drop it once nothing complete remains.
+		if rest, err := os.ReadDir(tdir); err == nil && len(rest) == 0 {
+			if err := os.Remove(tdir); err == nil {
+				a.log.Info("toolcache sweep: removed empty tool dir", zap.String("path", tdir))
+			}
+		}
+	}
+}
+
+// toolcacheComplete reports whether a <tool>/<ver> install dir carries a
+// done-marker: either an arch marker file inside (<ver>/<arch>.complete) or
+// the arch-less convention's sibling (<ver>.complete).
+func toolcacheComplete(vdir string) bool {
+	if _, err := os.Stat(vdir + ".complete"); err == nil {
+		return true
+	}
+	kids, err := os.ReadDir(vdir)
+	if err != nil {
+		return false
+	}
+	for _, k := range kids {
+		if !k.IsDir() && strings.HasSuffix(k.Name(), ".complete") {
+			return true
+		}
+	}
+	return false
 }
 
 // cacheEvictionUnit maps a file under the persistent _cache tree to the
