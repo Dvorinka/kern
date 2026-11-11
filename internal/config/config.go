@@ -30,9 +30,10 @@ type Config struct {
 	MaxJobAttempts  int
 	LogRetention    time.Duration
 	CacheMaxAge     time.Duration
-	// CacheMaxBytes caps a single actions/cache archive (KERN_CACHE_MAX_BYTES).
-	// GitHub evicts at a repo-wide 10 GiB; KERN enforces per entry at save
-	// time and refuses oversized uploads. 0 disables the cap.
+	// CacheMaxBytes caps a single actions/cache archive (KERN_CACHE_MAX_BYTES),
+	// enforced at save time; oversized uploads are refused. The default
+	// matches GitHub's own per-entry ceiling — a 1 GiB cap rejected real
+	// rust-cache saves (#290). 0 disables the cap.
 	CacheMaxBytes    int64
 	WebhookRetention time.Duration
 	AuditRetention   time.Duration
@@ -103,7 +104,7 @@ func Load() (*Config, error) {
 		MaxJobAttempts:   integer("KERN_MAX_JOB_ATTEMPTS", 3),
 		LogRetention:     duration("KERN_LOG_RETENTION", 30*24*time.Hour),
 		CacheMaxAge:      duration("KERN_CACHE_MAX_AGE", 7*24*time.Hour),
-		CacheMaxBytes:    int64(integer("KERN_CACHE_MAX_BYTES", 1<<30)),
+		CacheMaxBytes:    int64(integer("KERN_CACHE_MAX_BYTES", 10<<30)),
 		WebhookRetention: duration("KERN_WEBHOOK_RETENTION", 30*24*time.Hour),
 		AuditRetention:   duration("KERN_AUDIT_RETENTION", 365*24*time.Hour),
 		NotifyRetention:  duration("KERN_NOTIFY_RETENTION", 30*24*time.Hour),

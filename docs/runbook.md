@@ -108,7 +108,7 @@ Symptoms: jobs die with `ENOSPC` mid-step, `docker` errors, runner GC warnings.
 | `audit_events` rows | `KERN_AUDIT_RETENTION` | 365d |
 | `notify_deliveries` rows | `KERN_NOTIFY_RETENTION` | 30d |
 | Artifacts | fixed expiry | 90d |
-| Action cache entries | `KERN_CACHE_MAX_AGE` / `KERN_CACHE_MAX_BYTES` | 7d / 1 GiB |
+| Action cache entries | `KERN_CACHE_MAX_AGE` / `KERN_CACHE_MAX_BYTES` | 7d / 10 GiB |
 
 Sweeps run in the orchestrator loop; there is no manual "delete run" — retention
 is the only deletion path for logs.

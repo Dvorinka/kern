@@ -119,6 +119,6 @@ never silently ignored.
 
 ## Not implemented (tracked)
 
-- Cache paths outside the workspace; `upload-chunk-size` and other action tuning inputs (per-entry size cap exists: `KERN_CACHE_MAX_BYTES`, default 1 GiB, over-cap saves fail with a step diagnostic)
+- Cache paths outside the workspace; `upload-chunk-size` and other action tuning inputs (per-entry size cap exists: `KERN_CACHE_MAX_BYTES`, default 10 GiB, over-cap saves fail with a step diagnostic)
 - OIDC; deployment branch policy "protected branches only" (no branch-protection source)
 - Arithmetic operators (GitHub has none — parity, not a gap); job `container:` `credentials`/`ports`/`volumes`/`options`; service `volumes`

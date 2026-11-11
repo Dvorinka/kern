@@ -64,7 +64,7 @@ they bound which workflows run unmodified.
 - OIDC `id-token`, expression arithmetic (GitHub has none either), some
   edge-case function semantics — diagnostics, not silence.
 - `actions/cache`: workspace-relative paths only; per-entry size cap via
-  `KERN_CACHE_MAX_BYTES` (default 1 GiB).
+  `KERN_CACHE_MAX_BYTES` (default 10 GiB).
 
 ## Milestones not started
 
