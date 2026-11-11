@@ -156,9 +156,9 @@ func (a *Agent) diskGCLoop(ctx context.Context) {
 // one runner per docker host is the documented model (same assumption
 // hostPortLocks already makes).
 func (a *Agent) sweepOrphanServices(ctx context.Context) {
-	if a.executor() != "docker" {
-		return
-	}
+	// Host executors run services on the native docker daemon too — the
+	// same kern-svc-* leak applies; docker-less hosts no-op on the failed
+	// docker ps below.
 	out, err := exec.CommandContext(ctx, "docker", "ps", "-aq", "--filter", "name=kern-", "--format", "{{.ID}}|{{.Names}}").Output()
 	if err == nil {
 		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {

@@ -176,6 +176,11 @@ type executor struct {
 	// them alongside the service containers.
 	svcForwarders []string
 
+	// sweepOrphans removes kern-svc-*/kern-job-* containers leaked by dead
+	// jobs before this job binds host ports; wired by the agent so the
+	// executor stays daemon-agnostic in tests.
+	sweepOrphans func(context.Context)
+
 	// Service log streaming: docker logs -f per service folds into the
 	// active step's log under a service:<name> marker. currentStep is the
 	// last started step number; pending batches until a step exists.
@@ -703,12 +708,30 @@ func (e *executor) startContainer(ctx context.Context) error {
 		e.claim.Job.Image, "-c", "while true; do sleep 30; done",
 	)
 	cmd := exec.CommandContext(ctx, "docker", args...)
-	out, err := cmd.CombinedOutput()
+	out, err := cmd.Output()
 	if err != nil {
-		return fmt.Errorf("docker create: %s", strings.TrimSpace(string(out)))
+		// Output() leaves stderr on ExitError — docker create prints the
+		// container ID on stdout and diagnostics on stderr.
+		msg := strings.TrimSpace(string(out))
+		if ee, ok := err.(*exec.ExitError); ok {
+			if s := strings.TrimSpace(string(ee.Stderr)); s != "" {
+				if msg != "" {
+					msg += ": "
+				}
+				msg += s
+			}
+		}
+		return fmt.Errorf("docker create: %s", msg)
 	}
 	if err := e.docker(ctx, "start", e.container); err != nil {
 		return err
+	}
+	// The container ID is the only handle a step has for docker-network
+	// fixtures that must join the job netns — persist it like a
+	// $GITHUB_ENV write so every later step and `env.` expression sees it.
+	if id := strings.TrimSpace(string(out)); id != "" {
+		e.enc.persistKV("KERN_JOB_CONTAINER_ID", id)
+		e.enc.persistKV("KERN_JOB_CONTAINER", e.container)
 	}
 	e.shell = "/bin/bash"
 	if exec.CommandContext(ctx, "docker", "exec", e.container,

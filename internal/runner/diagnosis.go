@@ -205,6 +205,17 @@ func missingBinary(tail string) string {
 // package manager is resolved at apply time inside the container; each command
 // is a fixed template — the package name is the only variable and is regex-gated.
 func installCommands(pkg string) []string {
+	if pkg == "java" {
+		// `java` is a binary name, not a package on any distro — each manager
+		// ships the JDK under a different name. Headless variants suffice:
+		// steps need the runtime, not the demos or src.zip.
+		return []string{
+			"if command -v apt-get >/dev/null; then apt-get update -qq && apt-get install -y -qq default-jdk-headless" +
+				"; elif command -v apk >/dev/null; then apk add --no-cache openjdk21" +
+				"; elif command -v microdnf >/dev/null; then microdnf install -y java-21-openjdk-headless" +
+				"; else echo 'no supported package manager' >&2; exit 1; fi",
+		}
+	}
 	return []string{
 		"if command -v apt-get >/dev/null; then apt-get update -qq && apt-get install -y -qq " + pkg +
 			"; elif command -v apk >/dev/null; then apk add --no-cache " + pkg +

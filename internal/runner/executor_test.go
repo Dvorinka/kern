@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"encoding/base64"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -580,5 +581,37 @@ func TestJobEnvPathComposition(t *testing.T) {
 	e.host = true
 	if got, ok := e.jobEnv()["PATH"]; ok {
 		t.Fatalf("host executor must not override PATH, got %q", got)
+	}
+}
+
+// $GITHUB_ENV writes must reach later steps on the host executor too — the
+// same file-command lifecycle the container path uses (#314). A two-step
+// run proves clear→append→harvest→env-file round-trips end to end.
+func TestGithubEnvPropagatesAcrossHostSteps(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not in PATH")
+	}
+	cfg := Config{WorkRoot: t.TempDir(), Executor: "host"}
+	claim := &Claim{}
+	claim.Job.Image = "ubuntu:24.04"
+	claim.Job.ID = "env-propagation"
+	e, err := newJobExecutor(cfg, &client{http: &http.Client{}}, claim, nil, nil, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	step1 := StepSpec{Number: 1, Run: `echo "KERN_PROPAGATED=works-123" >> "$GITHUB_ENV"`}
+	step2 := StepSpec{Number: 2, Run: `test "$KERN_PROPAGATED" = "works-123"`}
+
+	concl, _, err := e.runStepBody(ctx, step1)
+	if err != nil || concl != "success" {
+		t.Fatalf("step1: concl=%q err=%v", concl, err)
+	}
+	concl, _, err = e.runStepBody(ctx, step2)
+	if err != nil || concl != "success" {
+		t.Fatalf("step2: concl=%q err=%v — GITHUB_ENV did not propagate", concl, err)
+	}
+	if got := e.enc.persisted()["KERN_PROPAGATED"]; got != "works-123" {
+		t.Fatalf("persisted KERN_PROPAGATED = %q", got)
 	}
 }

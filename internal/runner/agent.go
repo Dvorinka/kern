@@ -540,6 +540,11 @@ func (a *Agent) claimsPaused() string {
 // diskSpaceFn stubs the filesystem probe in tests.
 var diskSpaceFn = diskSpace
 
+// diskClaimResumeMarginPct is the hysteresis band above DiskMinFreePct the
+// filesystem must recover to before claims resume. Without it a volume
+// hovering at the threshold flaps claims on and off every probe.
+const diskClaimResumeMarginPct = 3.0
+
 // diskClaimPaused reports whether claims should pause because the work-root
 // filesystem has less than Config.DiskMinFreePct free (#210). The same
 // threshold drives the docker reclaim sweep in diskGCLoop — a runner that
@@ -547,7 +552,14 @@ var diskSpaceFn = diskSpace
 // requeues on a fleet that may be equally full.
 func (a *Agent) diskClaimPaused() bool {
 	free, total := diskSpaceFn(a.cfg.WorkRoot)
-	if !diskUnderPressure(free, total, a.cfg.DiskMinFreePct) {
+	// While latched, demand the higher resume threshold so boundary noise
+	// cannot oscillate the gate. DiskMinFreePct <= 0 never latches, so the
+	// Load() branch cannot resurrect a disabled check.
+	pct := a.cfg.DiskMinFreePct
+	if a.diskPaused.Load() {
+		pct += diskClaimResumeMarginPct
+	}
+	if !diskUnderPressure(free, total, pct) {
 		if a.diskPaused.CompareAndSwap(true, false) {
 			a.log.Info("disk pressure cleared: resuming claims")
 		}
@@ -697,6 +709,7 @@ func (a *Agent) runSteps(ctx context.Context, log *zap.Logger, claim *Claim) (st
 	if err != nil {
 		return "", nil, nil, err
 	}
+	exec.sweepOrphans = func(ctx context.Context) { a.sweepOrphanServices(ctx) }
 	a.envMu.RLock()
 	exec.runnerEnv = a.envOverrides
 	a.envMu.RUnlock()

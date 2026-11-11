@@ -7,7 +7,7 @@ intention.
 
 | Trust tier | Job container network | Meaning |
 | --- | --- | --- |
-| trusted / protected (same-repo pushes, PRs, dispatches) | `--network host` | Shares the runner host's netns. `localhost` in a step is the host's loopback; `docker run -p` inside steps publishes where the job can reach it (GitHub VM-runner parity). |
+| trusted / protected (same-repo pushes, PRs, dispatches) | `--network host` | Shares the runner host's netns. `localhost` in a step is the host's loopback; `docker run -p` inside steps publishes where the job can reach it (GitHub VM-runner parity). The job container itself cannot be `docker network connect`ed into a user network — it has no bridge interface — so DinD-style fixtures must publish on loopback and be reached via `127.0.0.1:<port>`; the container ID is in `$KERN_JOB_CONTAINER_ID` (name in `$KERN_JOB_CONTAINER`) for `docker inspect`/`exec` calls. |
 | pull_request (untrusted, same-repo PRs) | default docker bridge | No daemon socket, no host loopback. Read-only `GITHUB_TOKEN`; secrets withheld. |
 | fork (untrusted fork PRs) | `--network kern-ego-<job>` | Internal-only bridge plus an allowlist egress proxy. No daemon socket, no inbound reach, read-only token, no secrets. |
 

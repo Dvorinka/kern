@@ -71,6 +71,12 @@ func (e *executor) startServices(ctx context.Context) error {
 	if len(e.claim.Job.Services) == 0 {
 		return nil
 	}
+	// A service container orphaned by a dead job squats the host port this
+	// job is about to publish. Sweep before binding — the periodic GC may
+	// not have run yet, and a port collision otherwise fails the whole job.
+	if e.sweepOrphans != nil {
+		e.sweepOrphans(ctx)
+	}
 	if err := e.acquireServicePorts(ctx); err != nil {
 		return err
 	}
@@ -89,6 +95,19 @@ func (e *executor) startServices(ctx context.Context) error {
 			return fmt.Errorf("service %s: %w", svc.Name, err)
 		}
 		if err := e.startService(ctx, net, svc); err != nil {
+			if isPortBindErr(err) && e.sweepOrphans != nil {
+				// The port lock only serializes kern jobs on this runner;
+				// a foreign process or a sweep-missed orphan can still hold
+				// the bind. Clear our partial containers, sweep once more
+				// and retry the service before failing the job.
+				e.sweepOrphans(ctx)
+				e.removeServiceContainers(ctx, svc)
+				if err2 := e.startService(ctx, net, svc); err2 != nil {
+					return fmt.Errorf("service %s: %w", svc.Name, err2)
+				}
+				e.streamServiceLogs(streamCtx, svc)
+				continue
+			}
 			return fmt.Errorf("service %s: %w", svc.Name, err)
 		}
 		e.streamServiceLogs(streamCtx, svc)
@@ -215,6 +234,40 @@ func (e *executor) startService(ctx context.Context, net string, svc ClaimServic
 		return fmt.Errorf("start: %s", tailStr(string(out), 300))
 	}
 	return e.startPortForwards(ctx, svc)
+}
+
+// isPortBindErr reports whether a service start failed on a host-port bind —
+// the signature of a leaked kern-svc container or a foreign process
+// squatting the loopback port, both recoverable by sweep + retry.
+func isPortBindErr(err error) bool {
+	m := strings.ToLower(err.Error())
+	for _, sig := range []string{
+		"port is already allocated",
+		"address already in use",
+		"bind: address already in use",
+		"driver failed programming external connectivity",
+		"failed to set up container networking",
+	} {
+		if strings.Contains(m, sig) {
+			return true
+		}
+	}
+	return false
+}
+
+// removeServiceContainers force-removes every container named for this
+// service — the service itself plus any -fwd- port forwarders a partial
+// startService attempt may have left behind.
+func (e *executor) removeServiceContainers(ctx context.Context, svc ClaimService) {
+	prefix := e.serviceContainerName(svc)
+	out, err := exec.CommandContext(ctx, "docker", "ps", "-aq",
+		"--filter", "name="+prefix, "--format", "{{.ID}}").Output()
+	if err != nil {
+		return
+	}
+	for _, id := range strings.Fields(string(out)) {
+		_ = exec.CommandContext(ctx, "docker", "rm", "-f", id).Run()
+	}
 }
 
 // publishSpec normalises a workflow `ports:` entry ("5433:5432", "5432",

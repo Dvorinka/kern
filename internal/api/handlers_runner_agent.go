@@ -766,6 +766,10 @@ func classifyJobError(msg string) string {
 	case strings.Contains(m, "docker daemon"), strings.Contains(m, "error during connect"),
 		strings.Contains(m, "docker.sock: connect:"):
 		return "daemon_gone"
+	case strings.Contains(m, "port is already allocated"), strings.Contains(m, "address already in use"),
+		strings.Contains(m, "driver failed programming external connectivity"),
+		strings.Contains(m, "failed to set up container networking"):
+		return "infra"
 	case looksTransientError(msg):
 		return "network"
 	case strings.Contains(m, "timed out"), strings.Contains(m, "timeout"):
@@ -788,6 +792,11 @@ func looksTransientError(msg string) bool {
 		"status code 503", "status code 504", "temporary failure",
 		"network is unreachable", "econnreset", "no space left on device",
 		"docker daemon", "error during connect",
+		// Prepare-phase container/service failures: port squatting by a
+		// leaked kern-svc container, dead job netns, OOM-killed shim.
+		"port is already allocated", "address already in use",
+		"driver failed programming external connectivity",
+		"failed to set up container networking", "signal: killed", "oomkilled",
 	} {
 		if strings.Contains(m, sig) {
 			return true
