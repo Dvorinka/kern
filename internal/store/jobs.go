@@ -11,6 +11,11 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// claimCPUMarginPct is the cpu_percent gap required before an equally
+// job-loaded peer wins the claim tiebreak. Heartbeat CPU is a noisy
+// point sample; without a margin two saturated runners would trade claims.
+const claimCPUMarginPct = 15.0
+
 // ClaimedJob is everything a runner needs to execute a job. It deliberately excludes
 // anything the runner must not know (secrets are delivered separately, per job).
 type ClaimedJob struct {
@@ -36,7 +41,10 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 		), fleet AS MATERIALIZED (
 			-- Per-runner in-progress counts, computed once per claim instead of
 			-- once per (candidate job × peer runner) pair in the yield check.
-			SELECT r.id, r.labels, r.executor,
+			-- claims_paused/cpu_percent feed the yield rule: paused peers
+			-- cannot take work, and among equally busy peers the cooler host
+			-- wins (#310).
+			SELECT r.id, r.labels, r.executor, r.claims_paused, r.cpu_percent,
 				(SELECT count(*) FROM jobs a
 				 WHERE a.runner_id = r.id AND a.status = 'in_progress') AS load
 			FROM runners r, me
@@ -72,12 +80,33 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 				)
 			  )
 			  -- Least-loaded placement: yield to any eligible runner carrying
-			  -- fewer in-progress jobs than this one.
+			  -- fewer in-progress jobs than this one, or — at equal job
+			  -- count — to a peer whose host CPU is meaningfully cooler
+			  -- (#310). Peers that cannot take this job must not suppress
+			  -- the claim: paused runners, host executors on fork/pr
+			  -- trust, and non-docker runners while a capable peer exists.
 			  AND NOT EXISTS (
 				SELECT 1 FROM fleet o
 				WHERE o.id <> me_f.id
+				  AND o.claims_paused = ''
 				  AND j.runs_on <@ (o.labels || ARRAY['self-hosted', 'kern'])
-				  AND o.load < me_f.load
+				  AND (o.executor <> 'host' OR r.trust_level NOT IN ('fork', 'pull_request'))
+				  AND (
+					NOT j.needs_docker
+					OR 'kern-docker' = ANY(o.labels)
+					OR r.trust_level IN ('fork', 'pull_request')
+					OR NOT EXISTS (
+						SELECT 1 FROM fleet h
+						WHERE h.claims_paused = ''
+						  AND 'kern-docker' = ANY(h.labels)
+						  AND j.runs_on <@ (h.labels || ARRAY['self-hosted', 'kern'])
+					)
+				  )
+				  AND (
+					o.load < me_f.load
+					OR (o.load = me_f.load
+						AND COALESCE(o.cpu_percent, 100) < COALESCE(me_f.cpu_percent, 100) - $3)
+				  )
 			  )
 			ORDER BY j.priority DESC, j.queued_at
 			FOR UPDATE OF j SKIP LOCKED
@@ -95,7 +124,7 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 		)
 		INSERT INTO job_leases (job_id, runner_id, expires_at)
 		SELECT id, $1, now() + make_interval(secs => $2) FROM claimed
-		RETURNING job_id`, runnerID, leaseSeconds).Scan(&jobID)
+		RETURNING job_id`, runnerID, leaseSeconds, claimCPUMarginPct).Scan(&jobID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

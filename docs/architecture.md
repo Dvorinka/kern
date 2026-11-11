@@ -88,12 +88,20 @@ so job containers never need credentials.
 labels are a subset of the runner's labels, `FOR UPDATE SKIP LOCKED`, flip to
 `in_progress` with a lease, insert a `job_leases` row. A least-loaded guard
 makes a runner yield to any eligible online runner carrying fewer in-progress
-jobs — placement prefers idle runners inside the matching label set.
+jobs — placement prefers idle runners inside the matching label set. At equal
+job counts the runner also yields to a peer whose heartbeat `cpu_percent` is
+at least 15 points lower, so saturated hosts lose ties to cooler ones (#310).
+Peers that cannot take the job — claim-gate-paused runners, host executors on
+fork/pull_request trust, non-docker runners while a capable peer exists —
+never suppress a claim.
 
 Heartbeats carry a live utilization snapshot (`cpu_percent`, `mem_used_bytes`,
 `disk_free_bytes`, `active_jobs`) stored on the runners row; the runners API
-and dashboard read it back. The authoritative active-job count stays in the
-jobs table — the payload field only corroborates it.
+and dashboard read it back. Probes are per-OS: Linux reads /proc, Windows
+uses GetSystemTimes/GlobalMemoryStatusEx, macOS uses sysctl kern.cp_time +
+vm_stat. The loadavg claim gate has no Windows equivalent and stays off
+there; disk and memory gates work on all three. The authoritative active-job
+count stays in the jobs table — the payload field only corroborates it.
 
 - Lease: `KERN_JOB_LEASE` (default 90s), renewed every 20s by the runner,
   including during prepare (checkout/pull) since the first implementation let
