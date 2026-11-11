@@ -3,6 +3,33 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
+## [0.10.0] - 2026-11-11
+
+### Added
+- Host-executor services: trusted `host` jobs with a working docker
+  daemon on the machine (`kern-docker` label) now run declared
+  `services:` natively — per-job bridge, declared `ports:` published on
+  `127.0.0.1`, sibling services resolving by name. Port-less services
+  stay DNS-reachable from sibling services only; no daemon logs an
+  explicit skip instead of silently ignoring. (#304)
+- Runner labels sync on every heartbeat, so token-mode runners that
+  never re-register pick up their configured-name label and
+  `each_runner`/`runs-on: <name>` pinning works for the whole fleet.
+  (#303)
+
+### Fixed
+- Agent panic on failed action pre-resolution: `preFailed` was written
+  on every resolution error path but never initialised — a transient
+  action fetch failure panicked the entire agent mid-job and killed
+  in-flight step processes (the intermittent Windows-runner
+  `assignment to entry in nil map` crashes). (#305)
+- `overLoaded()` warned on every heartbeat under sustained load; the
+  gate now latches and logs transitions like the disk/memory gates.
+  (#303)
+- Daemon-death classification no longer reports `daemon_gone` on hosts
+  with no docker binary at all — a job's own docker-client error stays
+  user error when the host never promised a daemon. (#303)
+
 ## [0.9.0] - 2026-11-11
 
 ### Added
