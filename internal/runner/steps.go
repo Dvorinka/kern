@@ -70,7 +70,7 @@ func (e *executor) runStep(ctx context.Context, step StepSpec) (string, error) {
 		if stepErr != nil {
 			errText = stepErr.Error()
 		}
-		diag = diagnose(step, code, e.lastTail, errText, e.jobMemoryLimit(), dockerAvailable)
+		diag = diagnose(step, code, e.lastTail, errText, e.jobMemoryLimit(), hostDaemonAlive)
 		// Watchdog kills outrank the log-based rules: a hung or quota-breaching
 		// step's tail is whatever noise preceded the kill.
 		switch {

@@ -306,6 +306,10 @@ type HostMetrics struct {
 	// ClaimsPaused is the runner's live claim-gate state: '' while claiming,
 	// comma-joined engaged gates (disk,memory,overload) otherwise.
 	ClaimsPaused string `json:"claims_paused"`
+	// Labels is the runner's advertised label set — nil means "not
+	// reported" (pre-label-sync runner), and the store keeps the row's
+	// existing labels.
+	Labels []string `json:"labels"`
 }
 
 type Secret struct {
