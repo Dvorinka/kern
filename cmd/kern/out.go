@@ -44,6 +44,25 @@ func rel(t *time.Time) string {
 
 func relT(t time.Time) string { return rel(&t) }
 
+// dur renders a start→end span; nil end means "still running".
+func dur(start time.Time, end *time.Time) string {
+	e := time.Now()
+	if end != nil {
+		e = *end
+	}
+	d := e.Sub(start)
+	switch {
+	case d < 0:
+		return "0s"
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
+	default:
+		return fmt.Sprintf("%dh%02dm", int(d.Hours()), int(d.Minutes())%60)
+	}
+}
+
 func humanBytes(n int64) string {
 	const unit = 1024
 	if n < unit {

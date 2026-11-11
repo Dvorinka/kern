@@ -449,6 +449,12 @@ func (c *cli) showRun(ctx context.Context, id string) error {
 		if j.Attempt > 1 {
 			line += fmt.Sprintf("  attempt %d", j.Attempt)
 		}
+		if j.StartedAt != nil {
+			line += "  " + dur(*j.StartedAt, j.CompletedAt)
+			if j.QueuedAt != nil {
+				line += " (+" + dur(*j.QueuedAt, j.StartedAt) + " queue)"
+			}
+		}
 		fmt.Println(line)
 		if j.QueueReason != "" {
 			fmt.Printf("      → queued: %s (runs-on: %s)\n", j.QueueReason, strings.Join(j.RunsOn, ", "))
@@ -465,7 +471,11 @@ func (c *cli) showRun(ctx context.Context, id string) error {
 			case "cancelled":
 				mark = "!"
 			}
-			fmt.Printf("    %s %-36s %s\n", mark, st.Name, st.Status)
+			stepLine := fmt.Sprintf("    %s %-36s %s", mark, st.Name, st.Status)
+			if st.StartedAt != nil {
+				stepLine += "  " + dur(*st.StartedAt, st.FinishedAt)
+			}
+			fmt.Println(stepLine)
 			if len(st.Diagnosis) > 0 {
 				var d struct {
 					Kind        string `json:"kind"`
