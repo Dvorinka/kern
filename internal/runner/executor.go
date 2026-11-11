@@ -104,7 +104,11 @@ type executor struct {
 	// shell is the in-container interpreter; bash when present, sh otherwise
 	// (GitHub runners fall back the same way — e.g. alpine images).
 	shell string
-	enc   *envBuilder
+	// imagePath is the job image's baked-in PATH, probed at container
+	// create. The jobEnv PATH override must preserve it — toolchain images
+	// like golang: add /usr/local/go/bin on top of the base list.
+	imagePath string
+	enc       *envBuilder
 	// stepEnvExtra holds the multi-line vars docker's env-file cannot carry;
 	// set per step by writeStepEnv and passed as -e args.
 	stepEnvExtra map[string]string
@@ -512,6 +516,24 @@ func (e *executor) imageExists(ctx context.Context, image string) bool {
 	return exec.CommandContext(ctx, "docker", "image", "inspect", image).Run() == nil
 }
 
+// imageEnvPath reads the PATH baked into the job image's config env.
+// "" when the image declares none or the probe fails — callers fall back
+// to the standard list.
+func (e *executor) imageEnvPath(ctx context.Context) string {
+	out, err := exec.CommandContext(ctx, "docker", "image", "inspect",
+		"--format", "{{range .Config.Env}}{{println .}}{{end}}",
+		e.claim.Job.Image).Output()
+	if err != nil {
+		return ""
+	}
+	for _, kv := range strings.Split(string(out), "\n") {
+		if v, ok := strings.CutPrefix(kv, "PATH="); ok {
+			return v
+		}
+	}
+	return ""
+}
+
 // imageUserHome reports the home directory of uid 1000 in the job image's
 // /etc/passwd — what getpwuid(3) returns inside the container. JVM tools
 // (Gradle, Maven, Java itself) resolve user.home this way and ignore $HOME.
@@ -643,6 +665,7 @@ func (e *executor) startContainer(ctx context.Context) error {
 	if eventPath != "" {
 		args = append(args, "-v", eventPath+":"+containerEventPath+":ro")
 	}
+	e.imagePath = e.imageEnvPath(ctx)
 	args = append(args, e.dockerEnvArgs()...)
 	if e.egressRestricted() {
 		for k, v := range e.egressEnv() {
@@ -736,8 +759,12 @@ func (e *executor) jobEnv() map[string]string {
 		// yarnpkg and corepack shims resolve inside JS actions too —
 		// setup-node@v4 runs `yarn --version` on seeing a lockfile and
 		// hard-fails when PATH lacks it (the per-step env file only
-		// covers run steps, not the action's own process).
-		"PATH": e.nodeBinDir("node20") + ":/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		// covers run steps, not the action's own process). The tail is
+		// the image's own PATH — docker -e replaces it wholesale, so a
+		// fixed base list would break toolchain images (golang:'s
+		// /usr/local/go/bin).
+		"PATH": e.nodeBinDir("node20") + ":" + defaultStr(e.imagePath,
+			"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"),
 		// RUNNER_TEMP must be exec-allowed: setup-* actions extract and run
 		// installers there, and the container's /tmp tmpfs is noexec.
 		"RUNNER_TEMP": e.tmpPath(),
@@ -789,6 +816,12 @@ func (e *executor) jobEnv() map[string]string {
 		"GIT_CONFIG_COUNT":   "1",
 		"GIT_CONFIG_KEY_0":   "safe.directory",
 		"GIT_CONFIG_VALUE_0": "*",
+	}
+	// Host steps inherit os.Environ (hostStepCmd) plus PATH_LINES; a fixed
+	// PATH here would drop toolchain dirs the runner image doesn't control
+	// (/opt/homebrew/bin, /usr/local/go/bin).
+	if e.host {
+		delete(env, "PATH")
 	}
 	// Operator-managed runner env fills keys the system env doesn't own —
 	// app values beat container/env-file defaults (jobEnv goes out as docker

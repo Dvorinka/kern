@@ -1,6 +1,8 @@
 package runner
 
 import (
+	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
 
@@ -69,5 +71,21 @@ func TestNodeArchive(t *testing.T) {
 	}
 	if archive != want {
 		t.Errorf("archive = %q, want %q", archive, want)
+	}
+}
+
+func TestShimProbe(t *testing.T) {
+	dir := t.TempDir()
+	if shimProbe(dir) {
+		t.Fatal("empty dir reported shims")
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bin", "yarn"), []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !shimProbe(dir) {
+		t.Fatal("bin/yarn not detected")
 	}
 }
