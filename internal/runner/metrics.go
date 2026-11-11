@@ -169,6 +169,11 @@ type jobMetrics struct {
 	CPUPeakPct    float64 `json:"cpu_pct_peak,omitempty"`
 	MemPeakBytes  int64   `json:"mem_bytes_peak,omitempty"`
 	DiskPeakBytes int64   `json:"disk_bytes_peak,omitempty"`
+	// EgressBytes totals the fork-tier proxy's NetIO. Every proxied byte
+	// crosses the proxy twice (job leg + internet leg), so RX and TX both
+	// approximate the real total; the larger wins. Untrusted traffic is the
+	// only traffic metered — trusted jobs have no proxy.
+	EgressBytes int64 `json:"egress_bytes,omitempty"`
 }
 
 func (m *jobMetrics) observeDisk(b int64) {
@@ -176,6 +181,14 @@ func (m *jobMetrics) observeDisk(b int64) {
 	defer m.mu.Unlock()
 	if b > m.DiskPeakBytes {
 		m.DiskPeakBytes = b
+	}
+}
+
+func (m *jobMetrics) observeEgress(rx, tx int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if v := max(rx, tx); v > m.EgressBytes {
+		m.EgressBytes = v
 	}
 }
 
@@ -194,7 +207,7 @@ func (m *jobMetrics) observe(cpu float64, mem int64) {
 func (m *jobMetrics) json() json.RawMessage {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.CPUPeakPct == 0 && m.MemPeakBytes == 0 {
+	if m.CPUPeakPct == 0 && m.MemPeakBytes == 0 && m.EgressBytes == 0 {
 		return nil
 	}
 	b, _ := json.Marshal(m)
@@ -210,6 +223,10 @@ func (e *executor) startMetricsSampler(ctx context.Context) {
 	}
 	m := &jobMetrics{}
 	e.metrics = m
+	proxy := ""
+	if e.egressRestricted() {
+		proxy = e.egressProxyName()
+	}
 	sample := func() {
 		out, err := exec.CommandContext(ctx, "docker", "stats", "--no-stream",
 			"--format", "{{.CPUPerc}} {{.MemUsage}}", e.container).Output()
@@ -218,6 +235,12 @@ func (e *executor) startMetricsSampler(ctx context.Context) {
 		}
 		cpu, mem := parseDockerStats(string(out))
 		m.observe(cpu, mem)
+		if proxy != "" {
+			if pout, perr := exec.CommandContext(ctx, "docker", "stats", "--no-stream",
+				"--format", "{{.NetIO}}", proxy).Output(); perr == nil {
+				m.observeEgress(parseNetIO(string(pout)))
+			}
+		}
 	}
 	sample()
 	go func() {
@@ -242,6 +265,17 @@ func parseDockerStats(s string) (float64, int64) {
 	}
 	cpu, _ := strconv.ParseFloat(strings.TrimSuffix(fields[0], "%"), 64)
 	return cpu, parseHumanBytes(fields[1])
+}
+
+// parseNetIO reads docker's "1.23MiB / 4.56MiB" cumulative network counters
+// into (rx, tx) bytes.
+func parseNetIO(s string) (int64, int64) {
+	parts := strings.Split(s, "/")
+	if len(parts) != 2 {
+		return 0, 0
+	}
+	return parseHumanBytes(strings.TrimSpace(parts[0])),
+		parseHumanBytes(strings.TrimSpace(parts[1]))
 }
 
 var humanScale = map[string]float64{

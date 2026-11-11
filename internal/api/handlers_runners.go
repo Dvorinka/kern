@@ -27,7 +27,13 @@ func (s *Server) listRunners(c *gin.Context) {
 	}
 	type runnerView struct {
 		store.Runner
-		ActiveJobs int `json:"active_jobs"`
+		ActiveJobs     int   `json:"active_jobs"`
+		Egress24hBytes int64 `json:"egress_24h_bytes"`
+	}
+	egress, err := s.Store.RunnerEgress24h(c.Request.Context(), user.OrgID)
+	if err != nil {
+		s.Log.Warn("egress totals lookup failed", zap.Error(err))
+		egress = map[uuid.UUID]int64{}
 	}
 	out := make([]runnerView, 0, len(runners))
 	for _, r := range runners {
@@ -35,7 +41,7 @@ func (s *Server) listRunners(c *gin.Context) {
 		if err != nil {
 			s.Log.Warn("active jobs lookup failed", zap.String("runner", r.Name), zap.Error(err))
 		}
-		out = append(out, runnerView{Runner: r, ActiveJobs: len(jobs)})
+		out = append(out, runnerView{Runner: r, ActiveJobs: len(jobs), Egress24hBytes: egress[r.ID]})
 	}
 	c.JSON(http.StatusOK, gin.H{"runners": out})
 }

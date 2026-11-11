@@ -161,6 +161,8 @@ export function RunnersPage() {
 											{r.hostname ? ` · ${r.hostname}` : ""}
 											{r.geo_city ? ` · ${r.geo_city}` : ""}
 											{` · ${r.version || "dev"}`}
+											{(r.egress_24h_bytes ?? 0) > 0 &&
+												` · 24h egress ${bytes(r.egress_24h_bytes)}`}
 										</small>
 									</div>
 									<div className={`slots ${r.status === "offline" ? "off" : ""}`}>
