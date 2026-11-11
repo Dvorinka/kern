@@ -31,6 +31,32 @@ func TestLabelsDarwin(t *testing.T) {
 	}
 }
 
+// The runner's name rides as a label so jobs can pin a host — prime
+// fan-outs and operator drills. Empty names add nothing; a name that is
+// already a label dedupes.
+func TestLabelsName(t *testing.T) {
+	a := &Agent{cfg: Config{Executor: "docker", Name: "ci-runner-901"}}
+	if !hasLabel(a.labelsFor("linux", "amd64"), "ci-runner-901") {
+		t.Error("runner name missing from labels")
+	}
+	a = &Agent{cfg: Config{Executor: "docker", Name: "  "}}
+	for _, l := range a.labelsFor("linux", "amd64") {
+		if l == "" || l == "  " {
+			t.Errorf("blank name leaked into labels: %v", a.labelsFor("linux", "amd64"))
+		}
+	}
+	a = &Agent{cfg: Config{Executor: "docker", Name: "ubuntu-latest"}}
+	n := 0
+	for _, l := range a.labelsFor("linux", "amd64") {
+		if l == "ubuntu-latest" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("name colliding with a label should dedupe, got %d", n)
+	}
+}
+
 func TestLabelsLinux(t *testing.T) {
 	// docker executor + docker daemon reachable: the docker label is legal
 	// on linux; macos never appears regardless.

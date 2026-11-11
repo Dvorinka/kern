@@ -83,6 +83,12 @@ type CreateRunParams struct {
 	// HoldForApproval parks the run in awaiting_approval: jobs stay 'waiting'
 	// and nothing is promoted until ApproveRunHold releases it.
 	HoldForApproval bool
+	// EachRunner fans every job seed into one pinned copy per online runner
+	// whose labels cover its runs-on — prime/cache-warming runs. RunnerNames,
+	// when set, limits the fan-out to those runner names (auto-prime fired by
+	// a fresh registration pins just the new runner).
+	EachRunner  bool
+	RunnerNames []string
 }
 
 // CreateRun persists a run and its compiled jobs atomically. Run numbers are allocated

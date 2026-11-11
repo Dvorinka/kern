@@ -258,9 +258,19 @@ func (a *Agent) labelsFor(goos, arch string) []string {
 	if a.executor() == "host" && a.dockerOK() {
 		base = append(base, "kern-docker")
 	}
+	// The runner's own name rides as a label so runs can pin a job to a
+	// specific host — prime/cache-warming fan-outs and operator drills.
 	seen := map[string]bool{}
-	out := make([]string, 0, len(base)+len(a.cfg.Labels))
-	for _, l := range append(base, a.cfg.Labels...) {
+	out := make([]string, 0, len(base)+len(a.cfg.Labels)+1)
+	for _, l := range append(base, a.cfg.Name) {
+		l = strings.TrimSpace(l)
+		if l == "" || seen[l] {
+			continue
+		}
+		seen[l] = true
+		out = append(out, l)
+	}
+	for _, l := range a.cfg.Labels {
 		l = strings.TrimSpace(l)
 		if l == "" || seen[l] {
 			continue

@@ -290,6 +290,8 @@ type settingsRequest struct {
 	NotifyURL           *string `json:"notify_url"`
 	ArtifactQuotaMB     *int64  `json:"artifact_quota_mb"`
 	MaxTransientRetries *string `json:"max_transient_retries"`
+	PrimeWorkflow       *string `json:"prime_workflow"`
+	PrimeAuto           string  `json:"prime_auto"`
 }
 
 // orgSettingsRequest accepts either key. A self_heal-only body, which the
@@ -451,6 +453,8 @@ func (s *Server) getProjectSettings(c *gin.Context) {
 		"artifact_quota_mb":     settingsValue(raw, "artifact_quota_mb", "0"),
 		"artifact_bytes":        s.projectArtifactBytes(c, p.ID),
 		"max_transient_retries": settingsValue(raw, "max_transient_retries", "inherit"),
+		"prime_workflow":        settingsValue(raw, "prime_workflow", ""),
+		"prime_auto":            settingsValue(raw, "prime_auto", "off"),
 	})
 }
 
@@ -517,8 +521,8 @@ func (s *Server) putProjectSettings(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_body", "invalid JSON body")
 		return
 	}
-	if req.SelfHeal == "" && req.ForkGate == "" && req.PrTrust == "" && req.IconPath == nil && req.NotifyURL == nil && req.ArtifactQuotaMB == nil && req.MaxTransientRetries == nil {
-		fail(c, http.StatusBadRequest, "invalid_body", "self_heal, fork_gate, pr_trust, icon_path, notify_url, artifact_quota_mb or max_transient_retries is required")
+	if req.SelfHeal == "" && req.ForkGate == "" && req.PrTrust == "" && req.IconPath == nil && req.NotifyURL == nil && req.ArtifactQuotaMB == nil && req.MaxTransientRetries == nil && req.PrimeWorkflow == nil && req.PrimeAuto == "" {
+		fail(c, http.StatusBadRequest, "invalid_body", "self_heal, fork_gate, pr_trust, icon_path, notify_url, artifact_quota_mb, max_transient_retries, prime_workflow or prime_auto is required")
 		return
 	}
 	writes := map[string]string{}
@@ -585,6 +589,35 @@ func (s *Server) putProjectSettings(c *gin.Context) {
 		}
 		writes["max_transient_retries"] = v
 	}
+	if req.PrimeWorkflow != nil {
+		v := strings.TrimSpace(*req.PrimeWorkflow)
+		if v != "" {
+			wfs, werr := s.Store.Workflows(c.Request.Context(), p.ID)
+			if werr != nil {
+				s.internalError(c, werr)
+				return
+			}
+			found := false
+			for _, w := range wfs {
+				if w.Path == v {
+					found = true
+					break
+				}
+			}
+			if !found {
+				fail(c, http.StatusBadRequest, "invalid_body", "prime_workflow must be a synced workflow path in this project")
+				return
+			}
+		}
+		writes["prime_workflow"] = v // empty string clears the prime workflow
+	}
+	if req.PrimeAuto != "" {
+		if req.PrimeAuto != "on" && req.PrimeAuto != "off" {
+			fail(c, http.StatusBadRequest, "invalid_body", "prime_auto must be on or off")
+			return
+		}
+		writes["prime_auto"] = req.PrimeAuto
+	}
 	for k, v := range writes {
 		if err := s.Store.PutProjectSetting(c.Request.Context(), p.ID, k, v); err != nil {
 			s.internalError(c, err)
@@ -605,6 +638,12 @@ func (s *Server) putProjectSettings(c *gin.Context) {
 	}
 	if _, ok := writes["max_transient_retries"]; ok {
 		resp["max_transient_retries"] = *req.MaxTransientRetries
+	}
+	if _, ok := writes["prime_workflow"]; ok {
+		resp["prime_workflow"] = *req.PrimeWorkflow
+	}
+	if _, ok := writes["prime_auto"]; ok {
+		resp["prime_auto"] = req.PrimeAuto
 	}
 	c.JSON(http.StatusOK, resp)
 }

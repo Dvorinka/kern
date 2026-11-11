@@ -37,7 +37,7 @@ Projects:
 Runs:
   runs list [--status S] [--limit N] [--ref R|BRANCH] [--pr N] [--workflow W] [--classification C]
   runs show <run-id>
-  runs trigger [<project>] <workflow-id|path|name> [--event E] [--ref R] [--sha S] [--inputs JSON]
+  runs trigger [<project>] <workflow-id|path|name> [--event E] [--ref R] [--sha S] [--inputs JSON] [--each-runner]
   runs cancel|approve|rerun <run-id>
   runs logs <run-id> [--job KEY] [--step N] [--follow] [--out DIR]
   runs wait <run-id> [--interval 5s] [--timeout 30m]   block until the run concludes
@@ -105,7 +105,7 @@ func commandUsage(name string) string {
   runs show <run-id>                  run + job/step detail (short ids work)
   runs wait <run-id> [--interval 5s] [--timeout 30m]
   runs trigger [<project>] <workflow> [--event E] [--ref R] [--sha S]
-            [--inputs '{"k":"v"}']
+            [--inputs '{"k":"v"}'] [--each-runner]
   runs cancel|approve|rerun <run-id>
   runs logs <run-id> [--job KEY] [--step N] [--follow] [--out DIR]
   runs remediate <job-id> --step N     approve a remediation proposal

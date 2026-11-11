@@ -217,6 +217,12 @@ func (o *Orchestrator) StartRun(ctx context.Context, p store.CreateRunParams) (s
 	if err != nil {
 		return store.Run{}, err
 	}
+	if p.EachRunner {
+		seeds, err = o.expandEachRunner(ctx, p.ProjectID, seeds, p.RunnerNames)
+		if err != nil {
+			return store.Run{}, err
+		}
+	}
 	run, err := o.Store.CreateRun(ctx, p, seeds)
 	if err != nil {
 		return store.Run{}, err
