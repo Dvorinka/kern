@@ -24,7 +24,11 @@ func (e *executor) startDiskSampler(ctx context.Context) {
 		return
 	}
 	go func() {
-		t := time.NewTicker(30 * time.Second)
+		// Adaptive cadence (#333): a slow 30s poll lets a fast writer blow
+		// through ENOSPC between samples. Tighten to 5s once usage passes
+		// 70% of the budget; the breach check stays idempotent.
+		interval := 30 * time.Second
+		t := time.NewTicker(interval)
 		defer t.Stop()
 		for {
 			select {
@@ -38,6 +42,10 @@ func (e *executor) startDiskSampler(ctx context.Context) {
 			}
 			if e.metrics != nil {
 				e.metrics.observeDisk(used)
+			}
+			if interval == 30*time.Second && used > budget*7/10 {
+				interval = 5 * time.Second
+				t.Reset(interval)
 			}
 			if used <= budget {
 				continue

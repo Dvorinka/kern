@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -350,5 +351,17 @@ func TestSweepToolcacheIncomplete(t *testing.T) {
 	a.active.Store(0)
 	if _, err := os.Stat(filepath.Join(tc, "rust/1.80.0")); err != nil {
 		t.Error("toolcache sweep must not run while a job is active")
+	}
+}
+
+// #333: BuildKit keep-storage renders a default and honors the config cap.
+func TestBuildxKeep(t *testing.T) {
+	a := &Agent{}
+	if got := a.buildxKeep(); got != fmt.Sprint(20<<30) {
+		t.Fatalf("default keep = %q", got)
+	}
+	a.cfg.BuildxKeepBytes = 5 << 30
+	if got := a.buildxKeep(); got != fmt.Sprint(5<<30) {
+		t.Fatalf("keep = %q", got)
 	}
 }
