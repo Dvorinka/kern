@@ -109,6 +109,13 @@ func diagnose(step StepSpec, exitCode int, logTail, stepErr, jobMemory string, d
 	case strings.Contains(lower, "no space left on device"):
 		return fail("disk_full", "The job container ran out of disk space",
 			"free disk on the runner host or raise the work-root quota")
+	case strings.Contains(lower, "resource not accessible by integration"):
+		// The per-run GITHUB_TOKEN hit an endpoint its installation lacks:
+		// most often `gh workflow run` needing actions:write (#322). The
+		// manifest grant exists only for apps created after it shipped.
+		return fail("github_token_scope",
+			"GITHUB_TOKEN lacks the permission this call needs — the GitHub App was installed without the required scope",
+			"grant the app the missing permission (e.g. Actions: write for workflow dispatch) in its GitHub settings, or declare a narrower permissions: ceiling")
 	case strings.Contains(lower, "installation not allowed to write"):
 		// GHCR refuses GitHub App installation tokens outright — the only
 		// GITHUB_TOKEN a KERN run can mint. The fix is a credential, not a
@@ -152,6 +159,14 @@ func diagnose(step StepSpec, exitCode int, logTail, stepErr, jobMemory string, d
 				"Suggested fix: " + d.Suggestion
 			d.Fixable = true
 			d.Remediation = &remediation{Fix: installCommands(pkg)}
+			if pkg == "gh" {
+				// gh is not in Debian/Ubuntu main repos; apt remediation
+				// fails. The kern baseline image ships it.
+				d.Suggestion = "use the kern baseline image (KERN_DEFAULT_IMAGE=ghcr.io/dvorinka/kern-ubuntu:24.04) or install gh from cli.github.com in a prior step"
+				d.AgentPrompt = "CI step failed: `gh` is not installed in the container. Suggested fix: " + d.Suggestion
+				d.Fixable = false
+				d.Remediation = nil
+			}
 		}
 		return d
 	case strings.Contains(lower, "could not resolve host") ||
