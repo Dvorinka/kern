@@ -219,8 +219,19 @@ func TestLooksTransientError(t *testing.T) {
 		}
 	}
 	if !transientRetryKinds["network"] || !transientRetryKinds["oom"] ||
-		!transientRetryKinds["daemon_gone"] || transientRetryKinds["script_failure"] {
-		t.Error("transientRetryKinds must cover network+oom+daemon_gone and exclude script_failure")
+		!transientRetryKinds["daemon_gone"] || !transientRetryKinds["disk_full"] ||
+		!transientRetryKinds["disk_quota"] || transientRetryKinds["script_failure"] {
+		t.Error("transientRetryKinds must cover network+oom+daemon_gone+disk_full+disk_quota and exclude script_failure")
+	}
+	// Prepare-phase disk deaths carry no step diagnosis: they must classify
+	// (and therefore retry) as disk_full, not fall into the network branch.
+	for _, msg := range []string{
+		"runner disk full: 42 MiB free",
+		"job workspace exceeded disk_quota",
+	} {
+		if got := classifyJobError(msg); got != "disk_full" || !transientRetryKinds[got] {
+			t.Errorf("classifyJobError(%q) = %q, want retryable disk_full", msg, got)
+		}
 	}
 	if got := classifyJobError("create container: Cannot connect to the Docker daemon"); got != "daemon_gone" {
 		t.Errorf("classifyJobError daemon = %q", got)
