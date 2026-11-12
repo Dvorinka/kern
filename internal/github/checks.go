@@ -24,6 +24,11 @@ type CheckRun struct {
 	// step's log excerpt so Checks API consumers see the cause without
 	// opening KERN (#324). GitHub caps it at 64 KiB.
 	Text string
+	// StartedAt/CompletedAt override the server-clock stamps GitHub
+	// otherwise applies — a mid-run update would reset started_at each
+	// PATCH without them (#331).
+	StartedAt   *time.Time
+	CompletedAt *time.Time
 	// Annotations are step annotations posted with the run's terminal update.
 	// GitHub accepts at most 50 per request and appends across updates; the
 	// first chunk rides the upsert body, the rest follow as PATCHes.
@@ -136,13 +141,23 @@ func (in CheckRun) body(create bool) map[string]any {
 		out["head_sha"] = in.HeadSHA
 		out["external_id"] = in.ExternalID
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := time.Now().UTC()
 	switch in.Status {
 	case "in_progress":
-		out["started_at"] = now
+		at := now
+		if in.StartedAt != nil {
+			at = *in.StartedAt
+		}
+		out["started_at"] = at.Format(time.RFC3339)
 	case "completed":
 		out["conclusion"] = in.Conclusion
-		out["completed_at"] = now
+		out["completed_at"] = now.Format(time.RFC3339)
+		if in.CompletedAt != nil {
+			out["completed_at"] = in.CompletedAt.UTC().Format(time.RFC3339)
+		}
+		if in.StartedAt != nil {
+			out["started_at"] = in.StartedAt.UTC().Format(time.RFC3339)
+		}
 	}
 	return out
 }
