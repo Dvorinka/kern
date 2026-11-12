@@ -305,7 +305,7 @@ func (s *Server) postJobCheck(ctx context.Context, run store.Run, job store.Job,
 	if status == "completed" && (conclusion == "failure" || conclusion == "timed_out") {
 		text = s.checkLogExcerpt(ctx, []store.Job{job})
 	}
-	summary, title := jobCheckNarrative(ctx, s, run, job, name, state, conclusion)
+	summary, title := jobCheckNarrative(ctx, s, run, job, name, status, conclusion)
 	if err := cl.UpsertCheckRun(ctx, repo, github.CheckRun{
 		Name: "kern/" + run.WorkflowName + " / " + name, HeadSHA: run.SHA,
 		Status: status, Conclusion: conclusion,
@@ -324,10 +324,10 @@ func (s *Server) postJobCheck(ctx context.Context, run store.Run, job store.Job,
 // running step plus a median-history ETA. Terminal states keep the old
 // one-line summary — the log excerpt in text does the talking there.
 func jobCheckNarrative(ctx context.Context, s *Server, run store.Run,
-	job store.Job, name, state, conclusion string) (summary, title string) {
-	title = name + ": " + jobCheckTitle(state, conclusion)
+	job store.Job, name, status, conclusion string) (summary, title string) {
+	title = name + ": " + jobCheckTitle(status, conclusion)
 	summary = "KERN job " + name + "."
-	if state == "completed" || s.Store == nil {
+	if status == "completed" || s.Store == nil {
 		return summary, title
 	}
 	if len(job.Steps) == 0 {
@@ -340,7 +340,7 @@ func jobCheckNarrative(ctx context.Context, s *Server, run store.Run,
 		med = m[job.JobKey]
 	}
 	p := jobProgress(job, med, time.Now())
-	switch status, _ := jobCheck(state, job); status {
+	switch status {
 	case "queued":
 		summary = fmt.Sprintf("KERN job %s — queued %s.", name, fmtSeconds(p.queueWait))
 	case "in_progress":
