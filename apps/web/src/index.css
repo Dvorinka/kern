@@ -3194,6 +3194,28 @@ dl.rkv dd {
 		border-radius: 11px;
 	}
 }
+@media (max-width: 640px) {
+	/* Phone: the action row drops under the title instead of clipping
+	   off the right edge (New project / Add secret / Add environment). */
+	.ph {
+		flex-wrap: wrap;
+	}
+	.pha {
+		margin-left: 0;
+		width: 100%;
+		justify-content: flex-start;
+	}
+	/* Card headers squeeze their sub into a sliver between the title and
+	   the action button — let them wrap too. */
+	.phead {
+		flex-wrap: wrap;
+	}
+	.phead .r {
+		margin-left: 0;
+		width: 100%;
+		flex-wrap: wrap;
+	}
+}
 
 .navp .nlv {
 	width: 8px;

@@ -46,25 +46,25 @@ export function LoginPage() {
 					<svg viewBox="0 0 400 300" aria-hidden="true">
 						<defs>
 							<pattern id="pb" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-								<rect width="6" height="6" fill="#000" />
-								<rect width="2.5" height="6" fill="#fff" />
+								<rect width="6" height="6" fill="var(--ink)" />
+								<rect width="2.5" height="6" fill="var(--paper)" />
 							</pattern>
 							<pattern id="pw" width="7" height="7" patternUnits="userSpaceOnUse">
-								<rect width="7" height="7" fill="#000" />
-								<circle cx="3.5" cy="3.5" r="1.7" fill="#fff" />
+								<rect width="7" height="7" fill="var(--ink)" />
+								<circle cx="3.5" cy="3.5" r="1.7" fill="var(--paper)" />
 							</pattern>
 						</defs>
-						<g fill="none" stroke="#fff" strokeWidth="5" strokeLinecap="round">
+						<g fill="none" stroke="var(--paper)" strokeWidth="5" strokeLinecap="round">
 							<path d="M60 150 H150" />
 							<path d="M190 150 H215 C250 150 250 60 285 60 H320" />
 							<path d="M190 150 H320" />
 							<path d="M190 150 H215 C250 150 250 240 285 240 H320" />
 						</g>
-						<circle cx="50" cy="150" r="20" fill="#fff" />
-						<circle cx="160" cy="150" r="30" fill="#fff" />
-						<circle cx="338" cy="60" r="20" fill="#fff" />
-						<circle cx="338" cy="150" r="18" fill="url(#pb)" stroke="#fff" strokeWidth="4" />
-						<circle cx="338" cy="240" r="18" fill="url(#pw)" stroke="#fff" strokeWidth="4" />
+						<circle cx="50" cy="150" r="20" fill="var(--paper)" />
+						<circle cx="160" cy="150" r="30" fill="var(--paper)" />
+						<circle cx="338" cy="60" r="20" fill="var(--paper)" />
+						<circle cx="338" cy="150" r="18" fill="url(#pb)" stroke="var(--paper)" strokeWidth="4" />
+						<circle cx="338" cy="240" r="18" fill="url(#pw)" stroke="var(--paper)" strokeWidth="4" />
 					</svg>
 				</div>
 				<form className="lbox" onSubmit={submit}>
