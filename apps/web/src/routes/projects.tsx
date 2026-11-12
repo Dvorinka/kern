@@ -361,7 +361,7 @@ export function ProjectDetailPage() {
         }
       />
       <div className="panel mb-4 p-5">
-        <div className="grid grid-cols-2 gap-x-8 md:grid-cols-3">
+        <div className="grid grid-cols-1 gap-x-8 sm:grid-cols-2 md:grid-cols-3">
           <KV k="Slug" v={project.slug} mono />
           <KV k="Provider" v={project.provider} />
           <KV k="Default branch" v={project.default_branch} mono />

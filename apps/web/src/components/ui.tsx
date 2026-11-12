@@ -145,10 +145,13 @@ export function Spinner() {
 // markup directly; for side-by-side rows use the .kv CSS pattern.
 export function KV({ k, v, mono }: { k: string; v: ReactNode; mono?: boolean }) {
 	return (
-		<div className="py-1">
+		<div className="min-w-0 py-1">
 			<div className="text-[11px] text-[var(--faint)]">{k}</div>
 			<div
-				className={cn("mt-0.5 text-xs text-[var(--ink)]", mono && "font-mono text-[var(--dim)]")}
+				className={cn(
+					"mt-0.5 text-xs text-[var(--ink)]",
+					mono && "font-mono break-all text-[var(--dim)]",
+				)}
 			>
 				{v}
 			</div>

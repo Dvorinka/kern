@@ -103,8 +103,8 @@ export function RunnersPage() {
 					</Button>
 				</Card>
 			)}
-			<Row>
-				<span className="text-xs text-[var(--dim)]">Self-heal (org):</span>
+			<Row className="flex-wrap">
+				<span className="whitespace-nowrap text-xs text-[var(--dim)]">Self-heal (org):</span>
 				<select
 					className="fsel"
 					value={settings?.self_heal ?? "off"}
