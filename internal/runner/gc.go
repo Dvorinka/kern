@@ -513,6 +513,7 @@ const (
 	criticalImageAge     = 24 * time.Hour
 	criticalWorkspaceAge = 2 * time.Hour
 	criticalTmpAge       = 24 * time.Hour
+	warnTmpAge           = 72 * time.Hour
 )
 
 // tmpStalePatterns are directory names under the job temp root that are
@@ -613,6 +614,13 @@ func (a *Agent) maybePruneDisk(ctx context.Context) {
 		a.sweepWorkspacesOlderThan(criticalWorkspaceAge)
 		a.sweepBoundedCacheTo(a.cfg.CacheMaxBytes / 2)
 		a.sweepTmpStale(criticalTmpAge)
+	} else {
+		// Warn tier while idle: milder escalation — aged /tmp scratch and a
+		// 3/4 cache floor. Image and workspace horizons stay at steady
+		// state; tightening those on warn pressure would churn hot caches
+		// for space docker prune may already recover.
+		a.sweepTmpStale(warnTmpAge)
+		a.sweepBoundedCacheTo(a.cfg.CacheMaxBytes * 3 / 4)
 	}
 }
 
