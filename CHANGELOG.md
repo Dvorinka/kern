@@ -3,7 +3,7 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
-## [Unreleased]
+## [0.12.0] - 2026-11-12
 
 ### Added
 - Check-run `output.text`: failed and timed-out job/run checks now carry a
