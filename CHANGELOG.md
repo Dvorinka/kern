@@ -5,6 +5,17 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 
 ## [Unreleased]
 
+### Added
+- Check-run `output.text`: failed and timed-out job/run checks now carry a
+  masked markdown excerpt — failing step name, exit code, diagnosis, and a
+  4 KiB log tail (capped at 8000 chars, inside GitHub's output limits) — so
+  a failed lane can be diagnosed without opening the console. (#324)
+- `check_run.rerequested` and `check_suite.rerequested` webhook support:
+  GitHub's Re-run button now resets the matching KERN jobs through the
+  existing rerun machinery — a per-job check reruns that lane plus its
+  dependents, a run or suite rerequest resets everything that did not
+  succeed. (#323)
+
 ### Changed
 - Overview `Live now` renders compact rows instead of one large card per
   run: each row is a single fingerprint bar where every job is a segment
@@ -17,6 +28,12 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
   glance.
 
 ### Fixed
+- `ACTIONS_RUNTIME_TOKEN` is now a real HS256 JWT carrying `ac`/`exp`/`nbf`
+  claims, which buildx's `type=gha` cache backend requires before it will
+  call `ACTIONS_CACHE_URL` — docker lanes using `cache-from: type=gha`
+  failed in seconds with "token contains an invalid number of segments".
+  Legacy `kc1` tokens minted before the switch still validate so running
+  jobs keep cache access. (#321)
 - Overview at phone widths: commit-graph lanes no longer consume a
   quarter of the viewport under 760px, the fifth KPI cell spans the grid
   instead of orphaning, and activity-map cells are capped so the map

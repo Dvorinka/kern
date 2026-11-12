@@ -20,6 +20,10 @@ type CheckRun struct {
 	ExternalID string
 	Title      string
 	Summary    string
+	// Text is the markdown body under the summary — used for the failing
+	// step's log excerpt so Checks API consumers see the cause without
+	// opening KERN (#324). GitHub caps it at 64 KiB.
+	Text string
 	// Annotations are step annotations posted with the run's terminal update.
 	// GitHub accepts at most 50 per request and appends across updates; the
 	// first chunk rides the upsert body, the rest follow as PATCHes.
@@ -115,6 +119,9 @@ func (c *Client) findCheckRun(ctx context.Context, repo, sha, name, externalID s
 
 func (in CheckRun) body(create bool) map[string]any {
 	outMap := map[string]any{"title": in.Title, "summary": in.Summary}
+	if in.Text != "" {
+		outMap["text"] = in.Text
+	}
 	if len(in.Annotations) > 0 {
 		end := min(len(in.Annotations), maxCheckAnnotationsPerRequest)
 		outMap["annotations"] = in.Annotations[:end]
