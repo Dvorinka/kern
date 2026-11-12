@@ -20,6 +20,10 @@
 #   KERN_SCALER_CONF_DIR   config dir      (default /etc/kern-scaler.d)
 #   KERN_SCALER_DB_EXEC    psql invocation (default: local `psql`)
 #   KERN_SCALER_STATE_DIR  idle stamps     (default /var/lib/kern-scaler)
+#   KERN_SCALER_WATCH      seconds between ticks in watch mode; 0 = single
+#                          pass, for a timer. Watch mode wakes scaled-to-zero
+#                          hosts near queue time instead of at the next
+#                          timer tick — see kern-scaler.service.example.
 #
 # Runs from a systemd timer, e.g. every minute:
 #   * * * * * root /opt/kern/vm-scaler.sh >>/var/log/kern-scaler.log 2>&1
@@ -27,6 +31,7 @@ set -uo pipefail
 
 CONF_DIR=${KERN_SCALER_CONF_DIR:-/etc/kern-scaler.d}
 STATE_DIR=${KERN_SCALER_STATE_DIR:-/var/lib/kern-scaler}
+WATCH=${KERN_SCALER_WATCH:-0}
 shopt -s nullglob
 confs=("$CONF_DIR"/*.conf)
 [ ${#confs[@]} -eq 0 ] && { echo "vm-scaler: no configs in $CONF_DIR"; exit 0; }
@@ -39,6 +44,7 @@ fi
 
 sql() { $DB "$1" 2>/dev/null | tr -d '[:space:]'; }
 
+tick() {
 for conf in "${confs[@]}"; do
   # shellcheck disable=SC1090
   . "$conf"
@@ -134,3 +140,14 @@ for conf in "${confs[@]}"; do
     rm -f "$state_file"
   fi
 done
+}
+
+# Watch mode ticks continuously (start latency = WATCH seconds at worst —
+# a tagged release that hits a scaled-to-zero host no longer waits out a
+# full timer interval); 0 keeps the single-pass timer contract.
+if [ "$WATCH" -gt 0 ] 2>/dev/null; then
+  echo "vm-scaler: watch mode, tick every ${WATCH}s"
+  while :; do tick; sleep "$WATCH"; done
+else
+  tick
+fi
