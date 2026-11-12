@@ -89,6 +89,14 @@ An explicit `KERN_JOB_*` value in `env:` wins over the block. Limits only
 apply on trusted tiers (trusted/protected runs); a fork pull_request job
 declaring `resources:` keeps the runner defaults. GitHub ignores the key.
 
+With no `KERN_JOB_DISK` on the job or runner, the disk budget defaults to
+half the free space on the work-root filesystem at job start — a runaway
+job dies on `disk_quota` instead of pushing the host to mid-write ENOSPC
+(#333). The sampler polls every 30s, tightening to 5s once usage passes
+70% of the budget. BuildKit reclaim under disk pressure keeps the most
+recent cache up to `KERN_BUILDX_KEEP` (default 20 GiB) rather than wiping
+the cache cold.
+
 ## Job container hardening (untrusted tiers)
 
 uid 1000, `--cap-drop ALL`, `no-new-privileges`, `--read-only`, `/tmp` and

@@ -98,8 +98,14 @@ type Config struct {
 	// JobDiskBytes is the runner-wide ceiling on a job's work-root usage
 	// (KERN_JOB_DISK, e.g. "20g"). Breaching it aborts the job early with a
 	// disk_quota diagnosis instead of letting it die on ENOSPC mid-write.
-	// Zero means unbounded.
+	// Zero falls back to half the free space on the work-root filesystem
+	// at job start (#333).
 	JobDiskBytes int64
+	// BuildxKeepBytes bounds BuildKit cache retained when disk pressure
+	// prunes the builder (KERN_BUILDX_KEEP, e.g. "20g"; default 20 GiB).
+	// Pruning to a budget keeps recent build layers warm instead of the
+	// old wipe-everything -af (#333).
+	BuildxKeepBytes int64
 	// StepSilenceSeconds is the no-output watchdog interval
 	// (KERN_STEP_SILENCE_TIMEOUT, default 600). After this many seconds
 	// without step output the runner dumps process state into the log; at

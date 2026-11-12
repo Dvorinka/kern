@@ -937,14 +937,21 @@ func (e *executor) jobCPUsLimit() string {
 
 // jobDiskBudget is the job's work-root ceiling: a KERN_JOB_DISK value in
 // the workflow env (trusted runs) wins over the runner-wide default.
-// Zero means unbounded.
+// With neither set the budget falls back to half the free space on the
+// work-root filesystem (#333) — a runaway job dies on disk_quota instead
+// of pushing the host to mid-write ENOSPC. Unmeasurable free space (or a
+// zero result) means unbounded, the old behaviour.
 func (e *executor) jobDiskBudget() int64 {
 	if v := e.claim.Job.Env["KERN_JOB_DISK"]; e.privileged() && v != "" {
 		if n := parseHumanBytes(v); n > 0 {
 			return n
 		}
 	}
-	return e.cfg.JobDiskBytes
+	if e.cfg.JobDiskBytes > 0 {
+		return e.cfg.JobDiskBytes
+	}
+	free, _ := diskSpace(e.workRoot())
+	return free / 2
 }
 
 func (e *executor) privileged() bool {

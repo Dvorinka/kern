@@ -9,6 +9,7 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -520,7 +521,11 @@ const (
 // safe to delete when stale: test-tool scratch dirs, never workspaces or
 // operator paths. Anything not matching stays — especially gha-* and
 // kern-job-* trees a live job might still touch.
-var tmpStalePatterns = []string{"pytest-of-*", "trivy-*", "playwright-*"}
+// #333: go-build* is the Go toolchain's per-invocation scratch — the
+// residue the Cloudreve release hit — plus pip/cargo temp trees. The age
+// gate keeps an in-flight build's fresh tmp dir safe.
+var tmpStalePatterns = []string{"pytest-of-*", "trivy-*", "playwright-*",
+	"go-build*", "pip-*", "cargo-*"}
 
 // sweepTmpStale removes aged scratch dirs under os.TempDir() at the
 // critical horizon. Co-located runners (GHA fleets, test frameworks)
@@ -576,8 +581,11 @@ func (a *Agent) maybePruneDisk(ctx context.Context) {
 	a.log.Warn("disk pressure: pruning docker",
 		zap.Int64("free_bytes", free), zap.Int64("total_bytes", total),
 		zap.Float64("min_free_pct", pct), zap.Bool("critical", critical))
+	// BuildKit prunes to a keep-storage budget instead of wiping: the
+	// unbounded -af was the cold-cache penalty every pressured build paid
+	// (#330). Most-recent cache survives up to the budget.
 	prune := [][]string{
-		{"builder", "prune", "-af"},  // all reclaimable build cache
+		{"builder", "prune", "-af", "--keep-storage", a.buildxKeep()},
 		{"container", "prune", "-f"}, // stopped containers only
 		{"image", "prune", "-f"},     // dangling images only; tagged job images stay
 		{"network", "prune", "-f"},   // unused networks
@@ -622,6 +630,16 @@ func (a *Agent) maybePruneDisk(ctx context.Context) {
 		a.sweepTmpStale(warnTmpAge)
 		a.sweepBoundedCacheTo(a.cfg.CacheMaxBytes * 3 / 4)
 	}
+}
+
+// buildxKeep renders the BuildKit keep-storage bound for docker prune —
+// Config.BuildxKeepBytes as a docker size string, default 20 GB.
+func (a *Agent) buildxKeep() string {
+	n := a.cfg.BuildxKeepBytes
+	if n <= 0 {
+		n = 20 << 30
+	}
+	return fmt.Sprintf("%d", n)
 }
 
 // diskUnderPressure reports whether free space is below pct percent of total.

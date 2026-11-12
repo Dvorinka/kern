@@ -365,6 +365,9 @@ func agentConfig(o options) runner.Config {
 	if v := os.Getenv("KERN_JOB_DISK"); v != "" {
 		cfg.JobDiskBytes = parseHumanBytes(v)
 	}
+	if v := os.Getenv("KERN_BUILDX_KEEP"); v != "" {
+		cfg.BuildxKeepBytes = parseHumanBytes(v)
+	}
 	if v := os.Getenv("KERN_STEP_SILENCE_TIMEOUT"); v != "" {
 		cfg.StepSilenceSeconds, _ = strconv.Atoi(v)
 	} else {
