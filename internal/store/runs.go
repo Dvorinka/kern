@@ -204,14 +204,17 @@ func (s *Store) createRunOnce(ctx context.Context, p CreateRunParams, jobs []Job
 	return s.Run(ctx, id)
 }
 
+const runSelectCols = `
+	r.id, r.project_id, r.workflow_id, r.workflow_version_id, r.run_number, r.event,
+	r.ref, r.sha, r.commit_message, r.actor, r.status, r.conclusion, r.trust_level,
+	r.source, r.concurrency_group, r.started_at, r.completed_at, r.created_at, r.cleared_at,
+	w.name, w.path, p.slug, p.name,
+	COALESCE((SELECT j.classification FROM jobs j
+	 WHERE j.run_id = r.id AND j.classification <> ''
+	 ORDER BY j.queued_at, j.key LIMIT 1), '')`
+
 const runSelect = `
-	SELECT r.id, r.project_id, r.workflow_id, r.workflow_version_id, r.run_number, r.event,
-	       r.ref, r.sha, r.commit_message, r.actor, r.status, r.conclusion, r.trust_level,
-	       r.source, r.concurrency_group, r.started_at, r.completed_at, r.created_at, r.cleared_at,
-	       w.name, w.path, p.slug, p.name,
-	       COALESCE((SELECT j.classification FROM jobs j
-	        WHERE j.run_id = r.id AND j.classification <> ''
-	        ORDER BY j.queued_at, j.key LIMIT 1), '')
+	SELECT ` + runSelectCols + `
 	FROM workflow_runs r
 	JOIN workflows w ON w.id = r.workflow_id
 	JOIN projects p ON p.id = r.project_id`
@@ -240,6 +243,32 @@ func (s *Store) RunPrefix(ctx context.Context, prefix string) ([]Run, error) {
 	rows, err := s.pool.Query(ctx, runSelect+`
 		WHERE r.id::text LIKE $1 || '%'
 		ORDER BY r.created_at DESC LIMIT 8`, prefix)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Run{}
+	for rows.Next() {
+		r, err := scanRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// RunsForSHA returns the newest run per workflow for a repo commit — the
+// set a check-suite rerequest asks to run again. repo is the
+// source.repo_full_name the run recorded at trigger time.
+func (s *Store) RunsForSHA(ctx context.Context, repo, sha string) ([]Run, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT ON (r.workflow_id) `+runSelectCols+`
+		FROM workflow_runs r
+		JOIN workflows w ON w.id = r.workflow_id
+		JOIN projects p ON p.id = r.project_id
+		WHERE r.sha = $1 AND r.source->>'repo_full_name' = $2
+		ORDER BY r.workflow_id, r.created_at DESC`, sha, repo)
 	if err != nil {
 		return nil, err
 	}

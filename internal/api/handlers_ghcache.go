@@ -18,6 +18,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -65,23 +66,75 @@ func newGHCacheState() *ghCacheState {
 }
 
 // cacheJobToken mints the job-scoped credential handed to steps as
-// ACTIONS_RUNTIME_TOKEN: "kc1.<jobID>.<exp>.<sig>", HMAC-bound to the job.
-// Cache routes accept it instead of the runner's broad token, so untrusted
-// job code cannot escalate to runner-wide API access.
+// ACTIONS_RUNTIME_TOKEN: an HS256 JWT bound to the job. It must be a JWT —
+// not an opaque string — because buildx's type=gha cache backend
+// (tonistiigi/go-actions-cache) parses the claims unverified and refuses a
+// token without `ac`/`exp`/`nbf` before it ever calls ACTIONS_CACHE_URL
+// (#321). The `ac` claim carries the GitHub-scopes shape it looks for;
+// `kern_job` binds the token to the job. Cache routes accept it instead of
+// the runner's broad token, so untrusted job code cannot escalate to
+// runner-wide API access.
 func (s *Server) cacheJobToken(jobID uuid.UUID) string {
-	exp := time.Now().Add(24 * time.Hour).Unix()
+	now := time.Now()
+	ac, _ := json.Marshal([]map[string]any{{"Scope": "*", "Permission": 3}})
+	claims, _ := json.Marshal(map[string]any{
+		"iss":      "kern",
+		"kern_job": jobID.String(),
+		"ac":       string(ac),
+		"iat":      now.Unix(),
+		"nbf":      now.Add(-time.Minute).Unix(),
+		"exp":      now.Add(24 * time.Hour).Unix(),
+	})
+	msg := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`)) +
+		"." + base64.RawURLEncoding.EncodeToString(claims)
 	mac := hmac.New(sha256.New, []byte(s.Cfg.SessionSecret))
-	mac.Write([]byte(fmt.Sprintf("ghcache|%s|%d", jobID, exp)))
-	return fmt.Sprintf("kc1.%s.%d.%s", jobID, exp,
-		base64.RawURLEncoding.EncodeToString(mac.Sum(nil)))
+	mac.Write([]byte("ghcache-jwt|" + msg))
+	return msg + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-// parseCacheJobToken validates a kc1 token and returns its job ID.
+// parseCacheJobToken validates a job token and returns its job ID. The
+// current format is the HS256 JWT; legacy "kc1.<jobID>.<exp>.<sig>" tokens
+// minted before the JWT switch still parse so running jobs keep their
+// cache access until they finish.
 func (s *Server) parseCacheJobToken(token string) (uuid.UUID, bool) {
 	parts := strings.Split(token, ".")
-	if len(parts) != 4 || parts[0] != "kc1" {
+	if len(parts) == 4 && parts[0] == "kc1" {
+		return s.parseKc1Token(parts)
+	}
+	if len(parts) != 3 {
 		return uuid.Nil, false
 	}
+	mac := hmac.New(sha256.New, []byte(s.Cfg.SessionSecret))
+	mac.Write([]byte("ghcache-jwt|" + parts[0] + "." + parts[1]))
+	want, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil || !hmac.Equal(mac.Sum(nil), want) {
+		return uuid.Nil, false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return uuid.Nil, false
+	}
+	var claims struct {
+		Job string  `json:"kern_job"`
+		Exp float64 `json:"exp"`
+		Nbf float64 `json:"nbf"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return uuid.Nil, false
+	}
+	now := float64(time.Now().Unix())
+	if claims.Exp <= now || now < claims.Nbf {
+		return uuid.Nil, false
+	}
+	jobID, err := uuid.Parse(claims.Job)
+	if err != nil {
+		return uuid.Nil, false
+	}
+	return jobID, true
+}
+
+// parseKc1Token validates the pre-JWT token shape.
+func (s *Server) parseKc1Token(parts []string) (uuid.UUID, bool) {
 	jobID, err := uuid.Parse(parts[1])
 	if err != nil {
 		return uuid.Nil, false
