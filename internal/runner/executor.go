@@ -447,6 +447,9 @@ func (e *executor) prepareHost(ctx context.Context) error {
 		step := StepSpec{Number: e.claim.Steps[0].Number}
 		e.logStep(step, "KERN: host executor on "+runtime.GOOS+"/"+runtime.GOARCH+" — "+strings.Join(notes, "; "))
 	}
+	// Host mode gets the same work-root budget as containers — ENOSPC is
+	// worse bare-metal, where nothing isolates the job from the host fs.
+	e.startDiskSampler(ctx)
 	return nil
 }
 
