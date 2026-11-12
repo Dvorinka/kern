@@ -41,6 +41,43 @@ func TestCacheJobTokenRoundTrip(t *testing.T) {
 	}
 }
 
+// TestCacheJobTokenBuildxClaims pins the JWT shape buildx's type=gha cache
+// backend requires before it will call ACTIONS_CACHE_URL: three segments,
+// and `ac` (a string of JSON scopes), `exp` and `nbf` claims (#321).
+func TestCacheJobTokenBuildxClaims(t *testing.T) {
+	s := testGHCacheServer()
+	token := s.cacheJobToken(uuid.New())
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		t.Fatalf("token is not a JWT: %d segments", len(parts))
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatalf("payload not base64url: %v", err)
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		t.Fatalf("payload not JSON: %v", err)
+	}
+	ac, ok := claims["ac"].(string)
+	if !ok {
+		t.Fatalf("ac claim missing or not a string: %v", claims["ac"])
+	}
+	var scopes []struct {
+		Scope      string
+		Permission int
+	}
+	if err := json.Unmarshal([]byte(ac), &scopes); err != nil || len(scopes) == 0 ||
+		scopes[0].Permission&3 != 3 {
+		t.Fatalf("ac scopes unparseable or read-only: %v %s", err, ac)
+	}
+	for _, k := range []string{"exp", "nbf"} {
+		if _, ok := claims[k].(float64); !ok {
+			t.Fatalf("%s claim missing or not numeric: %v", k, claims[k])
+		}
+	}
+}
+
 func TestCacheJobTokenRejects(t *testing.T) {
 	s := testGHCacheServer()
 	jobID := uuid.New()
