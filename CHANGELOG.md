@@ -3,6 +3,39 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
+## [0.13.0] - 2026-11-12
+
+### Added
+- Live per-job check progress: a running job's check title reads
+  `name: step X/Y` and the summary narrates the current step, queue wait,
+  and a median-history ETA — refreshed at every step boundary. Check
+  `started_at`/`completed_at` no longer reset on mid-run updates. (#331)
+- Public run JSON progress: `GET /api/v1/public/runs/:id` (org
+  `public_ci`) now returns `current_step`, `step_number`, `step_count`,
+  `queue_wait_seconds`, `eta_seconds` per job — the session-free surface
+  for agents and API consumers. (#331)
+- Median-history ETA: `StepMedians` prices each step at p50 wall-clock
+  over the workflow's last 90 days; steps without history fall back to
+  the job-local median. (#335)
+- Release fast path: tag pushes and `release` events seed jobs with
+  priority 10 unless the workflow sets one; reruns stay boosted. (#334)
+- `KERN_SCALER_WATCH`: vm-scaler ticks in-process every N seconds instead
+  of once per timer pass, waking scaled-to-zero hosts near queue time;
+  `deployments/kern-scaler.service.example` ships a matching unit, and
+  `KERN_VM_START_COOLDOWN` bounds start re-fires during boot. (#334)
+- Disk reclaimer hardening: the work-root sampler tightens to 5s past
+  70% of budget; an unset `KERN_JOB_DISK` falls back to half the free
+  filesystem at job start; host executors get the same sampler as
+  containers; `go-build*`/`pip-*`/`cargo-*` join the stale-temp sweeps;
+  BuildKit prune keeps the newest cache up to `KERN_BUILDX_KEEP`
+  (default 20 GiB) instead of wiping it. (#333)
+
+### Fixed
+- `disk_full` and `disk_quota` are transient-retry kinds: the job
+  requeues within `max_transient_retries`, warns and audits
+  `runner.disk_requeue`, and claim anti-affinity lands the retry on a
+  different runner while an eligible peer is online. (#332)
+
 ## [0.12.0] - 2026-11-12
 
 ### Added
