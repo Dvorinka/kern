@@ -91,6 +91,13 @@ type CreateRunParams struct {
 	RunnerNames []string
 }
 
+// releaseClassRun reports whether a run is release-class: a tag push or a
+// release webhook event. Reruns inherit the original event/ref, so a
+// retried release stays boosted.
+func releaseClassRun(event, ref string) bool {
+	return event == "release" || (event == "push" && strings.HasPrefix(ref, "refs/tags/"))
+}
+
 // CreateRun persists a run and its compiled jobs atomically. Run numbers are allocated
 // per workflow; a unique violation (concurrent insert) is retried.
 func (s *Store) CreateRun(ctx context.Context, p CreateRunParams, jobs []JobSeed) (Run, error) {
@@ -124,6 +131,15 @@ func (s *Store) createRunOnce(ctx context.Context, p CreateRunParams, jobs []Job
 	status := "queued"
 	if p.HoldForApproval {
 		status = "awaiting_approval"
+	}
+	// Release-class runs outrank routine CI: a rare, atomic tag/release run
+	// never waits FIFO behind lint lanes — including other projects' lanes
+	// on a shared fleet. An explicit workflow priority: always wins over
+	// the boost, and reruns stay boosted since they keep the original
+	// event/ref. (#334)
+	boost := 0
+	if releaseClassRun(p.Event, p.Ref) {
+		boost = 10
 	}
 	err = tx.QueryRow(ctx, `
 		INSERT INTO workflow_runs
@@ -171,6 +187,9 @@ func (s *Store) createRunOnce(ctx context.Context, p CreateRunParams, jobs []Job
 		}
 		if j.TimeoutSeconds <= 0 {
 			j.TimeoutSeconds = 3600
+		}
+		if j.Priority == 0 {
+			j.Priority = boost
 		}
 		var jobID uuid.UUID
 		err = tx.QueryRow(ctx, `

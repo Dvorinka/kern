@@ -20,6 +20,10 @@
 #   KERN_SCALER_CONF_DIR   config dir      (default /etc/kern-scaler.d)
 #   KERN_SCALER_DB_EXEC    psql invocation (default: local `psql`)
 #   KERN_SCALER_STATE_DIR  idle stamps     (default /var/lib/kern-scaler)
+#   KERN_SCALER_WATCH      seconds between ticks in watch mode; 0 = single
+#                          pass, for a timer. Watch mode wakes scaled-to-zero
+#                          hosts near queue time instead of at the next
+#                          timer tick — see kern-scaler.service.example.
 #
 # Runs from a systemd timer, e.g. every minute:
 #   * * * * * root /opt/kern/vm-scaler.sh >>/var/log/kern-scaler.log 2>&1
@@ -27,6 +31,7 @@ set -uo pipefail
 
 CONF_DIR=${KERN_SCALER_CONF_DIR:-/etc/kern-scaler.d}
 STATE_DIR=${KERN_SCALER_STATE_DIR:-/var/lib/kern-scaler}
+WATCH=${KERN_SCALER_WATCH:-0}
 shopt -s nullglob
 confs=("$CONF_DIR"/*.conf)
 [ ${#confs[@]} -eq 0 ] && { echo "vm-scaler: no configs in $CONF_DIR"; exit 0; }
@@ -39,6 +44,7 @@ fi
 
 sql() { $DB "$1" 2>/dev/null | tr -d '[:space:]'; }
 
+tick() {
 for conf in "${confs[@]}"; do
   # shellcheck disable=SC1090
   . "$conf"
@@ -50,6 +56,9 @@ for conf in "${confs[@]}"; do
   KERN_VM_STOP_GRACE_SECONDS=${KERN_VM_STOP_GRACE_SECONDS:-300}
   KERN_VM_KILL_CMD=${KERN_VM_KILL_CMD:-}
   KERN_VM_WARM_CRON=${KERN_VM_WARM_CRON:-}
+  # Seconds a start command is treated as in flight — bounds watch-mode
+  # re-fires while the host's state word still reads down.
+  KERN_VM_START_COOLDOWN=${KERN_VM_START_COOLDOWN:-180}
   KERN_VM_DB=${KERN_VM_DB:-$DB}
 
   id=$KERN_VM_ID
@@ -75,6 +84,7 @@ for conf in "${confs[@]}"; do
   state=$(eval "$KERN_VM_STATE_CMD" | head -1)
   is_up=0
   [[ "$state" =~ $KERN_VM_UP_RE ]] && is_up=1
+  [ $is_up -eq 1 ] && rm -f "$STATE_DIR/$id.start-since"
 
   # warm schedule: pre-boot once per day at HH:MM
   if [ -n "$KERN_VM_WARM_CRON" ] && [ "$(date +%H:%M)" = "$KERN_VM_WARM_CRON" ]; then
@@ -99,8 +109,21 @@ for conf in "${confs[@]}"; do
       if [ "$autostart" = "off" ] || [ "$wake" = "false" ]; then
         echo "vm-scaler[$id]: autostart suppressed (org=$autostart runner wake_on_demand=$wake)"
       else
-        echo "vm-scaler[$id]: $pending queued job(s) matching [$KERN_VM_LABELS], starting"
-        eval "$KERN_VM_START_CMD" || true
+        # Watch mode ticks far faster than a VM boots — without a
+        # cooldown a 10s tick re-fires START_CMD until the state word
+        # flips up (double-boot storm on providers that don't no-op).
+        start_stamp="$STATE_DIR/$id.start-since"
+        started_recently=0
+        if [ -f "$start_stamp" ] && [ $(( $(date +%s) - $(cat "$start_stamp") )) -lt "$KERN_VM_START_COOLDOWN" ]; then
+          started_recently=1
+        fi
+        if [ $started_recently -eq 1 ]; then
+          echo "vm-scaler[$id]: start already issued, waiting for up state"
+        else
+          echo "vm-scaler[$id]: $pending queued job(s) matching [$KERN_VM_LABELS], starting"
+          date +%s > "$start_stamp"
+          eval "$KERN_VM_START_CMD" || true
+        fi
       fi
     fi
     continue
@@ -134,3 +157,14 @@ for conf in "${confs[@]}"; do
     rm -f "$state_file"
   fi
 done
+}
+
+# Watch mode ticks continuously (start latency = WATCH seconds at worst —
+# a tagged release that hits a scaled-to-zero host no longer waits out a
+# full timer interval); 0 keeps the single-pass timer contract.
+if [ "$WATCH" -gt 0 ] 2>/dev/null; then
+  echo "vm-scaler: watch mode, tick every ${WATCH}s"
+  while :; do tick; sleep "$WATCH"; done
+else
+  tick
+fi

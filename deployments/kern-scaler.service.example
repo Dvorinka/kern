@@ -1,0 +1,22 @@
+# vm-scaler in watch mode — copy to /etc/systemd/system/kern-scaler.service
+# Ticks every KERN_SCALER_WATCH seconds instead of waiting for a cron/timer
+# interval, so a queued job wakes a scaled-to-zero host near queue time.
+# Preferred over the 1-minute timer for release/tag traffic.
+[Unit]
+Description=KERN VM scaler (watch mode)
+After=network.target
+
+[Service]
+Type=simple
+Environment=KERN_SCALER_CONF_DIR=/etc/kern-scaler.d
+Environment=KERN_SCALER_STATE_DIR=/var/lib/kern-scaler
+Environment=KERN_SCALER_WATCH=10
+# One of these is required; KERN_VM_DB may override per group.
+Environment=KERN_DATABASE_URL=postgres://kern:kern@localhost:5432/kern?sslmode=disable
+# Environment=KERN_SCALER_DB_EXEC=psql -h 10.0.0.x -U kern -d kern -Atc
+ExecStart=/opt/kern/vm-scaler.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
