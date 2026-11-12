@@ -27,11 +27,15 @@ set -uo pipefail
 
 CONF_DIR=${KERN_SCALER_CONF_DIR:-/etc/kern-scaler.d}
 STATE_DIR=${KERN_SCALER_STATE_DIR:-/var/lib/kern-scaler}
-DB=${KERN_SCALER_DB_EXEC:-psql "$KERN_DATABASE_URL" -Atc}
-
 shopt -s nullglob
 confs=("$CONF_DIR"/*.conf)
 [ ${#confs[@]} -eq 0 ] && { echo "vm-scaler: no configs in $CONF_DIR"; exit 0; }
+
+DB=${KERN_SCALER_DB_EXEC:-}
+if [ -z "$DB" ]; then
+  : "${KERN_DATABASE_URL:?vm-scaler: set KERN_SCALER_DB_EXEC or KERN_DATABASE_URL}"
+  DB="psql \"$KERN_DATABASE_URL\" -Atc"
+fi
 
 sql() { $DB "$1" 2>/dev/null | tr -d '[:space:]'; }
 
