@@ -63,6 +63,9 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
   right edge (Projects, Secrets, Environments, Settings). Project detail
   fields go single-column on phones, mono KV values break long URLs, and
   the runners self-heal row wraps instead of crushing its label.
+- Login art panel in dark mode: the connector illustration now uses theme
+  variables instead of hardcoded white, so it renders dark-on-light when
+  the panel inverts — previously an invisible white-on-white logo.
 
 ## [0.11.0] - 2026-11-11
 
