@@ -79,6 +79,36 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 					  AND j.runs_on <@ (h.labels || ARRAY['self-hosted', 'kern'])
 				)
 			  )
+			  -- Retry anti-affinity (#332): a job whose last attempt ran on
+			  -- this runner (disk_full requeues and friends are usually
+			  -- host-local) prefers a fresh host. Only the LAST lease counts
+			  -- — penalizing every prior runner would starve a two-runner
+			  -- fleet once both have tried. The failed runner retakes it
+			  -- when no eligible peer is online — same eligibility
+			  -- predicate as the yield check below.
+			  AND (
+				(SELECT pl.runner_id FROM job_leases pl
+				 WHERE pl.job_id = j.id
+				 ORDER BY pl.created_at DESC LIMIT 1) IS DISTINCT FROM me.id
+				OR NOT EXISTS (
+					SELECT 1 FROM fleet o
+					WHERE o.id <> me_f.id
+					  AND o.claims_paused = ''
+					  AND j.runs_on <@ (o.labels || ARRAY['self-hosted', 'kern'])
+					  AND (o.executor <> 'host' OR r.trust_level NOT IN ('fork', 'pull_request'))
+					  AND (
+						NOT j.needs_docker
+						OR 'kern-docker' = ANY(o.labels)
+						OR r.trust_level IN ('fork', 'pull_request')
+						OR NOT EXISTS (
+							SELECT 1 FROM fleet h
+							WHERE h.claims_paused = ''
+							  AND 'kern-docker' = ANY(h.labels)
+							  AND j.runs_on <@ (h.labels || ARRAY['self-hosted', 'kern'])
+						)
+					  )
+				)
+			  )
 			  -- Least-loaded placement: yield to any eligible runner carrying
 			  -- fewer in-progress jobs than this one, or — at equal job
 			  -- count — to a peer whose host CPU is meaningfully cooler

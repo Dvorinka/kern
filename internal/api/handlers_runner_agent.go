@@ -661,7 +661,7 @@ func (s *Server) finishJob(c *gin.Context) {
 	if req.Conclusion == "failure" {
 		kinds, _ = s.Store.JobFailureKinds(c.Request.Context(), job.ID)
 	}
-	if req.Conclusion == "failure" && s.maybeRequeueTransient(c, job, runner.ID, req.Error, kinds) {
+	if req.Conclusion == "failure" && s.maybeRequeueTransient(c, job, runner, req.Error, kinds) {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "requeued": true})
 		return
 	}
@@ -697,24 +697,35 @@ func (s *Server) finishJob(c *gin.Context) {
 }
 
 // transientRetryKinds are diagnosis classes that flake on infrastructure
-// rather than code — a registry 429, a reset connection, a cgroup OOM.
-// script_failure-class results are deterministic; retrying them only
-// doubles the bill.
-var transientRetryKinds = map[string]bool{"network": true, "oom": true, "daemon_gone": true}
+// rather than code — a registry 429, a reset connection, a cgroup OOM, an
+// ENOSPC on the runner host. disk_full/disk_quota retry too: the requeue
+// lands on a different runner (claim anti-affinity) or on the same host
+// after its GC pass. script_failure-class results are deterministic;
+// retrying them only doubles the bill.
+var transientRetryKinds = map[string]bool{
+	"network": true, "oom": true, "daemon_gone": true,
+	"disk_full": true, "disk_quota": true,
+}
 
 // maybeRequeueTransient puts a failed job back on the queue when every
 // failed step carries a transient diagnosis and the project's
 // max_transient_retries budget is not spent. Prepare-phase failures record
 // no step diagnosis (#209), so the runner-reported job error is scanned
-// with the same transient signatures as a fallback. kinds is the caller's
-// JobFailureKinds result (nil = fetch skipped, treated as no step kinds).
-func (s *Server) maybeRequeueTransient(c *gin.Context, job store.Job, runnerID uuid.UUID, jobErr string, kinds []string) bool {
+// with the same transient signatures as a fallback, plus the classifyJobError
+// vocabulary — "disk full"/"disk_quota" prepare errors never matched the
+// network signatures but are exactly the retryable infra deaths. kinds is
+// the caller's JobFailureKinds result (nil = fetch skipped, treated as no
+// step kinds).
+func (s *Server) maybeRequeueTransient(c *gin.Context, job store.Job, runner store.Runner, jobErr string, kinds []string) bool {
 	limit, err := s.Store.TransientRetryLimit(c.Request.Context(), job.RunID)
 	if err != nil || limit <= 0 || job.Attempt >= 1+limit {
 		return false
 	}
+	disk := false
 	if len(kinds) == 0 {
-		if !looksTransientError(jobErr) {
+		if class := classifyJobError(jobErr); transientRetryKinds[class] {
+			disk = class == "disk_full" || class == "disk_quota"
+		} else if !looksTransientError(jobErr) {
 			return false
 		}
 	} else {
@@ -722,21 +733,30 @@ func (s *Server) maybeRequeueTransient(c *gin.Context, job store.Job, runnerID u
 			if !transientRetryKinds[k] {
 				return false
 			}
+			disk = disk || k == "disk_full" || k == "disk_quota"
 		}
 	}
 	reason := "transient failure (" + strings.Join(kinds, ",") + "): auto-requeued"
 	if len(kinds) == 0 {
 		reason = "transient failure: auto-requeued"
 	}
-	ok, err := s.Store.RequeueJob(c.Request.Context(), runnerID, job.ID, reason)
+	ok, err := s.Store.RequeueJob(c.Request.Context(), runner.ID, job.ID, reason)
 	if err != nil {
 		s.Log.Warn("transient requeue failed", zap.String("job", job.ID.String()), zap.Error(err))
 		return false
 	}
 	if ok {
-		s.Log.Info("job requeued after transient failure",
+		// Disk deaths flag the host: warn + audit so a fat runner surfaces
+		// in fleet health instead of silently absorbing the next job too.
+		log := s.Log.Info
+		if disk {
+			log = s.Log.Warn
+			s.Store.AuditMeta(c.Request.Context(), runner.OrgID, nil, "runner.disk_requeue", runner.Name,
+				map[string]any{"job_id": job.ID.String(), "kinds": kinds, "attempt": job.Attempt})
+		}
+		log("job requeued after transient failure",
 			zap.String("job", job.ID.String()), zap.Strings("kinds", kinds),
-			zap.Int("attempt", job.Attempt))
+			zap.String("runner", runner.Name), zap.Int("attempt", job.Attempt))
 		_ = s.Store.FailExecsForJob(c.Request.Context(), job.ID, "job requeued")
 	}
 	return ok
