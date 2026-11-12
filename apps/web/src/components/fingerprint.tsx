@@ -21,6 +21,9 @@ export function jobHue(key: string): JobHue {
 }
 
 const HUE_CLS: Record<JobHue, string> = { lint: "l", build: "b", web: "w2" };
+// Tinted variant: completed jobs take a real stage colour instead of the
+// monochrome fill pattern — used where a bar must read as a pipeline.
+const HUE_TINT: Record<string, string> = { l: "h1", b: "h2", w2: "h3" };
 
 // Shared run-clock: every fingerprint is drawn on the same wall of minutes,
 // extended when a run outlasts it.
@@ -105,11 +108,13 @@ export function Fingerprint({
 	run,
 	jobs,
 	small,
+	tinted,
 	className,
 }: {
 	run: Run;
 	jobs: Job[] | undefined;
 	small?: boolean;
+	tinted?: boolean;
 	className?: string;
 }) {
 	const { segs } = fingerprintSegs(jobs ?? [], run);
@@ -123,7 +128,7 @@ export function Fingerprint({
 				segs.map((s, i) => (
 					<i
 						key={i}
-						className={`pb ${s.cls}`}
+						className={`pb ${tinted ? (HUE_TINT[s.cls] ?? s.cls) : s.cls}`}
 						style={{
 							left: `${Math.min(99.6, s.left)}%`,
 							width: `${Math.min(100 - s.left, s.width)}%`,

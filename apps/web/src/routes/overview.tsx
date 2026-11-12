@@ -2,9 +2,9 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { useMemo, useState } from "react";
 import { api } from "../lib/api";
-import type { DayCount, FleetMapResponse, Job, OverviewResponse, QueuedJob, Run } from "../lib/types";
+import type { DayCount, FleetMapResponse, OverviewResponse, QueuedJob, Run } from "../lib/types";
 import { Spinner } from "../components/ui";
-import { jobHue, useRunDetails } from "../components/fingerprint";
+import { Fingerprint, jobHue, useRunDetails } from "../components/fingerprint";
 import { FleetMap, fleetSites } from "../components/fleetmap";
 import { RunsChart, type DayPoint } from "../components/runschart";
 import { ActivityMap, type DayTotals } from "../components/activitymap";
@@ -72,71 +72,6 @@ function graphSVG(runs: Run[], lanes: number[], selId: string | null) {
 
 const mmss = (ms: number) =>
 	`${Math.floor(ms / 60000)}:${String(Math.floor((ms % 60000) / 1000)).padStart(2, "0")}`;
-
-/* ── live now: one compact lane per job on the run's own clock ── */
-function MiniTrace({ run, jobs }: { run: Run; jobs: Job[] }) {
-	const nav = useNavigate();
-	const t0 = Date.parse(run.started_at ?? run.created_at);
-	const nowS = (Date.now() - t0) / 1000;
-	const endS = Math.max(240, Math.ceil((nowS * 1.18) / 60) * 60);
-	const pct = (s: number) => (s / endS) * 100;
-	const at = (iso: string | null) => (iso ? (Date.parse(iso) - t0) / 1000 : null);
-	return (
-		<div className="mini">
-			{jobs.map((j) => {
-				const st = at(j.started_at);
-				const en = at(j.completed_at);
-				const hue = `pat-${jobHue(j.job_key || j.name)}`;
-				const running = st != null && en == null;
-				return (
-					<div
-						className="lane click"
-						key={j.id}
-						role="link"
-						tabIndex={0}
-						title={`${j.name} — open its log`}
-						onClick={(e) => {
-							e.stopPropagation();
-							nav(`/runs/${run.id}?job=${encodeURIComponent(j.job_key || j.id)}`);
-						}}
-						onKeyDown={(e) => {
-							if (e.key === "Enter") {
-								e.stopPropagation();
-								nav(`/runs/${run.id}?job=${encodeURIComponent(j.job_key || j.id)}`);
-							}
-						}}
-					>
-						{j.status === "skipped" || j.status === "cancelled" ? null : st == null ? (
-							// parked in the queue — a dashed stub just past now
-							<i
-								className="bar q"
-								style={{
-									left: `${pct(Math.min(nowS + 8, endS - 30))}%`,
-									width: `${pct(Math.min(40, Math.max(8, endS - nowS - 38)))}%`,
-								}}
-							/>
-						) : running ? (
-							<>
-								<i className={`bar ${hue}`} style={{ left: `${pct(st)}%`, width: `${pct(nowS - st)}%` }} />
-								<i className="head" style={{ left: `${pct(nowS)}%` }} />
-							</>
-						) : (
-							<>
-								<i className={`bar ${hue}`} style={{ left: `${pct(st)}%`, width: `${pct(en! - st)}%` }} />
-								{j.conclusion === "failure" && <i className="stopx" style={{ left: `${pct(en!)}%` }} />}
-							</>
-						)}
-					</div>
-				);
-			})}
-			<i className="nowline" style={{ left: `${pct(nowS)}%` }} />
-			<div className="ax">
-				<span>0:00</span>
-				<span>{mmss(endS * 1000)}</span>
-			</div>
-		</div>
-	);
-}
 
 const SEL_KEY = "kern-sel-run";
 
@@ -335,15 +270,15 @@ export function OverviewPage() {
 					</div>
 					<div className="key">
 						<span>
-							<i className="sw pat-lint" />
+							<i className="sw h1" />
 							lint
 						</span>
 						<span>
-							<i className="sw pat-build" />
+							<i className="sw h2" />
 							build
 						</span>
 						<span>
-							<i className="sw pat-web" />
+							<i className="sw h3" />
 							web
 						</span>
 						<Link to="/runs" className="keygo">
@@ -355,10 +290,10 @@ export function OverviewPage() {
 							No runs yet — push to a wired repo or trigger a workflow.
 						</div>
 					)}
-					<div className="rl" style={{ paddingLeft: GW, marginLeft: 14, marginRight: 4 }}>
+					<div className="rl">
 						<div
+							className="rlg"
 							dangerouslySetInnerHTML={{ __html: graphSVG(recent, lanes, selRun) }}
-							style={{ position: "absolute", left: 0, top: 0, pointerEvents: "none" }}
 						/>
 						{recent.map((r) => (
 							<div
@@ -400,6 +335,7 @@ export function OverviewPage() {
 									{duration(r.started_at, r.completed_at)}
 									<small>{live(r) ? "now" : relTime(r.created_at)}</small>
 								</div>
+								<Fingerprint run={r} jobs={detailOf(r.id)?.jobs} small tinted className="fp" />
 							</div>
 						))}
 					</div>
@@ -411,12 +347,14 @@ export function OverviewPage() {
 						<div className="panel">
 							<div className="phead">
 								<span className="pt">Live now</span>
-								<span className="r">across the fleet</span>
+								<span className="r">
+									{liveRuns.length} run{liveRuns.length === 1 ? "" : "s"} across the fleet
+								</span>
 							</div>
-							{liveRuns.map((r) => (
+							{liveRuns.slice(0, 10).map((r) => (
 								<div
 									key={r.id}
-									className="ln"
+									className="lrow"
 									role="link"
 									tabIndex={0}
 									onClick={() => pick(r.id)}
@@ -424,31 +362,42 @@ export function OverviewPage() {
 										if (e.key === "Enter") pick(r.id);
 									}}
 								>
-									<div className="h">
-										<div className="lt">
+									<i className="sq live" />
+									<div className="lt2">
+										<div className="t">
 											{r.commit_message?.split("\n")[0] ||
 												`${r.workflow_name} #${r.run_number}`}
 										</div>
-										<div className="ld">
-											{duration(r.started_at ?? r.created_at, null)}
-											<small>
-												{r.workflow_name} #{r.run_number}
-											</small>
+										<div className="m">
+											{r.workflow_name} #{r.run_number} · {refName(r.ref)} · {shortSha(r.sha)} ·{" "}
+											{r.project_slug}
+											{(detailOf(r.id)?.jobs ?? []).filter(
+												(j) => j.status === "in_progress" || j.status === "waiting",
+											).length > 0 &&
+												` · ${(detailOf(r.id)?.jobs ?? [])
+													.filter((j) => j.status === "in_progress" || j.status === "waiting")
+													.map((j) => j.name)
+													.join(", ")} running`}
 										</div>
 									</div>
-									<div className="lm">
-										{refName(r.ref)} · {shortSha(r.sha)} · {r.project_slug}
-										{(detailOf(r.id)?.jobs ?? []).filter(
-											(j) => j.status === "in_progress" || j.status === "waiting",
-										).length > 0 &&
-											` · ${(detailOf(r.id)?.jobs ?? [])
-												.filter((j) => j.status === "in_progress" || j.status === "waiting")
-												.map((j) => j.name)
-												.join(", ")} running`}
+									<div className="du live">
+										{duration(r.started_at ?? r.created_at, null)}
+										<small>now</small>
 									</div>
-									<MiniTrace run={r} jobs={detailOf(r.id)?.jobs ?? []} />
+									<Fingerprint
+										run={r}
+										jobs={detailOf(r.id)?.jobs}
+										small
+										tinted
+										className="fp"
+									/>
 								</div>
 							))}
+							{liveRuns.length > 10 && (
+								<Link className="qrow rowlink dim" to="/runs?tab=running">
+									+{liveRuns.length - 10} more live — watch them all
+								</Link>
+							)}
 						</div>
 					)}
 

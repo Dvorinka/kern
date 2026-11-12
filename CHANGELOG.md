@@ -3,6 +3,30 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
+## [Unreleased]
+
+### Changed
+- Overview `Live now` renders compact rows instead of one large card per
+  run: each row is a single fingerprint bar where every job is a segment
+  on the run's clock, tinted by stage hue (lint/build/web) with running
+  blue, failure red, and queued hatched — a matrix run no longer stacks a
+  lane per job into a wall of cards. The overview is ~44% shorter on a
+  busy fleet, and nine live runs fit in one viewport.
+- Recent-runs rows gain the same slim fingerprint strip in their
+  previously empty rail slot, so every row reads as a pipeline at a
+  glance.
+
+### Fixed
+- Overview at phone widths: commit-graph lanes no longer consume a
+  quarter of the viewport under 760px, the fifth KPI cell spans the grid
+  instead of orphaning, and activity-map cells are capped so the map
+  stops ballooning on small screens.
+- Run detail's job-picker chips now wrap instead of pushing the page
+  ~220px past the viewport edge on narrow screens; `main` clips
+  horizontal overflow defensively.
+- Vite dev proxy sets `changeOrigin`, so `KERN_API_ORIGIN` can point at a
+  remote/tunnel origin that rejects a `localhost` Host header.
+
 ## [0.11.0] - 2026-11-11
 
 ### Added
