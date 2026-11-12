@@ -538,6 +538,42 @@ func (s *Store) Job(ctx context.Context, id uuid.UUID) (Job, error) {
 	return j, err
 }
 
+// StepMedians returns historical median wall-clock seconds per step name,
+// keyed job_key -> step name -> seconds, over the workflow's recent
+// completed steps. Powers the live ETA shown on checks and run JSON (#335).
+// A step name absent from the inner map simply has no history yet.
+func (s *Store) StepMedians(ctx context.Context, workflowID uuid.UUID) (map[string]map[string]float64, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT j.job_key, st.name,
+		       percentile_cont(0.5) WITHIN GROUP
+		         (ORDER BY extract(epoch FROM st.completed_at - st.started_at))
+		FROM steps st
+		JOIN jobs j ON j.id = st.job_id
+		JOIN workflow_runs r ON r.id = j.run_id
+		WHERE r.workflow_id = $1
+		  AND st.status = 'completed' AND st.started_at IS NOT NULL
+		  AND st.completed_at > st.started_at
+		  AND st.completed_at > now() - interval '90 days'
+		GROUP BY j.job_key, st.name`, workflowID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]map[string]float64{}
+	for rows.Next() {
+		var jk, name string
+		var med float64
+		if err := rows.Scan(&jk, &name, &med); err != nil {
+			return nil, err
+		}
+		if out[jk] == nil {
+			out[jk] = map[string]float64{}
+		}
+		out[jk][name] = med
+	}
+	return out, rows.Err()
+}
+
 // CancelRun marks a run and its non-terminal jobs cancelled.
 func (s *Store) CancelRun(ctx context.Context, runID uuid.UUID) (Run, error) {
 	tx, err := s.pool.Begin(ctx)

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -29,7 +30,7 @@ func TestPublicViewOmitsPrivateFields(t *testing.T) {
 			Spec: json.RawMessage(`{"run":"echo supersecret"}`),
 		}},
 	}}
-	view, pjobs := publicView(run, jobs)
+	view, pjobs := publicView(run, jobs, nil)
 	b, err := json.Marshal(map[string]any{"run": view, "jobs": pjobs})
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +51,7 @@ func TestPublicViewOmitsPrivateFields(t *testing.T) {
 		t.Fatalf("steps %+v", pjobs[0].Steps)
 	}
 
-	login, _ := publicView(store.Run{ID: run.ID, Actor: "octocat"}, nil)
+	login, _ := publicView(store.Run{ID: run.ID, Actor: "octocat"}, nil, nil)
 	if login.Actor != "octocat" {
 		t.Fatalf("login actor %q", login.Actor)
 	}
@@ -235,5 +236,53 @@ func TestLooksTransientError(t *testing.T) {
 	}
 	if got := classifyJobError("create container: Cannot connect to the Docker daemon"); got != "daemon_gone" {
 		t.Errorf("classifyJobError daemon = %q", got)
+	}
+}
+
+// #331/#335: jobProgress narrates a live lane — current step, queue wait,
+// and a median-history ETA with a job-local fallback for unrecorded steps.
+func TestJobProgress(t *testing.T) {
+	now := time.Now()
+	started := now.Add(-90 * time.Second)
+	queued := now.Add(-10 * time.Minute)
+	job := store.Job{
+		JobKey: "build", Status: "in_progress",
+		QueuedAt: queued, StartedAt: &started,
+		Steps: []store.Step{
+			{Number: 1, Name: "checkout", Status: "completed", Conclusion: "success"},
+			{Number: 2, Name: "build", Status: "running", StartedAt: &started},
+			{Number: 3, Name: "test", Status: "queued"},
+			{Number: 4, Name: "upload", Status: "queued"},
+		},
+	}
+	med := map[string]float64{"checkout": 20, "build": 300, "test": 120}
+	p := jobProgress(job, med, now)
+	if p.current != "build" || p.num != 2 || p.done != 1 {
+		t.Fatalf("progress = %+v, want build 2/? done=1", p)
+	}
+	if p.queueWait != 510 {
+		t.Fatalf("queueWait = %d, want 510", p.queueWait)
+	}
+	// ETA = (300-90) build remainder + 120 test + fallback(120) upload.
+	if p.eta != 450 {
+		t.Fatalf("eta = %d, want 450", p.eta)
+	}
+	// No history → no ETA, still reports position.
+	p = jobProgress(job, nil, now)
+	if p.eta != -1 || p.current != "build" {
+		t.Fatalf("no-history progress = %+v", p)
+	}
+	// Queued job reports live queue wait.
+	qj := store.Job{JobKey: "b", Status: "queued", QueuedAt: queued}
+	if p := jobProgress(qj, nil, now); p.queueWait != 600 {
+		t.Fatalf("queued wait = %d, want 600", p.queueWait)
+	}
+}
+
+func TestFmtSeconds(t *testing.T) {
+	for in, want := range map[int64]string{45: "45s", 0: "0s", 60: "1m0s", 3725: "1h2m"} {
+		if got := fmtSeconds(in); got != want {
+			t.Errorf("fmtSeconds(%d) = %q, want %q", in, got, want)
+		}
 	}
 }

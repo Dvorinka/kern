@@ -611,18 +611,23 @@ func (s *Server) finishStep(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
+	// Refresh the per-job check so the GitHub UI narrates the step that
+	// just finished and the one now running (#331).
+	run, rerr := s.Store.Run(c.Request.Context(), job.RunID)
+	if rerr == nil {
+		job.Steps = nil // force a fresh step read inside the narrative
+		s.postJobCheck(c.Request.Context(), run, job, "in_progress")
+	}
 	// Audit auto-remediations the runner reports applying.
 	var d struct {
 		Remediation *struct {
 			Applied bool `json:"applied"`
 		} `json:"remediation"`
 	}
-	if json.Unmarshal(diag, &d) == nil && d.Remediation != nil && d.Remediation.Applied {
-		if run, err := s.Store.Run(c.Request.Context(), job.RunID); err == nil {
-			if p, err := s.Store.ProjectByID(c.Request.Context(), run.ProjectID); err == nil {
-				s.Store.Audit(c.Request.Context(), p.OrgID, nil, "remediation.apply",
-					fmt.Sprintf("job %s step %d", job.ID, n))
-			}
+	if json.Unmarshal(diag, &d) == nil && d.Remediation != nil && d.Remediation.Applied && rerr == nil {
+		if p, err := s.Store.ProjectByID(c.Request.Context(), run.ProjectID); err == nil {
+			s.Store.Audit(c.Request.Context(), p.OrgID, nil, "remediation.apply",
+				fmt.Sprintf("job %s step %d", job.ID, n))
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
