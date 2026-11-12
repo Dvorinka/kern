@@ -212,7 +212,7 @@ func jobProgress(j store.Job, med map[string]float64, now time.Time) progress {
 		if !ok {
 			m = fallback
 		}
-		if st.Status == "in_progress" {
+		if st.Status == "running" {
 			if p.current == "" {
 				p.current = st.Name
 				p.num = i + 1
@@ -239,7 +239,7 @@ func jobProgress(j store.Job, med map[string]float64, now time.Time) progress {
 	}
 	if p.current == "" {
 		for i, st := range j.Steps {
-			if st.Status == "queued" || st.Status == "pending" {
+			if st.Status == "queued" {
 				p.current = st.Name + " (pending)"
 				p.num = i + 1
 				break

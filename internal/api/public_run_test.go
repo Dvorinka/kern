@@ -239,7 +239,7 @@ func TestJobProgress(t *testing.T) {
 		QueuedAt: queued, StartedAt: &started,
 		Steps: []store.Step{
 			{Number: 1, Name: "checkout", Status: "completed", Conclusion: "success"},
-			{Number: 2, Name: "build", Status: "in_progress", StartedAt: &started},
+			{Number: 2, Name: "build", Status: "running", StartedAt: &started},
 			{Number: 3, Name: "test", Status: "queued"},
 			{Number: 4, Name: "upload", Status: "queued"},
 		},
