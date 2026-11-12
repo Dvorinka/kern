@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -61,5 +62,32 @@ func TestReleaseBoost(t *testing.T) {
 		if j.Priority != want {
 			t.Errorf("%s: priority = %d, want %d", c.name, j.Priority, want)
 		}
+	}
+}
+
+// #334 end-to-end: a boosted release job queued AFTER a routine job is
+// claimed first — ORDER BY priority DESC, queued_at must hold under the
+// real claim query, not just at seed time.
+func TestReleaseBoostWinsClaim(t *testing.T) {
+	s, ctx := testStore(t)
+	r := labeledRunner(t, ctx, s, "ci", []string{"ubuntu-latest"}, "docker")
+	pid, wid, vid := fixture(t, ctx, s)
+
+	slow := seedDockerRun(t, ctx, s, CreateRunParams{
+		ProjectID: pid, WorkflowID: wid, WorkflowVersionID: vid,
+		Event: "push", Ref: "refs/heads/main", TrustLevel: "trusted",
+	}, false, []string{"ubuntu-latest"})
+	release := seedDockerRun(t, ctx, s, CreateRunParams{
+		ProjectID: pid, WorkflowID: wid, WorkflowVersionID: vid,
+		Event: "push", Ref: "refs/tags/v4.23.13", TrustLevel: "trusted",
+	}, false, []string{"ubuntu-latest"})
+
+	c, err := s.ClaimJob(ctx, r.ID, 30*time.Second)
+	if err != nil || c == nil {
+		t.Fatalf("claim: %v %v", c, err)
+	}
+	if c.Job.ID != release[0].ID {
+		t.Fatalf("claimed %v, want boosted release job %v (routine %v)",
+			c.Job.ID, release[0].ID, slow[0].ID)
 	}
 }
