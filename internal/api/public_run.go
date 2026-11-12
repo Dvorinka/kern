@@ -351,6 +351,9 @@ func jobCheckNarrative(ctx context.Context, s *Server, run store.Run,
 		} else {
 			summary = fmt.Sprintf("KERN job %s — preparing.", name)
 		}
+		if p.queueWait > 0 {
+			summary += fmt.Sprintf(" Waited %s in queue.", fmtSeconds(p.queueWait))
+		}
 		if p.eta >= 0 {
 			summary += fmt.Sprintf(" ~%s left.", fmtSeconds(p.eta))
 		}
