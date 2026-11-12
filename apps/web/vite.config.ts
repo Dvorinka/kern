@@ -9,7 +9,7 @@ export default defineConfig({
 		proxy: {
 			"/api": {
 				target: process.env.KERN_API_ORIGIN ?? "http://localhost:8080",
-				changeOrigin: false,
+				changeOrigin: true,
 			},
 		},
 	},
