@@ -6,6 +6,15 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 ## [Unreleased]
 
 ### Added
+- Check-run `output.text`: failed and timed-out job/run checks now carry a
+  masked markdown excerpt — failing step name, exit code, diagnosis, and a
+  4 KiB log tail (capped at 8000 chars, inside GitHub's output limits) — so
+  a failed lane can be diagnosed without opening the console. (#324)
+- `check_run.rerequested` and `check_suite.rerequested` webhook support:
+  GitHub's Re-run button now resets the matching KERN jobs through the
+  existing rerun machinery — a per-job check reruns that lane plus its
+  dependents, a run or suite rerequest resets everything that did not
+  succeed. (#323)
 - Warn-tier idle reclaim: under non-critical disk pressure with no job in
   flight the runner now also sweeps aged `/tmp` scratch (72h) and tightens
   the persistent cache to a 3/4 floor — previously only the critical tier
@@ -21,6 +30,34 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
   and names the missing GitHub App scope as the fix, and a missing `gh`
   binary points at the kern baseline image instead of an apt install that
   cannot succeed.
+
+### Changed
+- Overview `Live now` renders compact rows instead of one large card per
+  run: each row is a single fingerprint bar where every job is a segment
+  on the run's clock, tinted by stage hue (lint/build/web) with running
+  blue, failure red, and queued hatched — a matrix run no longer stacks a
+  lane per job into a wall of cards. The overview is ~44% shorter on a
+  busy fleet, and nine live runs fit in one viewport.
+- Recent-runs rows gain the same slim fingerprint strip in their
+  previously empty rail slot, so every row reads as a pipeline at a
+  glance.
+
+### Fixed
+- `ACTIONS_RUNTIME_TOKEN` is now a real HS256 JWT carrying `ac`/`exp`/`nbf`
+  claims, which buildx's `type=gha` cache backend requires before it will
+  call `ACTIONS_CACHE_URL` — docker lanes using `cache-from: type=gha`
+  failed in seconds with "token contains an invalid number of segments".
+  Legacy `kc1` tokens minted before the switch still validate so running
+  jobs keep cache access. (#321)
+- Overview at phone widths: commit-graph lanes no longer consume a
+  quarter of the viewport under 760px, the fifth KPI cell spans the grid
+  instead of orphaning, and activity-map cells are capped so the map
+  stops ballooning on small screens.
+- Run detail's job-picker chips now wrap instead of pushing the page
+  ~220px past the viewport edge on narrow screens; `main` clips
+  horizontal overflow defensively.
+- Vite dev proxy sets `changeOrigin`, so `KERN_API_ORIGIN` can point at a
+  remote/tunnel origin that rejects a `localhost` Host header.
 
 ## [0.11.0] - 2026-11-11
 

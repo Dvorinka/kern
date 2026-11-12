@@ -185,6 +185,10 @@ func (s *Server) postJobCheck(ctx context.Context, run store.Run, job store.Job,
 	if name == "" {
 		name = job.Key
 	}
+	var text string
+	if status == "completed" && (conclusion == "failure" || conclusion == "timed_out") {
+		text = s.checkLogExcerpt(ctx, []store.Job{job})
+	}
 	if err := cl.UpsertCheckRun(ctx, repo, github.CheckRun{
 		Name: "kern/" + run.WorkflowName + " / " + name, HeadSHA: run.SHA,
 		Status: status, Conclusion: conclusion,
@@ -192,10 +196,102 @@ func (s *Server) postJobCheck(ctx context.Context, run store.Run, job store.Job,
 		ExternalID: run.ID.String() + "/" + job.Key,
 		Title:      name + ": " + jobCheckTitle(state, conclusion),
 		Summary:    "KERN job " + name + ".",
+		Text:       text,
 	}); err != nil {
 		s.Log.Warn("job check run failed",
 			zap.String("repo", repo), zap.String("job", job.Key), zap.Error(err))
 	}
+}
+
+// checkTextCap keeps output.text well under GitHub's 64 KiB output limit.
+const checkTextCap = 8000
+
+// checkLogExcerpt builds the check-run output.text for a failed check: each
+// failed step's name, exit code and diagnosis, plus the tail of its stored
+// log (masked at upload time), so Checks API consumers can diagnose a lane
+// without opening the dashboard (#324). At most three steps are quoted.
+func (s *Server) checkLogExcerpt(ctx context.Context, jobs []store.Job) string {
+	var b strings.Builder
+	shown := 0
+	for _, j := range jobs {
+		steps := j.Steps
+		if len(steps) == 0 && s.Store != nil {
+			if st, err := s.Store.StepsForJob(ctx, j.ID); err == nil {
+				steps = st
+			}
+		}
+		name := j.Name
+		if name == "" {
+			name = j.Key
+		}
+		for _, st := range steps {
+			if st.Conclusion != "failure" && st.Conclusion != "timed_out" {
+				continue
+			}
+			if shown >= 3 || b.Len() > checkTextCap {
+				return b.String()
+			}
+			shown++
+			fmt.Fprintf(&b, "### %s — %s\n\n", name, st.Name)
+			if st.ExitCode != nil {
+				fmt.Fprintf(&b, "exit code %d\n\n", *st.ExitCode)
+			}
+			if line := stepDiagnosisLine(st); line != "" {
+				b.WriteString(line + "\n\n")
+			}
+			if tail := s.logTail(st.LogRef, 4096); tail != "" {
+				fmt.Fprintf(&b, "```\n%s\n```\n\n", tail)
+			}
+		}
+	}
+	return b.String()
+}
+
+// stepDiagnosisLine renders a stored step diagnosis as a one-line finding.
+func stepDiagnosisLine(st store.Step) string {
+	if len(st.Diagnosis) == 0 {
+		return ""
+	}
+	var d struct {
+		Kind       string `json:"kind"`
+		Summary    string `json:"summary"`
+		Suggestion string `json:"suggestion"`
+	}
+	if json.Unmarshal(st.Diagnosis, &d) != nil || d.Kind == "" {
+		return ""
+	}
+	line := "**" + d.Kind + "** — " + d.Summary
+	if d.Suggestion != "" {
+		line += "\n" + d.Suggestion
+	}
+	return line
+}
+
+// logTail returns the last max bytes of a stored log, starting on a line
+// boundary so the excerpt does not open mid-line.
+func (s *Server) logTail(ref string, max int64) string {
+	if ref == "" || s.Blobs == nil {
+		return ""
+	}
+	size, err := s.Blobs.Size(ref)
+	if err != nil || size == 0 {
+		return ""
+	}
+	off := int64(0)
+	if size > max {
+		off = size - max
+	}
+	data, _, err := s.Blobs.ReadFrom(ref, off, int(max))
+	if err != nil {
+		return ""
+	}
+	text := string(data)
+	if off > 0 {
+		if i := strings.IndexByte(text, '\n'); i >= 0 {
+			text = text[i+1:]
+		}
+	}
+	return text
 }
 
 // jobCheck maps a stored job state onto Checks API status/conclusion.

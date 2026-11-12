@@ -105,6 +105,10 @@ func (s *Server) actOnGithubEvent(c *gin.Context, delivery, event string, body [
 		t, status, detail = parseReleaseTrigger(body)
 	case "repository_dispatch":
 		t, status, detail = parseRepoDispatchTrigger(body)
+	case "check_run":
+		return s.actOnCheckRun(c, body)
+	case "check_suite":
+		return s.actOnCheckSuite(c, body)
 	default:
 		return "ignored", "event type " + event + " is recorded but not acted on"
 	}

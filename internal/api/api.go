@@ -118,11 +118,17 @@ func (s *Server) wireCommitStatus() {
 					zap.String("run", run.ID.String()), zap.Int("skipped", skipped))
 			}
 		}
+		// A failed run's check quotes the failing steps' log tails so the
+		// cause is visible from the Checks API (#324).
+		var text string
+		if conclusion == "failure" {
+			text = s.checkLogExcerpt(ctx, jobs)
+		}
 		if err := cl.UpsertCheckRun(ctx, repo, github.CheckRun{
 			Name: "kern/" + run.WorkflowName, HeadSHA: run.SHA,
 			Status: status, Conclusion: conclusion, DetailsURL: target,
 			ExternalID: run.ID.String(), Title: checkTitle(run, state),
-			Summary: checkSummary(run, jobs), Annotations: anns,
+			Summary: checkSummary(run, jobs), Text: text, Annotations: anns,
 		}); err != nil {
 			s.Log.Warn("check run failed", zap.String("repo", repo), zap.Error(err))
 		}
