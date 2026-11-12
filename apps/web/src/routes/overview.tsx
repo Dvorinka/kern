@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { api } from "../lib/api";
 import type { DayCount, FleetMapResponse, OverviewResponse, QueuedJob, Run } from "../lib/types";
 import { Spinner } from "../components/ui";
-import { Fingerprint, jobHue, useRunDetails } from "../components/fingerprint";
+import { Fingerprint, jobTint, useRunDetails } from "../components/fingerprint";
 import { FleetMap, fleetSites } from "../components/fleetmap";
 import { RunsChart, type DayPoint } from "../components/runschart";
 import { ActivityMap, type DayTotals } from "../components/activitymap";
@@ -315,7 +315,10 @@ export function OverviewPage() {
 									</div>
 									<div className="m">
 										<b>
-											{r.workflow_name} #{r.run_number}
+											<span style={{ color: jobTint(r.workflow_name) }}>
+												{r.workflow_name}
+											</span>{" "}
+											#{r.run_number}
 										</b>
 										<span>{refName(r.ref)}</span>
 										<code className="font-mono">{shortSha(r.sha)}</code>
@@ -467,7 +470,13 @@ export function OverviewPage() {
 										className="qrow rowlink"
 										key={j.id}
 									>
-										<i className={`sw pat-${jobHue(j.job_key || j.name)}`} />
+										<i
+											className="sw"
+											style={{
+												background: jobTint(j.job_key || j.name),
+												borderColor: jobTint(j.job_key || j.name),
+											}}
+										/>
 										<div>
 											<b>{j.name}</b>
 											<small>

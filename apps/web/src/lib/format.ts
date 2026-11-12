@@ -64,3 +64,41 @@ export function projectColor(slug: string): string {
 	for (let i = 0; i < slug.length; i++) h = (h * 31 + slug.charCodeAt(i)) >>> 0;
 	return `hsl(${h % 360} 55% 62%)`;
 }
+
+// CAT_HUES pins well-known category names — events, environments — to a
+// semantic hue so the same kind of thing reads the same colour fleet-wide.
+// Chosen to stay clear of the status vocabulary (live blue, err red, warn
+// yellow): categories are muted, statuses are saturated.
+const CAT_HUES: Record<string, number> = {
+	// webhook events
+	push: 168,
+	merge_group: 168,
+	pull_request: 262,
+	pull_request_target: 262,
+	schedule: 36,
+	release: 330,
+	workflow_dispatch: 205,
+	workflow_call: 205,
+	// environments
+	production: 330,
+	prod: 330,
+	staging: 36,
+	preview: 168,
+	development: 205,
+	dev: 205,
+};
+
+// catColor gives non-project category names a stable identity colour: pinned
+// hues for known categories, deterministic muted hash for the rest — same
+// family as projectColor so the whole palette reads as one system.
+export function catColor(name: string): string {
+	const k = name.toLowerCase().trim();
+	if (!k) return "var(--ink)";
+	let h = CAT_HUES[k] ?? CAT_HUES[Object.keys(CAT_HUES).find((p) => k.includes(p)) ?? ""];
+	if (h == null) {
+		h = 0;
+		for (let i = 0; i < k.length; i++) h = (h * 31 + k.charCodeAt(i)) >>> 0;
+		h %= 360;
+	}
+	return `hsl(${h} 55% 58%)`;
+}

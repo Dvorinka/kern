@@ -6,8 +6,8 @@ import { api } from "../lib/api";
 import type { Job, OverviewResponse, Project, QueuedJob, Run, Runner } from "../lib/types";
 import { PageHeader, RunnerIcon, Spinner, cn } from "../components/ui";
 import { StatusPill, StatusSq } from "../components/status";
-import { Fingerprint, jobHue, useRunDetails } from "../components/fingerprint";
-import { bytes, duration, projectColor, refName, relTime, shortSha } from "../lib/format";
+import { Fingerprint, jobTint, useRunDetails } from "../components/fingerprint";
+import { bytes, catColor, duration, projectColor, refName, relTime, shortSha } from "../lib/format";
 
 type Tab = "" | "running" | "failed" | "cancelled";
 
@@ -271,7 +271,13 @@ export function RunsPage() {
 						)}
 						{queuedJobs.slice(0, 5).map((j) => (
 							<Link to={`/runs/${j.run_id}?job=${encodeURIComponent(j.job_key || j.id)}`} className="qrow rowlink" key={j.id}>
-								<i className={`sw pat-${jobHue(j.job_key || j.name)}`} />
+								<i
+									className="sw"
+									style={{
+										background: jobTint(j.job_key || j.name),
+										borderColor: jobTint(j.job_key || j.name),
+									}}
+								/>
 								<div className="min-w-0">
 									<b className="block truncate">{j.name}</b>
 									<small>
@@ -416,14 +422,14 @@ function RunRow({
 					<i className="mx-1.5 not-italic text-[#3d3d3d]">·</i>
 					{shortSha(r.sha)}
 					<i className="mx-1.5 not-italic text-[#3d3d3d]">·</i>
-					{r.event}
+					<span style={{ color: catColor(r.event) }}>{r.event}</span>
 					<i className="mx-1.5 not-italic text-[#3d3d3d]">·</i>
 					{r.actor}
 					<i className="mx-1.5 not-italic text-[#3d3d3d]">·</i>
-					{r.workflow_name}
+					<span style={{ color: jobTint(r.workflow_name) }}>{r.workflow_name}</span>
 				</div>
 			</div>
-			<Fingerprint run={r} jobs={jobs} small className="fp" />
+			<Fingerprint run={r} jobs={jobs} small tinted className="fp" />
 			<div className="dur text-right font-mono text-xs text-[var(--dim)]">
 				{duration(r.started_at, r.completed_at)}
 				{live && <small className="block text-[11px] text-[var(--faint)]">elapsed</small>}
@@ -468,17 +474,20 @@ function RunRow({
 					<div className="rp-grid">
 						<span className="k">workflow</span>
 						<span className="v">
-							{r.workflow_name} #{r.run_number}
+							<span style={{ color: jobTint(r.workflow_name) }}>{r.workflow_name}</span> #
+							{r.run_number}
 						</span>
 						<span className="k">project</span>
-						<span className="v">{r.project_name || r.project_slug}</span>
+						<span className="v" style={{ color: projectColor(r.project_slug) }}>
+							{r.project_name || r.project_slug}
+						</span>
 						<span className="k">branch</span>
 						<span className="v">{refName(r.ref)}</span>
 						<span className="k">commit</span>
 						<span className="v font-mono">{shortSha(r.sha)}</span>
 						<span className="k">trigger</span>
 						<span className="v">
-							{r.event} · {r.actor}
+							<span style={{ color: catColor(r.event) }}>{r.event}</span> · {r.actor}
 						</span>
 						<span className="k">queued</span>
 						<span className="v">{relTime(r.created_at)}</span>
@@ -495,7 +504,7 @@ function RunRow({
 							</>
 						)}
 					</div>
-					<Fingerprint run={r} jobs={jobs} />
+					<Fingerprint run={r} jobs={jobs} tinted />
 					<div className="rp-acts">
 						<button className="rpact" onClick={onOpen}>
 							Open run

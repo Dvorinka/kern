@@ -25,6 +25,12 @@ const HUE_CLS: Record<JobHue, string> = { lint: "l", build: "b", web: "w2" };
 // monochrome fill pattern — used where a bar must read as a pipeline.
 const HUE_TINT: Record<string, string> = { l: "h1", b: "h2", w2: "h3" };
 
+// jobTint returns the stage colour a job's tinted fingerprint segment takes,
+// so a job or workflow name can wear the same colour as its bar.
+export function jobTint(key: string): string {
+	return { lint: "var(--h1)", build: "var(--h2)", web: "var(--h3)" }[jobHue(key)];
+}
+
 // Shared run-clock: every fingerprint is drawn on the same wall of minutes,
 // extended when a run outlasts it.
 export const FP_SCALE_MS = 8 * 60 * 1000;

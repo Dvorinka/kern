@@ -1,6 +1,7 @@
+import type { CSSProperties } from "react";
 import type { Job, Run } from "../lib/types";
 import { duration } from "../lib/format";
-import { jobHue } from "./fingerprint";
+import { jobHue, jobTint } from "./fingerprint";
 
 // Pipeline trace — the mockup's .plate: one shared clock for every job.
 // Pattern bars carry job identity, blue means live, the stop-x marks a
@@ -153,7 +154,7 @@ export function RunGantt({
 								}
 								title={onPickJob ? `Show steps for ${l.j.name}` : undefined}
 							>
-								<b>{l.j.name}</b>
+								<b style={{ color: jobTint(l.j.job_key || l.j.name) }}>{l.j.name}</b>
 								<small>{laneSub(l)}</small>
 							</div>
 						))}
@@ -224,10 +225,13 @@ export function RunGantt({
 										<>
 											<i
 												className={`bar pat-${jobHue(l.j.job_key || l.j.name)}${l.running ? " run" : ""}${l.failed ? " fail" : ""}`}
-												style={{
-													left: `${pct(l.st)}%`,
-													width: `${Math.max(0.6, pct(l.en ?? now) - pct(l.st))}%`,
-												}}
+												style={
+													{
+														left: `${pct(l.st)}%`,
+														width: `${Math.max(0.6, pct(l.en ?? now) - pct(l.st))}%`,
+														"--jhc": jobTint(l.j.job_key || l.j.name),
+													} as CSSProperties
+												}
 												title={`${l.j.name} · ${duration(l.j.started_at, l.j.completed_at)}`}
 											/>
 											{l.running && <i className="head" style={{ left: `${pct(now)}%` }} />}

@@ -4,7 +4,7 @@ import { Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import type { CacheEntry, Project } from "../lib/types";
 import { Button, PageHeader, Spinner } from "../components/ui";
-import { bytes, relTime } from "../lib/format";
+import { bytes, projectColor, relTime } from "../lib/format";
 
 export function CachePage() {
 	const qc = useQueryClient();
@@ -91,7 +91,11 @@ export function CachePage() {
 								<div className="truncate font-mono text-xs text-[var(--ink)]">{e.key}</div>
 								<div className="mt-0.5 truncate font-mono text-[11px] text-[var(--faint)]">
 									{slugOf.get(e.project_id) ? (
-										<Link to={`/projects/${slugOf.get(e.project_id)}`} className="lnk">
+										<Link
+											to={`/projects/${slugOf.get(e.project_id)}`}
+											className="lnk"
+											style={{ color: projectColor(slugOf.get(e.project_id)!) }}
+										>
 											{slugOf.get(e.project_id)}
 										</Link>
 									) : (

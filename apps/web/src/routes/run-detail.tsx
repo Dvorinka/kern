@@ -11,7 +11,8 @@ import { Button, Spinner, cn } from "../components/ui";
 import { useAuth } from "../lib/auth";
 import { LogView } from "../components/log-view";
 import { RunGantt } from "../components/gantt";
-import { bytes, duration, refName, relTime, shortSha } from "../lib/format";
+import { jobTint } from "../components/fingerprint";
+import { bytes, catColor, duration, projectColor, refName, relTime, shortSha } from "../lib/format";
 
 export function RunDetailPage() {
 	const { id } = useParams<{ id: string }>();
@@ -74,14 +75,19 @@ export function RunDetailPage() {
 			</Link>
 			<div className="rtag">
 				<b>
-					{run.workflow_name} #{run.run_number}
+					<span style={{ color: jobTint(run.workflow_name) }}>{run.workflow_name}</span> #
+					{run.run_number}
 				</b>
 				<span>{refName(run.ref)}</span>
 				<code>{shortSha(run.sha)}</code>
 				<span>
-					{run.event} by {run.actor}
+					<span style={{ color: catColor(run.event) }}>{run.event}</span> by {run.actor}
 				</span>
-				<Link to={`/projects/${run.project_slug}`} className="lnk">
+				<Link
+					to={`/projects/${run.project_slug}`}
+					className="lnk"
+					style={{ color: projectColor(run.project_slug) }}
+				>
 					{run.project_name || run.project_slug}
 				</Link>
 				<Link to={`/runs?project=${run.project_slug}`} className="lnk">
@@ -127,7 +133,7 @@ export function RunDetailPage() {
 			<dl className="rkv">
 				<div>
 					<dt>Trigger</dt>
-					<dd>{run.event}</dd>
+					<dd style={{ color: catColor(run.event) }}>{run.event}</dd>
 				</div>
 				<div>
 					<dt>Branch</dt>
@@ -211,12 +217,22 @@ function StepsPanel({
 			<div className="sec2">
 				<h3>Log</h3>
 				<span>
-					{job.name}
+					<span style={{ color: jobTint(job.job_key || job.name) }}>{job.name}</span>
 					{jobs.length > 1 &&
 						` · job ${jobs.findIndex((j) => j.id === job.id) + 1} of ${jobs.length}`}
 					{job.runner_id && runners.get(job.runner_id) && ` · on ${runners.get(job.runner_id)}`}
-					{job.environment && ` · ${job.environment}`}
-					{job.classification && ` · ${job.classification}`}
+					{job.environment && (
+						<>
+							{" · "}
+							<span style={{ color: catColor(job.environment) }}>{job.environment}</span>
+						</>
+					)}
+					{job.classification && (
+						<>
+							{" · "}
+							<span style={{ color: catColor(job.classification) }}>{job.classification}</span>
+						</>
+					)}
 					{job.metrics?.cpu_pct_peak != null &&
 						` · cpu ${Math.round(job.metrics.cpu_pct_peak)}%`}
 					{job.metrics?.mem_bytes_peak != null &&
@@ -235,6 +251,7 @@ function StepsPanel({
 								}}
 								className={j.id === job.id ? "on" : ""}
 							>
+								<i style={{ background: jobTint(j.job_key || j.name) }} />
 								{j.name}
 							</button>
 						))}

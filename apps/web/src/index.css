@@ -2670,6 +2670,16 @@ dl.rkv dd {
 	border-radius: 999px;
 	padding: 4px 12px;
 	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+/* job hue dot — same stage colour as the job's fingerprint segment */
+.jpick button i {
+	width: 7px;
+	height: 7px;
+	border-radius: 2px;
+	flex: none;
 }
 .jpick button.on {
 	background: var(--ink);
@@ -2782,7 +2792,7 @@ dl.rkv dd {
 	top: 50%;
 	height: 22px;
 	margin-top: -11px;
-	border: 2px solid var(--ink);
+	border: 2px solid var(--jhc, var(--ink));
 	border-radius: 11px;
 }
 .bar.run {

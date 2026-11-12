@@ -8,8 +8,8 @@ import type { Project, Run, Workflow } from "../lib/types";
 import { Button, EmptyState, Input, KV, PageHeader, ProjectIcon, Spinner } from "../components/ui";
 import { StatusSq } from "../components/status";
 import { Row } from "../components/layout";
-import { jobHue } from "../components/fingerprint";
-import { duration, refName, relTime, seconds, shortSha } from "../lib/format";
+import { jobHue, jobTint } from "../components/fingerprint";
+import { duration, projectColor, refName, relTime, seconds, shortSha } from "../lib/format";
 
 export function ProjectsPage() {
   const nav = useNavigate();
@@ -118,7 +118,9 @@ export function ProjectsPage() {
                 <div className="pt2">
                   <ProjTile p={p} iconPath={icons[p.slug]} />
                   <div className="min-w-0">
-                    <b className="truncate">{p.name}</b>
+                    <b className="truncate" style={{ color: projectColor(p.slug) }}>
+                      {p.name}
+                    </b>
                     <small>{p.repo_full_name || p.local_path || p.repo_url || p.slug}</small>
                   </div>
                   {s?.last && (
@@ -164,7 +166,14 @@ export function ProjectsPage() {
                       +{s.hist.length - 12}
                     </span>
                   )}
-                  <span className="prate">
+                  <span
+                    className="prate"
+                    style={
+                      rate != null && rate < 80
+                        ? { color: rate < 50 ? "var(--err)" : "var(--warn)" }
+                        : undefined
+                    }
+                  >
                     {rate != null ? `${rate}% ok` : ""}
                     {s?.total ? ` · ${s.total} runs` : ""}
                   </span>
@@ -186,7 +195,14 @@ function ProjTile({ p, iconPath }: { p: Project; iconPath?: string | null }) {
     iconPath,
     localPath: p.local_path,
   });
-  return img ?? <i className={`phm pat-${jobHue(p.slug)}`} />;
+  return (
+    img ?? (
+      <i
+        className={`phm pat-${jobHue(p.slug)}`}
+        style={{ borderColor: projectColor(p.slug) }}
+      />
+    )
+  );
 }
 
 // icon_path lives in the project settings doc — one cached read per project
@@ -562,6 +578,7 @@ export function ProjectDetailPage() {
             <Row key={w.id}>
               <span
                 className={`min-w-0 flex-1 truncate font-medium ${w.disabled ? "text-[var(--faint)]" : ""}`}
+                style={w.disabled ? undefined : { color: jobTint(w.name) }}
               >
                 {w.name}
               </span>

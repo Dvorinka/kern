@@ -5,7 +5,7 @@ import { Code2, Copy, KeyRound, Pencil, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import type { Environment, Project, ProjectVar, SecretSummary } from "../lib/types";
 import { Button, Card, EmptyState, Input, PageHeader, Spinner } from "../components/ui";
-import { relTime } from "../lib/format";
+import { catColor, projectColor, relTime } from "../lib/format";
 
 // Secrets are scoped org → project → environment. The API filters by
 // ?project=<slug>&environment=<name>; an unscoped read returns org and
@@ -105,7 +105,10 @@ export function SecretsPage() {
 	// group by scope: organization first, then each project alphabetically
 	const STALE = 90 * 86_400_000;
 	const groups = useMemo(() => {
-		const out = new Map<string, { label: string; slug?: string; items: SecretSummary[] }>();
+		const out = new Map<
+			string,
+			{ label: string; slug?: string; envName?: string; items: SecretSummary[] }
+		>();
 		const needle = q.trim().toLowerCase();
 		for (const s of data?.secrets ?? []) {
 			if (needle && !s.name.toLowerCase().includes(needle)) continue;
@@ -116,6 +119,7 @@ export function SecretsPage() {
 				out.set(key, {
 					label: envLabel ? `${scopeSlug ?? slug} / ${envLabel}` : scopeSlug ?? "organization",
 					slug: scopeSlug,
+					envName: envLabel,
 					items: [],
 				});
 			}
@@ -279,9 +283,21 @@ export function SecretsPage() {
 								{groups.length > 1 && (
 									<div className="vgh">
 										{g.slug ? (
-											<Link to={`/projects/${g.slug}`} className="lnk">
-												{g.label}
-											</Link>
+											<span>
+												<Link
+													to={`/projects/${g.slug}`}
+													className="lnk"
+													style={{ color: projectColor(g.slug) }}
+												>
+													{g.slug}
+												</Link>
+												{g.envName && (
+													<>
+														{" / "}
+														<span style={{ color: catColor(g.envName) }}>{g.envName}</span>
+													</>
+												)}
+											</span>
 										) : (
 											g.label
 										)}

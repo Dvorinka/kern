@@ -4,7 +4,7 @@ import { Minus, Plus, RotateCcw } from "lucide-react";
 import type { FleetMapPin, FleetMapResponse } from "../lib/types";
 import { WORLD_DOTS } from "../lib/world-dots";
 import { WORLD_BORDERS_PATH, WORLD_GRATICULE_PATH, WORLD_LAND_PATH } from "../lib/world-land";
-import { jobHue } from "./fingerprint";
+import { jobTint } from "./fingerprint";
 
 // Dot-matrix world, rasterized from Natural Earth 110m land — the mockup's
 // map verbatim. Equirectangular, cropped above 83°N and below 58°S.
@@ -397,7 +397,13 @@ export function FleetMap({ data }: { data: FleetMapResponse }) {
 						<div className="fm-tip-jobs">
 							{hovered.jobs.slice(0, 4).map((j, i) => (
 								<div key={i}>
-									<i className={`jc-swatch j-${jobHue(j.key || j.name)}`} />
+									<i
+										className="jc-swatch"
+										style={{
+											background: jobTint(j.key || j.name),
+											borderColor: jobTint(j.key || j.name),
+										}}
+									/>
 									{j.name}
 								</div>
 							))}
