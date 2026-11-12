@@ -168,9 +168,35 @@ func (c *cli) doctorFleet(ctx context.Context, add func(string, string, string))
 		if r.ClaimsPaused != "" {
 			add("runner "+r.Name, "warn", "claims paused: "+r.ClaimsPaused)
 		}
+		// Recommended minimums: a docker runner carries job images, the
+		// persistent _cache tree, toolcache installs and per-job workspaces;
+		// below these floors the claim gates flap and GC churn costs more
+		// than it saves. 40 GiB total / 10 GiB free / 4 GiB RAM is the
+		// smallest host that stays healthy under a 2-job concurrency.
+		if r.DiskBytes > 0 && r.DiskBytes < recommendedRunnerDiskBytes {
+			add("runner "+r.Name, "warn", fmt.Sprintf(
+				"disk %s total below recommended %s minimum for a docker runner",
+				humanBytes(r.DiskBytes), humanBytes(recommendedRunnerDiskBytes)))
+		}
+		if r.DiskFreeBytes != nil && *r.DiskFreeBytes < recommendedRunnerFreeBytes {
+			add("runner "+r.Name, "warn", fmt.Sprintf(
+				"only %s disk free — recommend %s+ so reclaim sweeps do not churn",
+				humanBytes(*r.DiskFreeBytes), humanBytes(recommendedRunnerFreeBytes)))
+		}
+		if r.MemoryBytes > 0 && r.MemoryBytes < recommendedRunnerMemBytes {
+			add("runner "+r.Name, "warn", fmt.Sprintf(
+				"memory %s below recommended %s minimum; job containers need ~2 GiB each",
+				humanBytes(r.MemoryBytes), humanBytes(recommendedRunnerMemBytes)))
+		}
 	}
 	return runners.Runners
 }
+
+const (
+	recommendedRunnerDiskBytes = 40 << 30
+	recommendedRunnerFreeBytes = 10 << 30
+	recommendedRunnerMemBytes  = 4 << 30
+)
 
 // riskyEnvKeys lists runner env overrides that rewrite fundamentals every
 // job inherits — the workflow never asked for them and the contract keys

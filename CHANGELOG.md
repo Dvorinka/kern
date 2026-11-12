@@ -3,6 +3,25 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
+## [Unreleased]
+
+### Added
+- Warn-tier idle reclaim: under non-critical disk pressure with no job in
+  flight the runner now also sweeps aged `/tmp` scratch (72h) and tightens
+  the persistent cache to a 3/4 floor — previously only the critical tier
+  escalated past `docker prune`.
+- `kern doctor` fleet advisories: runners below the recommended minimums
+  (40 GiB disk total, 10 GiB free, 4 GiB RAM) report a warn with the
+  recommended size, so undersized hosts are caught before claim gates flap.
+- GitHub App manifest now requests `actions: write` so trusted workflows
+  can dispatch follow-up runs (`gh workflow run`) with the per-run
+  GITHUB_TOKEN (#322). Apps installed before this grant must accept the
+  permission update in their GitHub settings.
+- Failure diagnosis recognises "Resource not accessible by integration"
+  and names the missing GitHub App scope as the fix, and a missing `gh`
+  binary points at the kern baseline image instead of an apt install that
+  cannot succeed.
+
 ## [0.11.0] - 2026-11-11
 
 ### Added

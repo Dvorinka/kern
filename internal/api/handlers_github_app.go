@@ -39,10 +39,16 @@ func (s *Server) githubAppManifest(c *gin.Context) {
 				// contents:write — trusted runs push tags/commits with the
 				// per-run installation token (actions/checkout parity). Read
 				// leaves `git push` at a 403 after #112's credential persist.
-				"contents":      "write",
-				"metadata":      "read",
-				"statuses":      "write",
-				"checks":        "write",
+				"contents": "write",
+				"metadata": "read",
+				"statuses": "write",
+				"checks":   "write",
+				// actions:write — trusted workflows dispatch follow-up runs
+				// (`gh workflow run`, reusable-workflow APIs) with the per-run
+				// token. Without it the dispatch returns 403 "Resource not
+				// accessible by integration" (#322). Apps created before this
+				// grant must accept the permission update in GitHub settings.
+				"actions":       "write",
 				"pull_requests": "read",
 			},
 			// pull_request_target is not a subscribable App event. The webhook
