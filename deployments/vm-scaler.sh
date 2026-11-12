@@ -56,6 +56,9 @@ for conf in "${confs[@]}"; do
   KERN_VM_STOP_GRACE_SECONDS=${KERN_VM_STOP_GRACE_SECONDS:-300}
   KERN_VM_KILL_CMD=${KERN_VM_KILL_CMD:-}
   KERN_VM_WARM_CRON=${KERN_VM_WARM_CRON:-}
+  # Seconds a start command is treated as in flight — bounds watch-mode
+  # re-fires while the host's state word still reads down.
+  KERN_VM_START_COOLDOWN=${KERN_VM_START_COOLDOWN:-180}
   KERN_VM_DB=${KERN_VM_DB:-$DB}
 
   id=$KERN_VM_ID
@@ -81,6 +84,7 @@ for conf in "${confs[@]}"; do
   state=$(eval "$KERN_VM_STATE_CMD" | head -1)
   is_up=0
   [[ "$state" =~ $KERN_VM_UP_RE ]] && is_up=1
+  [ $is_up -eq 1 ] && rm -f "$STATE_DIR/$id.start-since"
 
   # warm schedule: pre-boot once per day at HH:MM
   if [ -n "$KERN_VM_WARM_CRON" ] && [ "$(date +%H:%M)" = "$KERN_VM_WARM_CRON" ]; then
@@ -105,8 +109,21 @@ for conf in "${confs[@]}"; do
       if [ "$autostart" = "off" ] || [ "$wake" = "false" ]; then
         echo "vm-scaler[$id]: autostart suppressed (org=$autostart runner wake_on_demand=$wake)"
       else
-        echo "vm-scaler[$id]: $pending queued job(s) matching [$KERN_VM_LABELS], starting"
-        eval "$KERN_VM_START_CMD" || true
+        # Watch mode ticks far faster than a VM boots — without a
+        # cooldown a 10s tick re-fires START_CMD until the state word
+        # flips up (double-boot storm on providers that don't no-op).
+        start_stamp="$STATE_DIR/$id.start-since"
+        started_recently=0
+        if [ -f "$start_stamp" ] && [ $(( $(date +%s) - $(cat "$start_stamp") )) -lt "$KERN_VM_START_COOLDOWN" ]; then
+          started_recently=1
+        fi
+        if [ $started_recently -eq 1 ]; then
+          echo "vm-scaler[$id]: start already issued, waiting for up state"
+        else
+          echo "vm-scaler[$id]: $pending queued job(s) matching [$KERN_VM_LABELS], starting"
+          date +%s > "$start_stamp"
+          eval "$KERN_VM_START_CMD" || true
+        fi
       fi
     fi
     continue

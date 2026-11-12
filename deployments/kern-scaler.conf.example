@@ -20,6 +20,11 @@ KERN_VM_IDLE_MINUTES=15
 # Seconds to wait after STOP_CMD before KILL_CMD fires (if still up).
 KERN_VM_STOP_GRACE_SECONDS=300
 
+# Seconds a START_CMD counts as in flight before another may fire — in
+# watch mode the tick outpaces boot, so this bounds re-starts until the
+# state word flips up (default 180).
+# KERN_VM_START_COOLDOWN=180
+
 # Provider commands — the engine only cares about the contract:
 #   STATE_CMD prints a state word; anything matching UP_RE counts as up.
 #   START_CMD brings the host up, STOP_CMD asks it down (graceful),
