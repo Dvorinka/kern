@@ -112,6 +112,19 @@ Production-style deployment: `docker compose -f deployments/docker-compose.yml u
 | [plan.md](plan.md) | Milestone ledger |
 | [project.md](project.md) | Product specification |
 
+## Agent skills
+
+This repo ships agent skills under `skills/`, installable with the
+[skills CLI](https://skills.sh):
+
+```sh
+npx skills add Dvorinka/kern@kern-ops
+```
+
+| Skill | Contents |
+| --- | --- |
+| [skills/kern-ops](skills/kern-ops/SKILL.md) | Fleet operations — runner lifecycle, version stamping, drain discipline, env-file corruption, run triage, release chain |
+
 ## Contributing
 
 Issues and PRs welcome. `just build` / `just test` / `just vet`, and
