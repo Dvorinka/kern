@@ -4,7 +4,8 @@ import { Link, useParams } from "react-router-dom";
 import { ApiError, api } from "../lib/api";
 import { PageHeader, Spinner } from "../components/ui";
 import { StatusPill, StatusSq } from "../components/status";
-import { duration, relTime, refName, shortSha } from "../lib/format";
+import { jobTint } from "../components/fingerprint";
+import { catColor, duration, projectColor, relTime, refName, shortSha } from "../lib/format";
 
 interface PublicStep {
 	number: number;
@@ -121,12 +122,16 @@ function PublicBody({ data }: { data: PublicPayload }) {
 				sub={
 					<div className="flex flex-wrap items-baseline gap-x-3.5">
 						<span>
-							{run.workflow_name} · <b className="font-medium text-[var(--ink)]">#{run.run_number}</b>
+							<span style={{ color: jobTint(run.workflow_name) }}>{run.workflow_name}</span> ·{" "}
+							<b className="font-medium text-[var(--ink)]">#{run.run_number}</b>
 						</span>
 						<span className="font-mono">{refName(run.ref)}</span>
 						<span className="font-mono">{shortSha(run.sha)}</span>
-						<span>{run.event}{run.actor ? ` by ${run.actor}` : ""}</span>
-						<span className="text-[var(--faint)]">{run.project_slug}</span>
+						<span>
+							<span style={{ color: catColor(run.event) }}>{run.event}</span>
+							{run.actor ? ` by ${run.actor}` : ""}
+						</span>
+						<span style={{ color: projectColor(run.project_slug) }}>{run.project_slug}</span>
 					</div>
 				}
 				actions={
@@ -165,7 +170,12 @@ function PublicBody({ data }: { data: PublicPayload }) {
 						<div key={`${job.name}-${i}`} className="border-b border-[var(--line)] last:border-0">
 							<div className="flex items-center gap-3 px-4 py-2.5">
 								<StatusSq status={job.status} conclusion={job.conclusion} />
-								<span className="min-w-0 flex-1 truncate font-medium">{job.name}</span>
+								<span
+									className="min-w-0 flex-1 truncate font-medium"
+									style={{ color: jobTint(job.name) }}
+								>
+									{job.name}
+								</span>
 								<span className="tabular-nums text-xs text-[var(--faint)]">
 									{duration(job.started_at, job.completed_at)}
 								</span>

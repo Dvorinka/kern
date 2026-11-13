@@ -6,7 +6,7 @@ import type { WebhookDelivery } from "../lib/types";
 import { EmptyState, PageHeader, Spinner, cn } from "../components/ui";
 import { StatusSq } from "../components/status";
 import { CopyButton } from "./settings";
-import { relTime } from "../lib/format";
+import { catColor, relTime } from "../lib/format";
 
 export function DeliveriesPage() {
 	const [statusF, setStatusF] = useState("");
@@ -56,7 +56,12 @@ export function DeliveriesPage() {
 							</div>
 							<div className="kpi">
 								<div className="k">top event</div>
-								<div className="v" style={{ fontSize: 22 }}>{events[0]?.[0] ?? "—"}</div>
+								<div
+									className="v"
+									style={{ fontSize: 22, color: events[0] ? catColor(events[0][0]) : undefined }}
+								>
+									{events[0]?.[0] ?? "—"}
+								</div>
 								<div className="c">{events[0] ? `${events[0][1]} of ${total}` : ""}</div>
 							</div>
 						</div>
@@ -134,7 +139,12 @@ function DeliveryRow({ d }: { d: WebhookDelivery }) {
 					<StatusSq status={d.status} />
 					{d.status}
 				</span>
-				<span className="w-28 shrink-0 text-[13px] font-medium">{d.event}</span>
+				<span
+					className="w-28 shrink-0 text-[13px] font-medium"
+					style={{ color: catColor(d.event) }}
+				>
+					{d.event}
+				</span>
 				<span className="min-w-0 flex-1 truncate font-mono text-xs text-[var(--faint)]">
 					{d.delivery_id}
 				</span>
