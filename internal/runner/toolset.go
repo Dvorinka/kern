@@ -34,17 +34,22 @@ type toolPlan struct {
 	Fix []string
 }
 
-// latestGH downloads the newest gh release tarball for the local arch and
-// drops the binary into /usr/local/bin. The tag is resolved from the
-// releases/latest redirect so the plan needs no version interpolation.
-const ghInstall = `tag=$(curl -fsSIL -o /dev/null -w '%{url_effective}' https://github.com/cli/cli/releases/latest | sed 's/.*tag\///')` +
-	` && arch=$(uname -m) && case "$arch" in x86_64) a=amd64;; aarch64|arm64) a=arm64;; *) echo "unsupported arch $arch" >&2; exit 1;; esac` +
-	` && tmp=$(mktemp -d) && curl -fsSL "https://github.com/cli/cli/releases/download/$tag/gh_${tag#v}_linux_$a.tar.gz" -o "$tmp/gh.tgz"` +
-	` && tar -xzf "$tmp/gh.tgz" -C "$tmp" && install -m0755 "$tmp"/gh_*/bin/gh /usr/local/bin/gh && rm -rf "$tmp" && gh version`
+// ghInstall downloads a PINNED gh release for the local arch, verifies the
+// archive against a checked-in sha256, then installs to /usr/local/bin.
+// self_heal=auto runs these on host executors — an unverified mutable
+// "latest" tarball would be remote code execution on the fleet, so the
+// digest is baked in here and bumped deliberately with the version.
+const ghInstall = `arch=$(uname -m) && case "$arch" in ` +
+	`x86_64) a=amd64; s=98cb101ad87dbbd3f6b2f2bfcbd43197ccd07643140121d8a9cfaa91eadbc24e;; ` +
+	`aarch64|arm64) a=arm64; s=cb34cefc6f4e77b90731374a2b737516bb8f3033c6ca46aa949e5344f68069e3;; ` +
+	`*) echo "unsupported arch $arch" >&2; exit 1;; esac` +
+	` && tmp=$(mktemp -d) && curl -fsSL "https://github.com/cli/cli/releases/download/v2.104.0/gh_2.104.0_linux_$a.tar.gz" -o "$tmp/gh.tgz"` +
+	` && echo "$s  $tmp/gh.tgz" | sha256sum -c - && tar -xzf "$tmp/gh.tgz" -C "$tmp"` +
+	` && install -m0755 "$tmp"/gh_*/bin/gh /usr/local/bin/gh && rm -rf "$tmp" && gh version`
 
-const minisignInstall = `tag=$(curl -fsSIL -o /dev/null -w '%{url_effective}' https://github.com/jedisct1/minisign/releases/latest | sed 's/.*tag\///')` +
-	` && arch=$(uname -m) && case "$arch" in x86_64) a=x86_64;; aarch64|arm64) a=aarch64;; *) echo "unsupported arch $arch" >&2; exit 1;; esac` +
-	` && tmp=$(mktemp -d) && curl -fsSL "https://github.com/jedisct1/minisign/releases/download/$tag/minisign-${tag#v}-linux.tar.gz" -o "$tmp/m.tgz"` +
+const minisignInstall = `arch=$(uname -m) && case "$arch" in x86_64|aarch64|arm64) a=$arch;; *) echo "unsupported arch $arch" >&2; exit 1;; esac` +
+	` && tmp=$(mktemp -d) && curl -fsSL "https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz" -o "$tmp/m.tgz"` +
+	` && echo "9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73  $tmp/m.tgz" | sha256sum -c -` +
 	` && tar -xzf "$tmp/m.tgz" -C "$tmp" 2>/dev/null && install -m0755 "$tmp/minisign-linux/$a/minisign" /usr/local/bin/minisign && rm -rf "$tmp" && minisign -v`
 
 var toolInstalls = map[string]toolPlan{

@@ -34,23 +34,30 @@ LABELS="self-hosted,linux,x64,lxc-${CT}${EXTRA_LABELS:+,${EXTRA_LABELS}}"
 install_tool() {
   case "$1" in
     # Curated: not in Debian/Ubuntu main repos at a usable version.
-    # gh: apt ships 2.45, releases need >=2.60 for `gh run` subcommands.
+    # Pinned version + checked-in sha256 — an unverified mutable "latest"
+    # tarball would be remote code execution on every provisioned host.
     gh)
-      tag=$(curl -fsSIL -o /dev/null -w '%{url_effective}' \
-        https://github.com/cli/cli/releases/latest | sed 's/.*tag\///')
+      arch=$(uname -m)
+      case "$arch" in
+        x86_64)        a=amd64; s=98cb101ad87dbbd3f6b2f2bfcbd43197ccd07643140121d8a9cfaa91eadbc24e ;;
+        aarch64|arm64) a=arm64; s=cb34cefc6f4e77b90731374a2b737516bb8f3033c6ca46aa949e5344f68069e3 ;;
+        *) echo "unsupported arch $arch" >&2; exit 1 ;;
+      esac
       tmp=$(mktemp -d)
-      curl -fsSL "https://github.com/cli/cli/releases/download/${tag}/gh_${tag#v}_linux_amd64.tar.gz" -o "$tmp/gh.tgz"
+      curl -fsSL "https://github.com/cli/cli/releases/download/v2.104.0/gh_2.104.0_linux_${a}.tar.gz" -o "$tmp/gh.tgz"
+      echo "$s  $tmp/gh.tgz" | sha256sum -c -
       tar -xzf "$tmp/gh.tgz" -C "$tmp"
       install -m0755 "$tmp"/gh_*/bin/gh /usr/local/bin/gh
       rm -rf "$tmp"
       ;;
     minisign)
-      tag=$(curl -fsSIL -o /dev/null -w '%{url_effective}' \
-        https://github.com/jedisct1/minisign/releases/latest | sed 's/.*tag\///')
+      arch=$(uname -m)
+      case "$arch" in x86_64|aarch64|arm64) ;; *) echo "unsupported arch $arch" >&2; exit 1 ;; esac
       tmp=$(mktemp -d)
-      curl -fsSL "https://github.com/jedisct1/minisign/releases/download/${tag}/minisign-${tag#v}-linux.tar.gz" -o "$tmp/m.tgz"
+      curl -fsSL "https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz" -o "$tmp/m.tgz"
+      echo "9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73  $tmp/m.tgz" | sha256sum -c -
       tar -xzf "$tmp/m.tgz" -C "$tmp" 2>/dev/null
-      install -m0755 "$tmp/minisign-linux/$(uname -m)/minisign" /usr/local/bin/minisign
+      install -m0755 "$tmp/minisign-linux/$arch/minisign" /usr/local/bin/minisign
       rm -rf "$tmp"
       ;;
     *)

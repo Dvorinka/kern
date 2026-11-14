@@ -246,14 +246,14 @@ func (a *Agent) labels() []string {
 // noteToolset folds the heartbeat-delivered toolset into agent state; a
 // changed declaration sweeps immediately so drift shows up on the next
 // beat rather than at the next interval.
-func (a *Agent) noteToolset(declared []string, heal bool) {
+func (a *Agent) noteToolset(ctx context.Context, declared []string, heal bool) {
 	a.toolsetMu.Lock()
 	changed := !slices.Equal(a.toolset, declared)
 	a.toolset = append([]string(nil), declared...)
 	a.toolsetHeal = heal
 	a.toolsetMu.Unlock()
 	if changed {
-		a.sweepToolset()
+		a.sweepToolset(ctx)
 	}
 }
 
@@ -262,7 +262,7 @@ func (a *Agent) noteToolset(declared []string, heal bool) {
 // container's PATH, not the host's, and would report phantom drift. With
 // toolsetHeal set (org self_heal=auto) missing tools install in the
 // background and the next sweep reports the healed state.
-func (a *Agent) sweepToolset() {
+func (a *Agent) sweepToolset(ctx context.Context) {
 	a.toolsetMu.Lock()
 	declared := append([]string(nil), a.toolset...)
 	heal := a.toolsetHeal
@@ -280,7 +280,7 @@ func (a *Agent) sweepToolset() {
 	if len(missing) > 0 {
 		a.log.Warn("host toolset drift", zap.Strings("missing", missing), zap.Bool("heal", heal))
 		if heal {
-			go a.healToolset(missing)
+			go a.healToolset(ctx, missing)
 		}
 	}
 }
@@ -288,16 +288,16 @@ func (a *Agent) sweepToolset() {
 // healToolset runs the curated install plan for each missing tool, then
 // re-sweeps so the report reflects the healed state. Installs can take
 // minutes (apt update, tarball fetch), so this runs off the heartbeat
-// goroutine.
-func (a *Agent) healToolset(missing []string) {
+// goroutine; ctx is the agent's run context so shutdown cancels mid-install.
+func (a *Agent) healToolset(ctx context.Context, missing []string) {
 	for _, name := range missing {
-		if err := installHostTool(context.Background(), name); err != nil {
+		if err := installHostTool(ctx, name); err != nil {
 			a.log.Warn("toolset heal failed", zap.String("tool", name), zap.Error(err))
 		} else {
 			a.log.Info("toolset healed", zap.String("tool", name))
 		}
 	}
-	a.sweepToolset()
+	a.sweepToolset(ctx)
 }
 
 // missingToolsReport hands the heartbeat the last sweep result. nil means
@@ -457,7 +457,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 			a.toolsetTicks++
 			if a.toolsetTicks >= 30 {
 				a.toolsetTicks = 0
-				a.sweepToolset()
+				a.sweepToolset(ctx)
 			}
 			sample.MissingTools = a.missingToolsReport()
 			resp, err := a.c.heartbeat(hctx, sample)
@@ -473,7 +473,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 			a.envMu.Lock()
 			a.envOverrides = resp.Env
 			a.envMu.Unlock()
-			a.noteToolset(resp.Toolset, resp.ToolsetHeal)
+			a.noteToolset(ctx, resp.Toolset, resp.ToolsetHeal)
 			if resp.Deregistered {
 				a.log.Info("runner deregistered; exiting")
 				if a.cancel != nil {

@@ -89,7 +89,7 @@ func (e *executor) runStep(ctx context.Context, step StepSpec) (string, error) {
 			diag.Runner = e.cfg.Name
 		}
 		// self_heal=auto: apply the allow-listed fix and retry the step once.
-		if diag.Fixable && diag.Remediation != nil && e.claim.SelfHeal == "auto" {
+		if diag != nil && diag.Fixable && diag.Remediation != nil && e.claim.SelfHeal == "auto" {
 			e.logStep(step, "KERN: self-heal auto — applying fix: "+strings.Join(diag.Remediation.Fix, "; "))
 			if e.applyFix(ctx, step, diag.Remediation.Fix) {
 				retry, retryCode, retryErr := e.runStepUnit(ctx, step)
