@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -276,6 +277,7 @@ func (s *Server) getOrgSettings(c *gin.Context) {
 		"notify_url":            settingsValue(raw, "notify_url", ""),
 		"notify_secret_set":     settingsValue(raw, "notify_secret", "") != "",
 		"notify_events":         settingsValue(raw, "notify_events", ""),
+		"toolset":               settingsValue(raw, "toolset", ""),
 		"notify_format":         settingsValue(raw, "notify_format", "kern"),
 		"disk_alert_pct":        settingsValue(raw, "disk_alert_pct", "10"),
 		"max_transient_retries": settingsValue(raw, "max_transient_retries", "1"),
@@ -307,6 +309,7 @@ type orgSettingsRequest struct {
 	NotifyFormat        *string `json:"notify_format"`
 	DiskAlertPct        *string `json:"disk_alert_pct"`
 	MaxTransientRetries *string `json:"max_transient_retries"`
+	Toolset             *string `json:"toolset"`
 }
 
 var notifyConclusions = map[string]bool{
@@ -329,9 +332,9 @@ func validMaxTransientRetries(v string) bool {
 	return err == nil && n >= 0 && n <= 10
 }
 
-func orgSettingWrites(selfHeal, publicCI, autoUpdate, runnerAutostart, notifyURL, notifySecret, notifyEvents, notifyFormat, diskAlertPct, maxTransientRetries *string) (map[string]string, string) {
-	if selfHeal == nil && publicCI == nil && autoUpdate == nil && runnerAutostart == nil && notifyURL == nil && notifySecret == nil && notifyEvents == nil && notifyFormat == nil && diskAlertPct == nil && maxTransientRetries == nil {
-		return nil, "self_heal, public_ci, auto_update, runner_autostart, notify_url, notify_secret, notify_events, notify_format, disk_alert_pct or max_transient_retries is required"
+func orgSettingWrites(selfHeal, publicCI, autoUpdate, runnerAutostart, notifyURL, notifySecret, notifyEvents, notifyFormat, diskAlertPct, maxTransientRetries, toolset *string) (map[string]string, string) {
+	if selfHeal == nil && publicCI == nil && autoUpdate == nil && runnerAutostart == nil && notifyURL == nil && notifySecret == nil && notifyEvents == nil && notifyFormat == nil && diskAlertPct == nil && maxTransientRetries == nil && toolset == nil {
+		return nil, "self_heal, public_ci, auto_update, runner_autostart, notify_url, notify_secret, notify_events, notify_format, disk_alert_pct, max_transient_retries or toolset is required"
 	}
 	out := map[string]string{}
 	if selfHeal != nil {
@@ -394,7 +397,44 @@ func orgSettingWrites(selfHeal, publicCI, autoUpdate, runnerAutostart, notifyURL
 		}
 		out["max_transient_retries"] = *maxTransientRetries
 	}
+	if toolset != nil {
+		v := strings.TrimSpace(*toolset)
+		if !validToolset(v) {
+			return nil, "toolset must be a comma list of command names (e.g. gh,minisign) or empty to clear"
+		}
+		out["toolset"] = v
+	}
 	return out, ""
+}
+
+// toolsetNameRe gates declared toolset entries — they cross the API into
+// shell install plans, so only sane command names are allowed.
+var toolsetNameRe = regexp.MustCompile(`^[a-zA-Z0-9._+-]{1,64}$`)
+
+// validToolset accepts a CSV of command names, empty meaning "unset".
+func validToolset(v string) bool {
+	if v == "" {
+		return true
+	}
+	for _, name := range strings.Split(v, ",") {
+		if !toolsetNameRe.MatchString(strings.TrimSpace(name)) {
+			return false
+		}
+	}
+	return true
+}
+
+// declaredToolset parses the org's `toolset` setting into the command list
+// heartbeats deliver to host executors.
+func declaredToolset(raw json.RawMessage) []string {
+	v := settingsValue(raw, "toolset", "")
+	var out []string
+	for _, name := range strings.Split(v, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 func (s *Server) putOrgSettings(c *gin.Context) {
@@ -404,7 +444,7 @@ func (s *Server) putOrgSettings(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_body", "self_heal, public_ci or auto_update is required")
 		return
 	}
-	writes, msg := orgSettingWrites(req.SelfHeal, req.PublicCI, req.AutoUpdate, req.RunnerAutostart, req.NotifyURL, req.NotifySecret, req.NotifyEvents, req.NotifyFormat, req.DiskAlertPct, req.MaxTransientRetries)
+	writes, msg := orgSettingWrites(req.SelfHeal, req.PublicCI, req.AutoUpdate, req.RunnerAutostart, req.NotifyURL, req.NotifySecret, req.NotifyEvents, req.NotifyFormat, req.DiskAlertPct, req.MaxTransientRetries, req.Toolset)
 	if msg != "" {
 		fail(c, http.StatusBadRequest, "invalid_body", msg)
 		return

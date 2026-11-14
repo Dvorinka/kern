@@ -85,6 +85,9 @@ func (e *executor) runStep(ctx context.Context, step StepSpec) (string, error) {
 				Suggestion:  "inspect the process dump above; split the step, add progress output, or raise KERN_STEP_SILENCE_TIMEOUT",
 				AgentPrompt: "A CI step hung (no output) and was killed by the watchdog. Diagnose from the process dump in the log."}
 		}
+		if diag != nil {
+			diag.Runner = e.cfg.Name
+		}
 		// self_heal=auto: apply the allow-listed fix and retry the step once.
 		if diag.Fixable && diag.Remediation != nil && e.claim.SelfHeal == "auto" {
 			e.logStep(step, "KERN: self-heal auto — applying fix: "+strings.Join(diag.Remediation.Fix, "; "))

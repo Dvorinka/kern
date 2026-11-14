@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -158,6 +159,20 @@ type Agent struct {
 	// into every job's base env (app values win over container defaults).
 	envMu        sync.RWMutex
 	envOverrides map[string]string
+	// toolsetMu guards the org-declared host toolset (#344): toolset is
+	// the latest heartbeat-delivered list, toolsetHeal the self_heal=auto
+	// mirror, and toolsetCache the last sweep's missing list (toolsetValid
+	// once a sweep ran — the report distinguishes "no drift" from "not
+	// checked").
+	toolsetMu    sync.Mutex
+	toolset      []string
+	toolsetHeal  bool
+	toolsetCache []string
+	toolsetValid bool
+	// toolsetTicks counts heartbeat beats between drift sweeps; LookPath
+	// is cheap but the declared set changes rarely, so a per-beat sweep is
+	// waste.
+	toolsetTicks int
 	dockerOnce   sync.Once
 	dockerOKV    bool
 }
@@ -226,6 +241,76 @@ func (a *Agent) executor() string {
 
 func (a *Agent) labels() []string {
 	return a.labelsFor(runtime.GOOS, runtime.GOARCH)
+}
+
+// noteToolset folds the heartbeat-delivered toolset into agent state; a
+// changed declaration sweeps immediately so drift shows up on the next
+// beat rather than at the next interval.
+func (a *Agent) noteToolset(declared []string, heal bool) {
+	a.toolsetMu.Lock()
+	changed := !slices.Equal(a.toolset, declared)
+	a.toolset = append([]string(nil), declared...)
+	a.toolsetHeal = heal
+	a.toolsetMu.Unlock()
+	if changed {
+		a.sweepToolset()
+	}
+}
+
+// sweepToolset diffs the declared toolset against the host PATH. Docker
+// executors skip it — inside the runner container, LookPath sees the
+// container's PATH, not the host's, and would report phantom drift. With
+// toolsetHeal set (org self_heal=auto) missing tools install in the
+// background and the next sweep reports the healed state.
+func (a *Agent) sweepToolset() {
+	a.toolsetMu.Lock()
+	declared := append([]string(nil), a.toolset...)
+	heal := a.toolsetHeal
+	a.toolsetMu.Unlock()
+	if a.executor() != "host" || len(declared) == 0 {
+		a.toolsetMu.Lock()
+		a.toolsetCache, a.toolsetValid = nil, a.executor() == "host" && len(declared) == 0
+		a.toolsetMu.Unlock()
+		return
+	}
+	missing := missingTools(declared)
+	a.toolsetMu.Lock()
+	a.toolsetCache, a.toolsetValid = missing, true
+	a.toolsetMu.Unlock()
+	if len(missing) > 0 {
+		a.log.Warn("host toolset drift", zap.Strings("missing", missing), zap.Bool("heal", heal))
+		if heal {
+			go a.healToolset(missing)
+		}
+	}
+}
+
+// healToolset runs the curated install plan for each missing tool, then
+// re-sweeps so the report reflects the healed state. Installs can take
+// minutes (apt update, tarball fetch), so this runs off the heartbeat
+// goroutine.
+func (a *Agent) healToolset(missing []string) {
+	for _, name := range missing {
+		if err := installHostTool(context.Background(), name); err != nil {
+			a.log.Warn("toolset heal failed", zap.String("tool", name), zap.Error(err))
+		} else {
+			a.log.Info("toolset healed", zap.String("tool", name))
+		}
+	}
+	a.sweepToolset()
+}
+
+// missingToolsReport hands the heartbeat the last sweep result. nil means
+// "not reporting" — the control plane leaves the stored list alone; a
+// non-nil empty list actively clears recorded drift.
+func (a *Agent) missingToolsReport() *[]string {
+	a.toolsetMu.Lock()
+	defer a.toolsetMu.Unlock()
+	if !a.toolsetValid {
+		return nil
+	}
+	m := append([]string(nil), a.toolsetCache...)
+	return &m
 }
 
 // labelsFor computes the advertised label set for a platform. Split from
@@ -369,6 +454,12 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 			sample.Deregister = a.retire.Load()
 			sample.ClaimsPaused = a.claimsPaused()
 			sample.Labels = a.labels()
+			a.toolsetTicks++
+			if a.toolsetTicks >= 30 {
+				a.toolsetTicks = 0
+				a.sweepToolset()
+			}
+			sample.MissingTools = a.missingToolsReport()
 			resp, err := a.c.heartbeat(hctx, sample)
 			cancel()
 			if err != nil {
@@ -382,6 +473,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 			a.envMu.Lock()
 			a.envOverrides = resp.Env
 			a.envMu.Unlock()
+			a.noteToolset(resp.Toolset, resp.ToolsetHeal)
 			if resp.Deregistered {
 				a.log.Info("runner deregistered; exiting")
 				if a.cancel != nil {

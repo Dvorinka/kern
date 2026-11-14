@@ -168,6 +168,9 @@ func (c *cli) doctorFleet(ctx context.Context, add func(string, string, string))
 		if r.ClaimsPaused != "" {
 			add("runner "+r.Name, "warn", "claims paused: "+r.ClaimsPaused)
 		}
+		if len(r.MissingTools) > 0 {
+			add("runner "+r.Name, "warn", "toolset drift: missing "+strings.Join(r.MissingTools, ", "))
+		}
 		// Recommended minimums: a docker runner carries job images, the
 		// persistent _cache tree, toolcache installs and per-job workspaces;
 		// below these floors the claim gates flap and GC churn costs more

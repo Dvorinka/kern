@@ -47,4 +47,15 @@ rm -rf /root/.cache/pip 2>/dev/null
 
 find /tmp -maxdepth 1 -name 'gha-*' -mtime +1 -exec rm -rf {} + 2>/dev/null
 
+# Stale ployz-build locks quarantine later builds on the host
+# (getployz/ployz#4174). A live build never exceeds 30 minutes, so
+# age-gated removal cannot race a running one.
+find /var/tmp -maxdepth 1 -name 'ployz-build-*' -mmin +30 -exec rm -rf {} + 2>/dev/null
+
+# pnpm content-addressable store corruption breaks imports for every job
+# until pruned; verify is cheap, prune only on failure.
+if command -v pnpm >/dev/null 2>&1; then
+  pnpm store status >/dev/null 2>&1 || pnpm store prune >/dev/null 2>&1
+fi
+
 echo "=== $(date -Is) done: $(df -h / | awk 'NR==2{print $4" free ("$5" used)"}') ==="

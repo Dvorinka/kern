@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -184,6 +185,13 @@ func (s *Server) runnerHeartbeat(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
+	// Toolset drift transitions are fleet events, not telemetry: audit the
+	// moment a host gains or loses a declared tool so the drift report has
+	// a history instead of a snapshot.
+	if body.MissingTools != nil && !slices.Equal(runner.MissingTools, *body.MissingTools) {
+		s.Store.AuditMeta(c.Request.Context(), runner.OrgID, nil, "runner.toolset_drift", runner.Name,
+			map[string]any{"missing": *body.MissingTools, "was": runner.MissingTools})
+	}
 	if body.DiskFreeBytes != nil {
 		s.maybeAlertRunnerDisk(c.Request.Context(), runner, *body.DiskFreeBytes)
 	}
@@ -218,6 +226,17 @@ func (s *Server) runnerHeartbeat(c *gin.Context) {
 	// them into each job's base env (app values win over container defaults).
 	if len(runner.Env) > 0 {
 		resp["env"] = runner.Env
+	}
+	// The declared host toolset rides heartbeats to host executors only —
+	// a docker executor would diff its own container PATH and report
+	// phantom drift. toolset_heal mirrors the org's self_heal=auto rung.
+	if runner.Executor == "host" {
+		if raw, err := s.Store.OrgSettings(c.Request.Context(), runner.OrgID); err == nil {
+			if toolset := declaredToolset(raw); len(toolset) > 0 {
+				resp["toolset"] = toolset
+				resp["toolset_heal"] = settingsValue(raw, "self_heal", "off") == "auto"
+			}
+		}
 	}
 	// Pending live-exec requests for jobs leased to this runner ride the
 	// same heartbeat — the runner starts a session per entry (#132).
@@ -710,6 +729,9 @@ func (s *Server) finishJob(c *gin.Context) {
 var transientRetryKinds = map[string]bool{
 	"network": true, "oom": true, "daemon_gone": true,
 	"disk_full": true, "disk_quota": true,
+	// build_killed is getployz/build@v1's internal 60s execution kill —
+	// cold-runner flake, not a script error; the requeue usually passes.
+	"build_killed": true,
 }
 
 // maybeRequeueTransient puts a failed job back on the queue when every

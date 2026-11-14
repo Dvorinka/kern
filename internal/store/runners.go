@@ -76,7 +76,7 @@ const runnerCols = `id, org_id, name, hostname, os, arch, cpus, memory_bytes, di
 	version, status, draining, ephemeral, last_heartbeat_at, cpu_percent,
 	mem_used_bytes, disk_free_bytes, metrics_at, geo_lat, geo_lng, geo_city,
 	geo_country, geo_source, geo_ip, geo_updated_at, executor, created_at, icon, auto_update,
-	wake_on_demand, env, disk_alerted, claims_paused`
+	wake_on_demand, env, disk_alerted, claims_paused, missing_tools`
 
 func scanRunner(row pgx.Row) (Runner, error) {
 	var r Runner
@@ -85,7 +85,8 @@ func scanRunner(row pgx.Row) (Runner, error) {
 		&r.Ephemeral, &r.LastHeartbeatAt, &r.CPUPercent, &r.MemUsedBytes,
 		&r.DiskFreeBytes, &r.MetricsAt, &r.GeoLat, &r.GeoLng, &r.GeoCity,
 		&r.GeoCountry, &r.GeoSource, &r.GeoIP, &r.GeoUpdatedAt, &r.Executor, &r.CreatedAt,
-		&r.Icon, &r.AutoUpdate, &r.WakeOnDemand, &r.Env, &r.DiskAlerted, &r.ClaimsPaused)
+		&r.Icon, &r.AutoUpdate, &r.WakeOnDemand, &r.Env, &r.DiskAlerted, &r.ClaimsPaused,
+		&r.MissingTools)
 	return r, err
 }
 
