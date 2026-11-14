@@ -225,6 +225,12 @@ type heartbeatResponse struct {
 	// Exec lists pending live-exec requests for jobs leased to this runner
 	// (#132). Each spawns one session; the map dedupes redelivery.
 	Exec []execOffer `json:"exec"`
+	// Toolset is the org's declared host toolset (#344) — the commands a
+	// host executor must have on PATH. The agent diffs it periodically and
+	// reports missing names on the next heartbeat. ToolsetHeal mirrors the
+	// org's self_heal=auto policy: missing tools get the curated install.
+	Toolset     []string `json:"toolset"`
+	ToolsetHeal bool     `json:"toolset_heal"`
 }
 
 // execOffer is a live-exec request delivered on the heartbeat.

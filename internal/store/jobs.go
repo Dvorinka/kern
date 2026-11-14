@@ -254,6 +254,13 @@ func (s *Store) RenewLease(ctx context.Context, runnerID, jobID uuid.UUID, lease
 // re-registers, so register-time values would go stale forever; a stale
 // version made the auto-update offer loop on the same binary.
 func (s *Store) Heartbeat(ctx context.Context, runnerID uuid.UUID, m HostMetrics) error {
+	// MissingTools is pointer-gated: a nil report (docker executor, or no
+	// declared toolset) leaves the column untouched, while an empty slice
+	// actively clears recorded drift.
+	var missingTools any
+	if m.MissingTools != nil {
+		missingTools = *m.MissingTools
+	}
 	_, err := s.pool.Exec(ctx, `
 		UPDATE runners SET last_heartbeat_at = now(),
 			status = CASE WHEN draining THEN 'draining' ELSE 'online' END,
@@ -261,9 +268,10 @@ func (s *Store) Heartbeat(ctx context.Context, runnerID uuid.UUID, m HostMetrics
 			version = COALESCE(NULLIF($5, ''), version),
 			disk_bytes = COALESCE($6, disk_bytes),
 			claims_paused = $7,
-			labels = COALESCE(NULLIF($8, '{}'::text[]), labels)
+			labels = COALESCE(NULLIF($8, '{}'::text[]), labels),
+			missing_tools = COALESCE($9, missing_tools)
 		WHERE id = $1`, runnerID, m.CPUPercent, m.MemUsedBytes, m.DiskFreeBytes,
-		m.Version, m.DiskBytes, m.ClaimsPaused, m.Labels)
+		m.Version, m.DiskBytes, m.ClaimsPaused, m.Labels, missingTools)
 	return err
 }
 

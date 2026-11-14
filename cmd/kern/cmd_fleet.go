@@ -84,6 +84,11 @@ func (c *cli) cmdRunners(ctx context.Context, args []string) error {
 			if drift := versionDrift(out.Runners); drift != "" {
 				fmt.Println(drift)
 			}
+			for _, r := range out.Runners {
+				if len(r.MissingTools) > 0 {
+					fmt.Printf("%s toolset drift: missing %s\n", r.Name, strings.Join(r.MissingTools, ", "))
+				}
+			}
 		})
 	case "drain", "undrain":
 		arg, err := strarg(rest, 0, "runner id|name")
@@ -357,6 +362,7 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 			ForkGate            string `json:"fork_gate"`
 			PrTrust             string `json:"pr_trust"`
 			MaxTransientRetries string `json:"max_transient_retries"`
+			Toolset             string `json:"toolset"`
 		}
 		if err := c.api().get(ctx, path, nil, &out); err != nil {
 			return err
@@ -398,6 +404,9 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 				v = "1"
 			}
 			fmt.Println("max_transient_retries:", v)
+			if path == "/settings" {
+				fmt.Println("toolset:", out.Toolset)
+			}
 		}
 	case "set":
 		if len(pos) < 2 {
@@ -457,6 +466,11 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 				return fmt.Errorf("usage: kern settings set pr_trust off|trusted --project S")
 			}
 			body["pr_trust"] = pos[1]
+		case "toolset":
+			if path != "/settings" {
+				return fmt.Errorf("toolset is an org setting")
+			}
+			body["toolset"] = pos[1]
 		case "max_transient_retries":
 			if pos[1] != "inherit" {
 				n, err := strconv.Atoi(pos[1])
