@@ -16,6 +16,7 @@ FROM debian:bookworm-slim
 ARG DOCKER_CLI=27.5.1
 ARG DOCKER_COMPOSE=v2.40.3
 ARG DOCKER_BUILDX=v0.20.0
+ARG GH_CLI=2.104.0
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates git curl \
     && curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI}.tgz" \
@@ -37,6 +38,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && dl docker/buildx "${DOCKER_BUILDX}" "buildx-${DOCKER_BUILDX}.linux-amd64" \
          /usr/libexec/docker/cli-plugins/docker-buildx \
     && chmod +x /usr/libexec/docker/cli-plugins/* \
+    && curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_CLI}/gh_${GH_CLI}_linux_amd64.tar.gz" \
+       | tar xz -C /usr/local/bin --strip-components=2 "gh_${GH_CLI}_linux_amd64/bin/gh" \
     && apt-get purge -y curl && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/kern-runner /usr/local/bin/kern-runner
 ENTRYPOINT ["kern-runner"]
