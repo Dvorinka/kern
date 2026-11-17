@@ -8,7 +8,7 @@ import type { Deployment, Environment, Project } from "../lib/types";
 import { Button, Card, EmptyState, Input, PageHeader, Spinner } from "../components/ui";
 import { Row } from "../components/layout";
 import { StatusSq } from "../components/status";
-import { refName, relTime, shortSha } from "../lib/format";
+import { catColor, refName, relTime, shortSha } from "../lib/format";
 
 export function EnvironmentsPage() {
 	const [params, setParams] = useSearchParams();
@@ -265,7 +265,12 @@ function EnvRow({ slug, env }: { slug: string; env: Environment }) {
 	};
 	return (
 		<Row className="flex-wrap">
-			<span className="font-mono min-w-24 flex-1 truncate text-[13px]">{env.name}</span>
+			<span
+				className="font-mono min-w-24 flex-1 truncate text-[13px]"
+				style={{ color: catColor(env.name) }}
+			>
+				{env.name}
+			</span>
 			<span className="text-xs text-[var(--faint)]">{env.protected ? "protected" : "open"}</span>
 			<label className="flex items-center gap-1.5 text-xs text-[var(--dim)]">
 				approvals
@@ -398,7 +403,12 @@ function DeploymentRow({ d, slug }: { d: Deployment; slug: string }) {
 	return (
 		<Row className="flex-wrap">
 			<StatusSq status={d.status} />
-			<span className="font-mono w-28 truncate text-[13px]">{d.environment_name}</span>
+			<span
+				className="font-mono w-28 truncate text-[13px]"
+				style={{ color: catColor(d.environment_name) }}
+			>
+				{d.environment_name}
+			</span>
 			<span className="min-w-24 flex-1 truncate text-xs text-[var(--dim)]">
 				{d.job_name}
 				<span className="text-[var(--faint)]">

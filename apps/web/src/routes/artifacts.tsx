@@ -5,7 +5,7 @@ import { Link } from "react-router-dom";
 import { api } from "../lib/api";
 import type { Artifact } from "../lib/types";
 import { EmptyState, PageHeader, Spinner } from "../components/ui";
-import { bytes, relTime } from "../lib/format";
+import { bytes, projectColor, relTime } from "../lib/format";
 
 export function ArtifactsPage() {
 	const { data, isLoading } = useQuery({
@@ -80,7 +80,11 @@ export function ArtifactsPage() {
 							<div key={g.runId}>
 								<div className="vgh">
 									<span>
-										<Link to={`/projects/${g.project}`} className="lnk">
+										<Link
+											to={`/projects/${g.project}`}
+											className="lnk"
+											style={{ color: projectColor(g.project) }}
+										>
 											{g.project}
 										</Link>{" "}
 										·{" "}

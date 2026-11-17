@@ -5,7 +5,7 @@ import { api } from "../lib/api";
 import type { UsageResponse } from "../lib/types";
 import { ActivityMap } from "../components/activitymap";
 import { Card, CardHeader, EmptyState, PageHeader, Spinner, cn } from "../components/ui";
-import { seconds } from "../lib/format";
+import { projectColor, seconds } from "../lib/format";
 
 const WINDOWS = [7, 30, 90];
 
@@ -182,7 +182,11 @@ export function UsagePage() {
 										{u.projects.map((p) => (
 											<tr key={p.slug}>
 												<td className="lead">
-													<Link to={`/projects/${p.slug}`} className="lnk">
+													<Link
+														to={`/projects/${p.slug}`}
+														className="lnk"
+														style={{ color: projectColor(p.slug) }}
+													>
 														{p.name || p.slug}
 													</Link>
 												</td>
@@ -318,8 +322,8 @@ function MinutesChart({ u, days }: { u: UsageResponse["usage"]; days: number }) 
 	);
 }
 
-// Runner-time share by project as a monochrome donut — slices reuse the
-// pattern idiom (solid, stripes, dots) instead of invented colours.
+// Runner-time share by project as a donut — each slice wears the project's
+// identity colour, same as the runs chart and the project links everywhere.
 // Hover or legend-focus isolates a slice; click opens the project.
 function ShareDonut({ u }: { u: UsageResponse["usage"] }) {
 	const nav = useNavigate();
@@ -331,7 +335,6 @@ function ShareDonut({ u }: { u: UsageResponse["usage"] }) {
 	const R = 42;
 	const C = 2 * Math.PI * R;
 	let acc = 0;
-	const pats = ["solid", "stripes", "dots"];
 	const sel = active != null ? u.projects[active] : null;
 	return (
 		<div className="panel">
@@ -341,16 +344,6 @@ function ShareDonut({ u }: { u: UsageResponse["usage"] }) {
 			</div>
 			<div className="donut">
 				<svg viewBox="0 0 120 120" className="dsvg">
-					<defs>
-						<pattern id="dstripes" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-							<rect width="5" height="5" fill="var(--ink)" opacity="0.55" />
-							<rect width="2" height="5" fill="var(--paper)" opacity="0.55" />
-						</pattern>
-						<pattern id="ddots" width="6" height="6" patternUnits="userSpaceOnUse">
-							<rect width="6" height="6" fill="var(--ink)" opacity="0.55" />
-							<circle cx="3" cy="3" r="1.3" fill="var(--paper)" opacity="0.6" />
-						</pattern>
-					</defs>
 					<circle cx="60" cy="60" r={R} fill="none" stroke="var(--raise2)" strokeWidth="18" />
 					{u.projects.map((p, i) => {
 						const frac = p.seconds / total;
@@ -363,7 +356,7 @@ function ShareDonut({ u }: { u: UsageResponse["usage"] }) {
 								cy="60"
 								r={R}
 								fill="none"
-								stroke={pats[i % 3] === "solid" ? "var(--ink)" : pats[i % 3] === "stripes" ? "url(#dstripes)" : "url(#ddots)"}
+								stroke={projectColor(p.slug)}
 								strokeWidth={active === i ? 22 : 18}
 								strokeDasharray={`${dash} ${C - dash}`}
 								strokeDashoffset={-acc * C}
@@ -410,8 +403,16 @@ function ShareDonut({ u }: { u: UsageResponse["usage"] }) {
 							onMouseLeave={() => setActive(null)}
 						>
 							<i
-								className={`phm pat-${pats[i % 3]}`}
-								style={{ width: 10, height: 10, borderWidth: 1.5, borderRadius: 3, opacity: active != null && active !== i ? 0.3 : 1 }}
+								className="phm"
+								style={{
+									width: 10,
+									height: 10,
+									borderWidth: 1.5,
+									borderRadius: 3,
+									background: projectColor(p.slug),
+									borderColor: projectColor(p.slug),
+									opacity: active != null && active !== i ? 0.3 : 1,
+								}}
 							/>
 							<span className="truncate">{p.name || p.slug}</span>
 							<b>{Math.round((p.seconds / total) * 100)}%</b>
