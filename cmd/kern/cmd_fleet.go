@@ -361,6 +361,7 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 			RunnerAutostart     string `json:"runner_autostart"`
 			ForkGate            string `json:"fork_gate"`
 			PrTrust             string `json:"pr_trust"`
+			MaxConcurrentJobs   string `json:"max_concurrent_jobs"`
 			MaxTransientRetries string `json:"max_transient_retries"`
 			Toolset             string `json:"toolset"`
 		}
@@ -398,6 +399,11 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 					v = "off"
 				}
 				fmt.Println("pr_trust:", v)
+				v = out.MaxConcurrentJobs
+				if v == "" {
+					v = "0"
+				}
+				fmt.Println("max_concurrent_jobs:", v)
 			}
 			v := out.MaxTransientRetries
 			if v == "" {
@@ -466,6 +472,15 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 				return fmt.Errorf("usage: kern settings set pr_trust off|trusted --project S")
 			}
 			body["pr_trust"] = pos[1]
+		case "max_concurrent_jobs":
+			if path == "/settings" {
+				return fmt.Errorf("max_concurrent_jobs is a project setting — pass --project S")
+			}
+			n, err := strconv.Atoi(pos[1])
+			if err != nil || n < 0 {
+				return fmt.Errorf("usage: kern settings set max_concurrent_jobs <n> --project S (0 disables the quota)")
+			}
+			body["max_concurrent_jobs"] = n
 		case "toolset":
 			if path != "/settings" {
 				return fmt.Errorf("toolset is an org setting")

@@ -291,6 +291,7 @@ type settingsRequest struct {
 	IconPath            *string `json:"icon_path"`
 	NotifyURL           *string `json:"notify_url"`
 	ArtifactQuotaMB     *int64  `json:"artifact_quota_mb"`
+	MaxConcurrentJobs   *int64  `json:"max_concurrent_jobs"`
 	MaxTransientRetries *string `json:"max_transient_retries"`
 	PrimeWorkflow       *string `json:"prime_workflow"`
 	PrimeAuto           string  `json:"prime_auto"`
@@ -492,6 +493,7 @@ func (s *Server) getProjectSettings(c *gin.Context) {
 		"notify_url":            settingsValue(raw, "notify_url", ""),
 		"artifact_quota_mb":     settingsValue(raw, "artifact_quota_mb", "0"),
 		"artifact_bytes":        s.projectArtifactBytes(c, p.ID),
+		"max_concurrent_jobs":   settingsValue(raw, "max_concurrent_jobs", "0"),
 		"max_transient_retries": settingsValue(raw, "max_transient_retries", "inherit"),
 		"prime_workflow":        settingsValue(raw, "prime_workflow", ""),
 		"prime_auto":            settingsValue(raw, "prime_auto", "off"),
@@ -561,8 +563,8 @@ func (s *Server) putProjectSettings(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_body", "invalid JSON body")
 		return
 	}
-	if req.SelfHeal == "" && req.ForkGate == "" && req.PrTrust == "" && req.IconPath == nil && req.NotifyURL == nil && req.ArtifactQuotaMB == nil && req.MaxTransientRetries == nil && req.PrimeWorkflow == nil && req.PrimeAuto == "" {
-		fail(c, http.StatusBadRequest, "invalid_body", "self_heal, fork_gate, pr_trust, icon_path, notify_url, artifact_quota_mb, max_transient_retries, prime_workflow or prime_auto is required")
+	if req.SelfHeal == "" && req.ForkGate == "" && req.PrTrust == "" && req.IconPath == nil && req.NotifyURL == nil && req.ArtifactQuotaMB == nil && req.MaxConcurrentJobs == nil && req.MaxTransientRetries == nil && req.PrimeWorkflow == nil && req.PrimeAuto == "" {
+		fail(c, http.StatusBadRequest, "invalid_body", "self_heal, fork_gate, pr_trust, icon_path, notify_url, artifact_quota_mb, max_concurrent_jobs, max_transient_retries, prime_workflow or prime_auto is required")
 		return
 	}
 	writes := map[string]string{}
@@ -617,6 +619,13 @@ func (s *Server) putProjectSettings(c *gin.Context) {
 			return
 		}
 		writes["artifact_quota_mb"] = strconv.FormatInt(*req.ArtifactQuotaMB, 10)
+	}
+	if req.MaxConcurrentJobs != nil {
+		if *req.MaxConcurrentJobs < 0 {
+			fail(c, http.StatusBadRequest, "invalid_body", "max_concurrent_jobs must be >= 0 (0 disables the quota)")
+			return
+		}
+		writes["max_concurrent_jobs"] = strconv.FormatInt(*req.MaxConcurrentJobs, 10)
 	}
 	if req.MaxTransientRetries != nil {
 		v := *req.MaxTransientRetries
@@ -675,6 +684,9 @@ func (s *Server) putProjectSettings(c *gin.Context) {
 	}
 	if _, ok := writes["pr_trust"]; ok {
 		resp["pr_trust"] = req.PrTrust
+	}
+	if _, ok := writes["max_concurrent_jobs"]; ok {
+		resp["max_concurrent_jobs"] = strconv.FormatInt(*req.MaxConcurrentJobs, 10)
 	}
 	if _, ok := writes["max_transient_retries"]; ok {
 		resp["max_transient_retries"] = *req.MaxTransientRetries

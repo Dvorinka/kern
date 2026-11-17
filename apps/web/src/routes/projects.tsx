@@ -278,6 +278,7 @@ export function ProjectDetailPage() {
         notify_url?: string;
         artifact_quota_mb?: string;
         artifact_bytes?: number;
+        max_concurrent_jobs?: string;
       }>(`/projects/${slug}/settings`),
   });
   const { data: iconScan } = useQuery({
@@ -319,6 +320,10 @@ export function ProjectDetailPage() {
   });
   const setQuota = useMutation({
     mutationFn: (v: number) => api.put(`/projects/${slug}/settings`, { artifact_quota_mb: v }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["project-settings", slug] }),
+  });
+  const setConc = useMutation({
+    mutationFn: (v: number) => api.put(`/projects/${slug}/settings`, { max_concurrent_jobs: v }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["project-settings", slug] }),
   });
   const sync = useMutation({
@@ -516,6 +521,32 @@ export function ProjectDetailPage() {
                   {psettings?.artifact_bytes != null &&
                     `used ${(psettings.artifact_bytes / 1048576).toFixed(1)} MB`}
                   {setQuota.isPending && "saving…"}
+                </span>
+              </span>
+            }
+          />
+          <KV
+            k="Job concurrency"
+            v={
+              <span className="flex items-center gap-2">
+                <input
+                  className="h-7 w-28 rounded-lg border border-[var(--ctl)] bg-transparent px-2 font-mono text-[11px]"
+                  type="number"
+                  min={0}
+                  placeholder="0 = uncapped"
+                  defaultValue={psettings?.max_concurrent_jobs ?? "0"}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter")
+                      setConc.mutate(parseInt((e.target as HTMLInputElement).value, 10) || 0);
+                  }}
+                  onBlur={(e) => {
+                    const v = parseInt(e.target.value, 10) || 0;
+                    if (String(v) !== (psettings?.max_concurrent_jobs ?? "0")) setConc.mutate(v);
+                  }}
+                />
+                <span className="text-[10px] text-[var(--faint)]">
+                  max in-progress jobs
+                  {setConc.isPending && " · saving…"}
                 </span>
               </span>
             }
