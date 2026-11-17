@@ -83,6 +83,12 @@ The API container cannot replace itself. Apply is a second process.
    `ghcr.io/dvorinka/kern-runner@sha256:…` to one idle runner at a time.
    That runner pulls the digest and replaces its own container. The compose
    runner leaves the variable unset; the sidecar rebuilds it.
+   Bare-binary runners (`kern-runner` launched directly, e.g. the Windows
+   scheduled-task deployment) take the same opt-in: instead of a container
+   digest the heartbeat carries the release's `kern-runner-<os>-<arch>`
+   archive URL and its sha256, the runner downloads, verifies, stages the
+   new binary beside the old one, and relaunches. Windows Git Bash is the
+   supported shell there — plans that assume `/usr/local/bin` will not.
 
 The signature is ed25519. The public key is compiled into the API. The
 private key is the GitHub secret `KERN_UPDATE_SIGNING_KEY`, used by

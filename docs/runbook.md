@@ -86,6 +86,31 @@ Symptoms: jobs die with `ENOSPC` mid-step, `docker` errors, runner GC warnings.
   workspaces on the same host add up fast — see issue #206 for the known
   capacity ceiling on 79G CTs.
 
+## Host toolset drift
+
+Symptoms: runner log repeats `host toolset drift` with a `missing` list, and
+either `toolset heal failed` or `toolset tool has no windows install plan`.
+
+- The org `toolset` setting (comma list, e.g. `gh,minisign`) is diffed against
+  the runner's PATH every sweep (~30 heartbeats); drift rides the heartbeat as
+  `missing_tools` so the fleet view shows it.
+- With `self_heal=auto` the runner installs missing tools from curated,
+  checksum-pinned plans — `gh` and `minisign` have plans; any other name gets
+  the generic package-manager template (apt/apk/dnf) on Linux only.
+- Identical still-missing sets back off for 30 minutes
+  (`toolsetHealCooldown`) instead of re-downloading every sweep; a changed
+  set retries immediately. Persistent failure means the plan cannot work on
+  that host — read the `toolset heal failed` error, do not wait for retries.
+- Windows host executors install under Git Bash into `KERN_TOOL_BIN` — the
+  first writable, non-system, absolute PATH directory the runner picks itself
+  (`C:\Program Files`, `C:\Windows`, `C:\ProgramData` are refused even when
+  writable). Tools without a curated plan are skipped with a warning rather
+  than fed Linux package-manager commands. If `KERN_TOOL_BIN` resolution
+  fails, every PATH dir is system, non-writable, or MSYS-only (`/usr/bin`,
+  `~/bin`) — put a user-writable bin dir on the runner's PATH and restart.
+- Manual fix on any host: install the tool onto PATH yourself; the next sweep
+  clears the drift report.
+
 ## Postgres maintenance
 
 - Backups and restore drill: [backups.md](backups.md). The dump alone is not a

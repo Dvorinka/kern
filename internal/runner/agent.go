@@ -169,6 +169,12 @@ type Agent struct {
 	toolsetHeal  bool
 	toolsetCache []string
 	toolsetValid bool
+	// toolsetHealMiss/toolsetHealAt record the last heal attempt so
+	// an identical still-missing set backs off instead of re-downloading
+	// every sweep — healToolset re-sweeps when it finishes, which would
+	// otherwise hot-loop installs on a persistent failure.
+	toolsetHealMiss []string
+	toolsetHealAt   time.Time
 	// toolsetTicks counts heartbeat beats between drift sweeps; LookPath
 	// is cheap but the declared set changes rarely, so a per-beat sweep is
 	// waste.
@@ -176,6 +182,11 @@ type Agent struct {
 	dockerOnce   sync.Once
 	dockerOKV    bool
 }
+
+// toolsetHealCooldown bounds retries of an unchanged missing set. A sweep
+// runs every 30 heartbeats (~5min); a failed install plan retries after
+// this window rather than every sweep.
+const toolsetHealCooldown = 30 * time.Minute
 
 func New(cfg Config, log *zap.Logger) *Agent {
 	if cfg.WorkRoot == "" {
@@ -279,10 +290,26 @@ func (a *Agent) sweepToolset(ctx context.Context) {
 	a.toolsetMu.Unlock()
 	if len(missing) > 0 {
 		a.log.Warn("host toolset drift", zap.Strings("missing", missing), zap.Bool("heal", heal))
-		if heal {
+		if heal && a.toolsetHealDue(missing) {
 			go a.healToolset(ctx, missing)
 		}
 	}
+}
+
+// toolsetHealDue decides whether a missing set may start a heal pass. A
+// set never attempted — or one that changed since the last attempt
+// (partial heal, new org declaration) — heals immediately; an identical
+// set inside the cooldown means the last pass failed, and retrying now
+// would just re-download the same tarballs.
+func (a *Agent) toolsetHealDue(missing []string) bool {
+	a.toolsetMu.Lock()
+	defer a.toolsetMu.Unlock()
+	if slices.Equal(missing, a.toolsetHealMiss) && time.Since(a.toolsetHealAt) < toolsetHealCooldown {
+		return false
+	}
+	a.toolsetHealMiss = append([]string(nil), missing...)
+	a.toolsetHealAt = time.Now()
+	return true
 }
 
 // healToolset runs the curated install plan for each missing tool, then
@@ -291,6 +318,16 @@ func (a *Agent) sweepToolset(ctx context.Context) {
 // goroutine; ctx is the agent's run context so shutdown cancels mid-install.
 func (a *Agent) healToolset(ctx context.Context, missing []string) {
 	for _, name := range missing {
+		// The generic package-manager fallback is Linux-only; on Windows a
+		// tool without a curated plan cannot self-heal — skip the doomed
+		// apt/apk attempt and name the gap instead. The tool stays in the
+		// missing_tools report either way.
+		if runtime.GOOS == "windows" {
+			if _, ok := toolInstalls[name]; !ok {
+				a.log.Warn("toolset tool has no windows install plan", zap.String("tool", name))
+				continue
+			}
+		}
 		if err := installHostTool(ctx, name); err != nil {
 			a.log.Warn("toolset heal failed", zap.String("tool", name), zap.Error(err))
 		} else {

@@ -3,8 +3,11 @@ package runner
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -24,8 +27,11 @@ import (
 // doomed apt-get.
 //
 // Every Fix command is a fixed template — nothing is interpolated from job
-// logs. Arch is resolved inside the shell (`uname -m`) so the same plan
-// works in a job container and on a host executor.
+// logs. Platform and arch are resolved inside the shell (`uname`) so the
+// same plan works in a job container and on a host executor. Windows plans
+// run under Git Bash and install into $KERN_TOOL_BIN — the runner pins it
+// to a writable PATH dir via hostShEnv because the MSYS PATH contains
+// entries (~/bin, /usr/bin) that exec.LookPath cannot see.
 
 // toolPlan is one curated install: Pkg names what provides the tool for
 // display; Fix is the ordered shell plan.
@@ -34,23 +40,42 @@ type toolPlan struct {
 	Fix []string
 }
 
-// ghInstall downloads a PINNED gh release for the local arch, verifies the
-// archive against a checked-in sha256, then installs to /usr/local/bin.
-// self_heal=auto runs these on host executors — an unverified mutable
-// "latest" tarball would be remote code execution on the fleet, so the
-// digest is baked in here and bumped deliberately with the version.
-const ghInstall = `arch=$(uname -m) && case "$arch" in ` +
+// ghInstall downloads a PINNED gh release for the local platform, verifies
+// the archive against a checked-in sha256, then installs to a PATH-visible
+// bin dir. self_heal=auto runs these on host executors — an unverified
+// mutable "latest" tarball would be remote code execution on the fleet, so
+// the digests are baked in here and bumped deliberately with the version.
+const ghInstall = `os=$(uname -s) && case "$os" in ` +
+	`Linux) arch=$(uname -m) && case "$arch" in ` +
 	`x86_64) a=amd64; s=98cb101ad87dbbd3f6b2f2bfcbd43197ccd07643140121d8a9cfaa91eadbc24e;; ` +
 	`aarch64|arm64) a=arm64; s=cb34cefc6f4e77b90731374a2b737516bb8f3033c6ca46aa949e5344f68069e3;; ` +
 	`*) echo "unsupported arch $arch" >&2; exit 1;; esac` +
 	` && tmp=$(mktemp -d) && curl -fsSL "https://github.com/cli/cli/releases/download/v2.104.0/gh_2.104.0_linux_$a.tar.gz" -o "$tmp/gh.tgz"` +
 	` && echo "$s  $tmp/gh.tgz" | sha256sum -c - && tar -xzf "$tmp/gh.tgz" -C "$tmp"` +
-	` && install -m0755 "$tmp"/gh_*/bin/gh /usr/local/bin/gh && rm -rf "$tmp" && gh version`
+	` && install -m0755 "$tmp"/gh_*/bin/gh /usr/local/bin/gh && rm -rf "$tmp" && gh version;; ` +
+	`MINGW*|MSYS*|CYGWIN*|Windows*) [ -n "${KERN_TOOL_BIN:-}" ] || { echo "no writable PATH dir for tool install" >&2; exit 1; };` +
+	` arch=$(uname -m) && case "$arch" in ` +
+	`x86_64|amd64) a=amd64; s=08c06d10482f12c478018cd259f64acbd5f625712cadf331aad19ba973c879e5;; ` +
+	`aarch64|arm64) a=arm64; s=d56fbf5b9ad32e5985e3e7e1d8f4d28ae2994618986cd2cba9b50ac710dffe01;; ` +
+	`*) echo "unsupported arch $arch" >&2; exit 1;; esac` +
+	` && dest=$(cygpath -u "$KERN_TOOL_BIN") && tmp=$(mktemp -d)` +
+	` && curl -fsSL "https://github.com/cli/cli/releases/download/v2.104.0/gh_2.104.0_windows_$a.zip" -o "$tmp/gh.zip"` +
+	` && echo "$s  $tmp/gh.zip" | sha256sum -c - && unzip -o "$tmp/gh.zip" -d "$tmp"` +
+	` && install -m0755 "$tmp/bin/gh.exe" "$dest/gh.exe" && rm -rf "$tmp" && "$dest/gh.exe" version;; ` +
+	`*) echo "unsupported os $os" >&2; exit 1;; esac`
 
-const minisignInstall = `arch=$(uname -m) && case "$arch" in x86_64|aarch64|arm64) a=$arch;; *) echo "unsupported arch $arch" >&2; exit 1;; esac` +
+const minisignInstall = `os=$(uname -s) && case "$os" in ` +
+	`Linux) arch=$(uname -m) && case "$arch" in x86_64|aarch64|arm64) a=$arch;; *) echo "unsupported arch $arch" >&2; exit 1;; esac` +
 	` && tmp=$(mktemp -d) && curl -fsSL "https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz" -o "$tmp/m.tgz"` +
 	` && echo "9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73  $tmp/m.tgz" | sha256sum -c -` +
-	` && tar -xzf "$tmp/m.tgz" -C "$tmp" 2>/dev/null && install -m0755 "$tmp/minisign-linux/$a/minisign" /usr/local/bin/minisign && rm -rf "$tmp" && minisign -v`
+	` && tar -xzf "$tmp/m.tgz" -C "$tmp" 2>/dev/null && install -m0755 "$tmp/minisign-linux/$a/minisign" /usr/local/bin/minisign && rm -rf "$tmp" && minisign -v;; ` +
+	`MINGW*|MSYS*|CYGWIN*|Windows*) [ -n "${KERN_TOOL_BIN:-}" ] || { echo "no writable PATH dir for tool install" >&2; exit 1; };` +
+	` arch=$(uname -m) && case "$arch" in x86_64|amd64) a=x86_64;; aarch64|arm64) a=aarch64;; *) echo "unsupported arch $arch" >&2; exit 1;; esac` +
+	` && dest=$(cygpath -u "$KERN_TOOL_BIN") && tmp=$(mktemp -d)` +
+	` && curl -fsSL "https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-win64.zip" -o "$tmp/m.zip"` +
+	` && echo "37b600344e20c19314b2e82813db2bfdcc408b77b876f7727889dbd46d539479  $tmp/m.zip" | sha256sum -c -` +
+	` && unzip -o "$tmp/m.zip" -d "$tmp" && install -m0755 "$tmp/minisign-win64/$a/minisign.exe" "$dest/minisign.exe" && rm -rf "$tmp" && "$dest/minisign.exe" -v;; ` +
+	`*) echo "unsupported os $os" >&2; exit 1;; esac`
 
 var toolInstalls = map[string]toolPlan{
 	"gh":       {Pkg: "cli/cli release tarball", Fix: []string{ghInstall}},
@@ -98,9 +123,78 @@ func installHostTool(ctx context.Context, name string) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	for _, cmdline := range fix.Fix {
-		if out, err := exec.CommandContext(ctx, "sh", "-c", cmdline).CombinedOutput(); err != nil {
+		cmd := exec.CommandContext(ctx, "sh", "-c", cmdline)
+		cmd.Env = hostShEnv()
+		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("%s install failed: %v: %s", name, err, strings.TrimSpace(string(out)))
 		}
 	}
 	return nil
+}
+
+// hostShEnv is the environment for host-side `sh -c` plan execution. On
+// Windows it pins KERN_TOOL_BIN to a PATH-visible writable directory —
+// Git Bash prepends MSYS-only dirs (~/bin, /usr/bin, /mingw64/bin) that
+// exec.LookPath cannot resolve, so the shell cannot pick a safe install
+// target itself.
+func hostShEnv() []string {
+	env := os.Environ()
+	if runtime.GOOS == "windows" {
+		if dir := winToolBin(); dir != "" {
+			env = append(env, "KERN_TOOL_BIN="+dir)
+		}
+	}
+	return env
+}
+
+// winToolBin returns the first writable, non-system directory on the
+// runner's PATH — the same PATH exec.LookPath resolves tool names against.
+func winToolBin() string {
+	return pickToolBin(os.Getenv("PATH"))
+}
+
+// pickToolBin scans a PATH list for the tool install target. Only absolute
+// directories qualify: Git Bash PATHs carry MSYS mount points (/usr/bin,
+// ~/bin, /mingw64/bin) that Windows file APIs cannot address, and a
+// relative entry would resolve against an arbitrary cwd.
+func pickToolBin(pathList string) string {
+	for _, dir := range filepath.SplitList(pathList) {
+		if !filepath.IsAbs(dir) || isSystemBinDir(dir) || !isWritableDir(dir) {
+			continue
+		}
+		return dir
+	}
+	return ""
+}
+
+// isSystemBinDir reports whether dir sits under a Windows system root —
+// installing fleet tools into Program Files or Windows dirs is wrong even
+// when the runner token could write there.
+func isSystemBinDir(dir string) bool {
+	parts := strings.Split(strings.ToLower(filepath.Clean(strings.ReplaceAll(dir, "/", `\`))), `\`)
+	if len(parts) < 2 {
+		return false
+	}
+	switch parts[1] {
+	case "windows", "program files", "program files (x86)", "programdata":
+		return true
+	}
+	return false
+}
+
+// isWritableDir reports whether dir exists and accepts new files — an
+// actual write probe, since PATH membership says nothing about ACLs.
+func isWritableDir(dir string) bool {
+	st, err := os.Stat(dir)
+	if err != nil || !st.IsDir() {
+		return false
+	}
+	f, err := os.CreateTemp(dir, ".kern-probe-")
+	if err != nil {
+		return false
+	}
+	name := f.Name()
+	f.Close()
+	os.Remove(name)
+	return true
 }

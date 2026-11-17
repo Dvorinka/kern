@@ -135,6 +135,7 @@ func (e *executor) applyFix(ctx context.Context, step StepSpec, fix []string) bo
 		if e.host {
 			cmd = exec.CommandContext(ctx, "sh", "-c", cmdline)
 			cmd.Dir = e.wsPath()
+			cmd.Env = hostShEnv()
 		} else {
 			cmd = exec.CommandContext(ctx, "docker", "exec", "--user", "0:0",
 				e.container, "sh", "-c", cmdline)
