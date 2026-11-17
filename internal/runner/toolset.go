@@ -150,8 +150,16 @@ func hostShEnv() []string {
 // winToolBin returns the first writable, non-system directory on the
 // runner's PATH — the same PATH exec.LookPath resolves tool names against.
 func winToolBin() string {
-	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
-		if isSystemBinDir(dir) || !isWritableDir(dir) {
+	return pickToolBin(os.Getenv("PATH"))
+}
+
+// pickToolBin scans a PATH list for the tool install target. Only absolute
+// directories qualify: Git Bash PATHs carry MSYS mount points (/usr/bin,
+// ~/bin, /mingw64/bin) that Windows file APIs cannot address, and a
+// relative entry would resolve against an arbitrary cwd.
+func pickToolBin(pathList string) string {
+	for _, dir := range filepath.SplitList(pathList) {
+		if !filepath.IsAbs(dir) || isSystemBinDir(dir) || !isWritableDir(dir) {
 			continue
 		}
 		return dir
