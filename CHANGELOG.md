@@ -3,6 +3,25 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
+## [0.15.1] - 2026-11-17
+
+### Fixed
+- Windows host-executor toolset heal: curated `gh`/`minisign` install
+  plans branch on `uname -s` and pull the pinned win64/win-arm64
+  archives into `KERN_TOOL_BIN` — the first writable, non-system,
+  absolute PATH directory — instead of hardcoding Linux tarballs and
+  `/usr/local/bin`, which do not exist under Git Bash. Uncurated tools
+  no longer attempt the Linux-only apt/apk fallback on Windows; they
+  stay in `missing_tools` with a named warning, and identical
+  still-missing sets back off for 30 minutes instead of re-downloading
+  every sweep. (#353)
+
+### Changed
+- Dependency bumps: go module group — pgx 5.13.0, minio-go 7.4.1,
+  goose 3.30.1, x/crypto 0.59.0, x/term 0.48.0 (#351); apps/web npm
+  group — lucide-react 1.73.0, marked 18.2.0, vite 8.3.8,
+  @vitejs/plugin-react 6.3.0, oxlint 1.93.0, oxfmt 0.78.0 (#352).
+
 ## [0.15.0] - 2026-11-17
 
 ### Added
