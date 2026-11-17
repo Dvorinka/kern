@@ -3,6 +3,22 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
+## [0.15.0] - 2026-11-17
+
+### Added
+- Per-project job concurrency quota: `max_concurrent_jobs` caps how many
+  runner slots one project may hold fleet-wide, enforced atomically
+  inside `ClaimJob`'s claim CTE — one repo's CI burst can no longer
+  starve the queue. `0` (default) is uncapped. Exposed via project
+  settings API, `kern settings set max_concurrent_jobs <n> --project S`,
+  openapi, and a Job concurrency field on the project page; capped jobs
+  surface `project concurrency cap reached` in QueueReason. (#348)
+
+### Fixed
+- Docs: compatibility ledger corrected — explicit reusable-workflow
+  caller `secrets:` maps already ship via `callSecretsMap`; only caller
+  `strategy`/`concurrency` remain diagnostic. (#348)
+
 ## [0.14.0] - 2026-11-17
 
 ### Added
