@@ -35,6 +35,13 @@ func TestDiagnose(t *testing.T) {
 		{"conn reset", 1, "read tcp 10.0.0.5:443: read: connection reset by peer\n", "", "network", false},
 		{"npm socket timeout", 1, "npm ERR! network request to https://registry.npmjs.org failed, reason: ESOCKETTIMEDOUT\n", "", "network", false},
 		{"generic", 2, "make: *** [all] Error 1\n", "", "script_failure", false},
+		{"gh curated fix", 127, "bash: line 4: gh: command not found\n", "", "missing_binary", true},
+		{"minisign curated fix", 127, "sh: minisign: not found\n", "", "missing_binary", true},
+		{"tauri-driver hint", 127, "sh: tauri-driver: not found\n", "", "missing_binary", false},
+		{"pnpm hint", 127, "sh: pnpm: not found\n", "", "missing_binary", false},
+		{"ployz build kill", 1, "build resource cleanup could not be confirmed\n", "", "build_killed", false},
+		{"ployz stale lock", 1, "quarantined: stale lock /var/tmp/ployz-build-1701 held by dead pid\n", "", "stale_lock", true},
+		{"pnpm store corrupt", 1, "ENOENT: no such file or directory, open '/root/.local/share/pnpm/store/v3/files/ab/cdef'\n", "", "pnpm_store", true},
 	}
 	for _, tc := range cases {
 		d := diagnose(StepSpec{}, tc.code, tc.tail, tc.stepErr, "6g", func() bool { return true })

@@ -884,6 +884,7 @@ paths:
                 notify_secret: { type: string }
                 notify_events: { type: string, description: "CSV of success,failure,cancelled,skipped; empty = all" }
                 notify_format: { type: string, enum: [kern, slack] }
+                toolset: { type: string, description: "CSV of host command names (e.g. gh,minisign); host executors drift-check PATH and report missing_tools; empty clears" }
       responses:
         "200": { description: Updated }
         "400": { $ref: "#/components/responses/Error" }

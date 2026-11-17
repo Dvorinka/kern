@@ -261,7 +261,7 @@ type Runner struct {
 	AutoUpdate bool `json:"auto_update"`
 	// WakeOnDemand marks the runner's host as safe for an external scaler
 	// (deployments/vm-scaler.sh) to power on for queued work. Advisory only.
-	WakeOnDemand    bool       `json:"wake_on_demand"`
+	WakeOnDemand bool `json:"wake_on_demand"`
 	// ClaimsPaused carries the runner's live claim-gate reasons
 	// (disk,memory,overload; '' = claiming normally), reported on each
 	// heartbeat so a gated runner stops reading as merely idle.
@@ -282,6 +282,11 @@ type Runner struct {
 	// Executor is the job execution substrate: "docker" (container, default)
 	// or "host" (local processes — trusted trust tiers only).
 	Executor string `json:"executor"`
+	// MissingTools is the host executor's drift report against the org's
+	// declared toolset: the tool names absent from its PATH. Nil means the
+	// runner never reported (docker executor or pre-toolset agent);
+	// empty-but-set means the check ran and found nothing.
+	MissingTools []string `json:"missing_tools"`
 	// Icon is an operator-set glyph: an emoji or an image URL/path. Empty
 	// renders the default marker.
 	Icon string `json:"icon"`
@@ -310,6 +315,10 @@ type HostMetrics struct {
 	// reported" (pre-label-sync runner), and the store keeps the row's
 	// existing labels.
 	Labels []string `json:"labels"`
+	// MissingTools carries the host executor's toolset drift list — nil
+	// means "not reporting" and the column is left alone; an empty slice
+	// clears recorded drift.
+	MissingTools *[]string `json:"missing_tools"`
 }
 
 type Secret struct {

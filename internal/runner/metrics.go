@@ -35,7 +35,11 @@ type heartbeatMetrics struct {
 	// version forever, and the auto-update offer never converges.
 	Version    string `json:"version,omitempty"`
 	ActiveJobs int    `json:"active_jobs"`
-	SelfUpdate bool   `json:"self_update,omitempty"`
+	// MissingTools is the host executor's toolset drift report — nil until
+	// a declared toolset has been swept, then the list of absent commands
+	// (possibly empty, which clears recorded drift server-side).
+	MissingTools *[]string `json:"missing_tools,omitempty"`
+	SelfUpdate   bool      `json:"self_update,omitempty"`
 	// Deregister asks the control plane to delete this runner's row — the
 	// ephemeral-runner exit path, refused server-side while jobs are in flight.
 	Deregister bool `json:"deregister,omitempty"`

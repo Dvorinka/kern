@@ -1,0 +1,6 @@
+# host-toolset — one command name per line, installed by
+# install-runners.sh and drift-checked by kern's `toolset` org setting
+# (`kern settings set toolset gh,minisign`). Curated tools install from
+# release tarballs; anything else resolves through apt.
+gh
+minisign

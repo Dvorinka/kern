@@ -139,37 +139,37 @@ func TestOrgSettingWrites(t *testing.T) {
 	off := "off"
 	bad := "sometimes"
 	on := "on"
-	writes, msg := orgSettingWrites(&off, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	writes, msg := orgSettingWrites(&off, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	if msg != "" || writes["self_heal"] != "off" || len(writes) != 1 {
 		t.Fatalf("self_heal only: %v %q", writes, msg)
 	}
-	writes, msg = orgSettingWrites(nil, &on, nil, nil, nil, nil, nil, nil, nil, nil)
+	writes, msg = orgSettingWrites(nil, &on, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	if msg != "" || writes["public_ci"] != "on" {
 		t.Fatalf("public only: %v %q", writes, msg)
 	}
-	writes, msg = orgSettingWrites(nil, nil, &on, nil, nil, nil, nil, nil, nil, nil)
+	writes, msg = orgSettingWrites(nil, nil, &on, nil, nil, nil, nil, nil, nil, nil, nil)
 	if msg != "" || writes["auto_update"] != "on" {
 		t.Fatalf("auto_update only: %v %q", writes, msg)
 	}
-	if _, msg = orgSettingWrites(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil); msg == "" {
+	if _, msg = orgSettingWrites(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil); msg == "" {
 		t.Fatal("empty body must fail")
 	}
-	if _, msg = orgSettingWrites(&bad, nil, nil, nil, nil, nil, nil, nil, nil, nil); msg == "" {
+	if _, msg = orgSettingWrites(&bad, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil); msg == "" {
 		t.Fatal("bad self_heal must fail")
 	}
-	if _, msg = orgSettingWrites(nil, &bad, nil, nil, nil, nil, nil, nil, nil, nil); msg == "" {
+	if _, msg = orgSettingWrites(nil, &bad, nil, nil, nil, nil, nil, nil, nil, nil, nil); msg == "" {
 		t.Fatal("bad public_ci must fail")
 	}
-	if _, msg = orgSettingWrites(nil, nil, &bad, nil, nil, nil, nil, nil, nil, nil); msg == "" {
+	if _, msg = orgSettingWrites(nil, nil, &bad, nil, nil, nil, nil, nil, nil, nil, nil); msg == "" {
 		t.Fatal("bad auto_update must fail")
 	}
 	url := "https://hooks.example.com/kern"
-	writes, msg = orgSettingWrites(nil, nil, nil, nil, &url, nil, nil, nil, nil, nil)
+	writes, msg = orgSettingWrites(nil, nil, nil, nil, &url, nil, nil, nil, nil, nil, nil)
 	if msg != "" || writes["notify_url"] != url {
 		t.Fatalf("notify_url: %v %q", writes, msg)
 	}
 	badURL := "ftp://nope"
-	if _, msg = orgSettingWrites(nil, nil, nil, nil, &badURL, nil, nil, nil, nil, nil); msg == "" {
+	if _, msg = orgSettingWrites(nil, nil, nil, nil, &badURL, nil, nil, nil, nil, nil, nil); msg == "" {
 		t.Fatal("non-http notify_url must fail")
 	}
 }

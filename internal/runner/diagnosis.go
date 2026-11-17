@@ -8,11 +8,14 @@ import (
 // diagnosis is the structured failure record every failed step reports. It is
 // deterministic: same log tail and exit code always produce the same record.
 type diagnosis struct {
-	Kind        string       `json:"kind"`
-	Summary     string       `json:"summary"`
-	Detail      string       `json:"detail,omitempty"`
-	Suggestion  string       `json:"suggestion"`
-	AgentPrompt string       `json:"agent_prompt"`
+	Kind        string `json:"kind"`
+	Summary     string `json:"summary"`
+	Detail      string `json:"detail,omitempty"`
+	Suggestion  string `json:"suggestion"`
+	AgentPrompt string `json:"agent_prompt"`
+	// Runner names the host that produced this diagnosis — the missing
+	// tool's blast radius is per-host, and the drift report keys on it.
+	Runner      string       `json:"runner,omitempty"`
 	Fixable     bool         `json:"fixable"`
 	Remediation *remediation `json:"remediation,omitempty"`
 }
@@ -126,6 +129,38 @@ func diagnose(step StepSpec, exitCode int, logTail, stepErr, jobMemory string, d
 	case strings.Contains(lower, "permission denied"):
 		return fail("permission_denied", "A file or operation returned permission denied",
 			"check file ownership in the workspace or run the command with the right user")
+	case strings.Contains(lower, "build resource cleanup could not be confirmed"):
+		// getployz/build@v1 kills the build's internal execution after 60s on
+		// cold runners; the cleanup it then cannot confirm is the tell. The
+		// step itself did nothing wrong — kind is transient so the job
+		// auto-requeues instead of dying with a bare "a build step failed".
+		return fail("build_killed",
+			"The build action's internal 60s execution kill fired — infra flake, not the script",
+			"the job is auto-requeued; if this repeats, the runner is cold-starting the build runtime and needs a warm retry budget")
+	case strings.Contains(lower, "ployz-build-") &&
+		(strings.Contains(lower, "stale") || strings.Contains(lower, "lock") ||
+			strings.Contains(lower, "quarantin") || strings.Contains(lower, "already")):
+		// Stale /var/tmp/ployz-build-* locks quarantine later builds on the
+		// host (getployz/ployz#4174); workflows carry rm -rf pre-steps as a
+		// workaround. The fix is the same command, first-class.
+		d = fail("stale_lock",
+			"A stale ployz-build lock under /var/tmp is quarantining the build",
+			"clear /var/tmp/ployz-build-* on the runner host; the workaround is fixed for self_heal=auto")
+		d.Fixable = true
+		d.Remediation = &remediation{Fix: []string{"rm -rf /var/tmp/ployz-build-*"}}
+		return d
+	case strings.Contains(lower, "pnpm") && strings.Contains(lower, "store") &&
+		(strings.Contains(lower, "enoent") || strings.Contains(lower, "err_pnpm") ||
+			strings.Contains(lower, "unexpected end of json")):
+		// A missing content blob corrupts the pnpm content-addressable
+		// store and breaks store imports for every job on that host until
+		// the store is pruned.
+		d = fail("pnpm_store",
+			"The pnpm store is corrupted — a missing content blob breaks store imports",
+			"prune the store (`pnpm store prune`) or recreate it on the runner host")
+		d.Fixable = true
+		d.Remediation = &remediation{Fix: []string{"pnpm store prune"}}
+		return d
 	case sharedLibRe.MatchString(logTail):
 		lib := sharedLibRe.FindStringSubmatch(logTail)[1]
 		d = fail("missing_library",
@@ -152,6 +187,25 @@ func diagnose(step StepSpec, exitCode int, logTail, stepErr, jobMemory string, d
 				"Suggested fix: " + d.Suggestion
 			return d
 		}
+		if plan, ok := toolInstalls[pkg]; ok {
+			// Curated tools are not apt-named — `apt-get install gh` 404s.
+			// The tarball plan works identically inside a job container and
+			// on a host executor, where it persists for later jobs.
+			d.Summary = "Command `" + pkg + "` is missing in the job environment"
+			d.Suggestion = "install " + plan.Pkg + " — or bake it into the job image"
+			d.AgentPrompt = "CI step failed: `" + pkg + "` is not installed. " +
+				"Suggested fix: " + d.Suggestion
+			d.Fixable = true
+			d.Remediation = &remediation{Fix: plan.Fix}
+			return d
+		}
+		if hint, ok := toolHints[pkg]; ok {
+			d.Summary = "Command `" + pkg + "` is missing in the job image"
+			d.Suggestion = hint
+			d.AgentPrompt = "CI step failed: `" + pkg + "` is not installed. " +
+				"Suggested fix: " + hint
+			return d
+		}
 		if pkg != "" {
 			d.Summary = "Command `" + pkg + "` is missing in the job image"
 			d.Suggestion = "install `" + pkg + "` in a prior step or use an image that ships it"
@@ -159,14 +213,6 @@ func diagnose(step StepSpec, exitCode int, logTail, stepErr, jobMemory string, d
 				"Suggested fix: " + d.Suggestion
 			d.Fixable = true
 			d.Remediation = &remediation{Fix: installCommands(pkg)}
-			if pkg == "gh" {
-				// gh is not in Debian/Ubuntu main repos; apt remediation
-				// fails. The kern baseline image ships it.
-				d.Suggestion = "use the kern baseline image (KERN_DEFAULT_IMAGE=ghcr.io/dvorinka/kern-ubuntu:24.04) or install gh from cli.github.com in a prior step"
-				d.AgentPrompt = "CI step failed: `gh` is not installed in the container. Suggested fix: " + d.Suggestion
-				d.Fixable = false
-				d.Remediation = nil
-			}
 		}
 		return d
 	case strings.Contains(lower, "could not resolve host") ||

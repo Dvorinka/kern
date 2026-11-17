@@ -131,6 +131,9 @@ type runnerRow struct {
 	ActiveJobs      int               `json:"active_jobs"`
 	ClaimsPaused    string            `json:"claims_paused"`
 	Env             map[string]string `json:"env"`
+	// MissingTools is the host executor's drift report against the org
+	// toolset — nil means the runner does not report drift.
+	MissingTools []string `json:"missing_tools"`
 }
 
 type artifact struct {
