@@ -187,6 +187,17 @@ func (s *Server) getRun(c *gin.Context) {
 			}
 		}
 	}
+	if capped, err := s.Store.ConcurrencyCappedJobs(c.Request.Context()); err == nil {
+		set := make(map[uuid.UUID]bool, len(capped))
+		for _, id := range capped {
+			set[id] = true
+		}
+		for i := range jobs {
+			if jobs[i].Status == "queued" && jobs[i].QueueReason == "" && set[jobs[i].ID] {
+				jobs[i].QueueReason = "project concurrency cap reached (max_concurrent_jobs)"
+			}
+		}
+	}
 	version, err := s.Store.WorkflowVersion(c.Request.Context(), run.WorkflowVersionID)
 	if err != nil {
 		s.internalError(c, err)

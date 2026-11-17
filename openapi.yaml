@@ -1230,6 +1230,7 @@ components:
         icon_path: { type: string, nullable: true }
         notify_url: { type: string, description: "http(s) URL, 'off' to disable, '' to inherit org" }
         artifact_quota_mb: { type: integer, minimum: 0, description: "0 disables the quota" }
+        max_concurrent_jobs: { type: integer, minimum: 0, description: "Per-project in-progress job cap fleet-wide; 0 disables" }
     Workflow:
       type: object
       properties:

@@ -51,13 +51,31 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 			WHERE r.org_id = me.org_id
 			  AND r.status = 'online'
 			  AND NOT r.draining
+		), proj_caps AS MATERIALIZED (
+			-- Per-project concurrency quota: only projects carrying a
+			-- positive numeric max_concurrent_jobs appear here, so a
+			-- LEFT JOIN miss means uncapped. The in-progress count is
+			-- computed once per claim, not once per candidate row.
+			SELECT p.id AS project_id,
+				(p.settings->>'max_concurrent_jobs')::int AS max_jobs,
+				(SELECT count(*) FROM jobs q
+				 JOIN workflow_runs qr ON qr.id = q.run_id
+				 WHERE qr.project_id = p.id
+				   AND q.status = 'in_progress') AS running
+			FROM projects p
+			WHERE p.settings->>'max_concurrent_jobs' ~ '^[1-9]\d*$'
 		), candidate AS (
 			SELECT j.id
 			FROM jobs j
 			JOIN workflow_runs r ON r.id = j.run_id
 			CROSS JOIN me
 			JOIN fleet me_f ON me_f.id = me.id
+			LEFT JOIN proj_caps cap ON cap.project_id = r.project_id
 			WHERE j.status = 'queued'
+			  -- Project concurrency quota: a project holding its
+			  -- max_concurrent_jobs in-progress limit claims no further
+			  -- slots, so one repo's burst cannot starve the fleet.
+			  AND (cap.max_jobs IS NULL OR cap.running < cap.max_jobs)
 			  AND r.status = 'in_progress'
 			  AND j.runs_on <@ (me_f.labels || ARRAY['self-hosted', 'kern'])
 			  -- Host-exec runners have no isolation: fork/pull_request trust
@@ -748,6 +766,36 @@ func (s *Store) UnmatchedQueuedJobs(ctx context.Context) ([]UnmatchedJob, error)
 			return nil, err
 		}
 		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// ConcurrencyCappedJobs lists queued jobs whose project holds its
+// max_concurrent_jobs in-progress limit — they wait on their own
+// project's quota, not on runner availability or labels.
+func (s *Store) ConcurrencyCappedJobs(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT j.id FROM jobs j
+		JOIN workflow_runs r ON r.id = j.run_id
+		JOIN projects p ON p.id = r.project_id
+		WHERE j.status = 'queued'
+		  AND r.status IN ('queued', 'in_progress')
+		  AND p.settings->>'max_concurrent_jobs' ~ '^[1-9]\d*$'
+		  AND (SELECT count(*) FROM jobs q
+		       JOIN workflow_runs qr ON qr.id = q.run_id
+		       WHERE qr.project_id = p.id AND q.status = 'in_progress')
+		      >= (p.settings->>'max_concurrent_jobs')::int`)
+	if err != nil {
+		return nil, fmt.Errorf("concurrency capped jobs: %w", err)
+	}
+	defer rows.Close()
+	var out []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
 	}
 	return out, rows.Err()
 }
