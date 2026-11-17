@@ -3,6 +3,27 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
+## [0.14.0] - 2026-11-17
+
+### Added
+- Self-healing job environments: curated install plans for `gh` and
+  `minisign` (release tarballs, arch resolved in-shell) replace the
+  doomed `apt-get install gh`; `tauri-driver`/`pnpm` report named
+  toolchain hints. New diagnosis kinds `build_killed` (transient,
+  auto-requeues), `stale_lock` and `pnpm_store` (fixable). Org setting
+  `toolset` rides heartbeats so host executors report
+  `runner.toolset_drift` audits; `self_heal=auto` installs through the
+  same curated plans. `kern runners`/`kern doctor` surface drift.
+  `deployments/install-runners.sh` derives `lxc-<CT>` labels instead of
+  hardcoding `lxc-901`; `ci-cleanup.sh` sweeps stale ployz-build dirs
+  and verifies the pnpm store. (#345, closes #344)
+- System-wide web colour grammar: `catColor()` pinned hues for events
+  and environments, `jobTint()` ties job/workflow names to their
+  fingerprint segment colour, `projectColor()` applies everywhere a
+  project slug renders including the usage donut. Applied across runs,
+  overview, run detail, gantt, queue, fleet map, public run, projects,
+  deliveries, environments, cache, artifacts, secrets and usage. (#341)
+
 ## [0.13.0] - 2026-11-12
 
 ### Added
