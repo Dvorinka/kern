@@ -65,7 +65,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: .
           file: deployments/api.Dockerfile
@@ -75,7 +75,7 @@ jobs:
             ghcr.io/dvorinka/kern-api:${{ github.ref_name }}
             ghcr.io/dvorinka/kern-api:latest
       - id: runner
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: deployments/runner.Dockerfile
@@ -87,7 +87,7 @@ jobs:
       # Baseline job image: ubuntu:26.04 + the toolset GitHub-hosted runners
       # ship. Only rebuilt when the Dockerfile (or this workflow) changes, so a
       # normal release reuses the cached layers.
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: .
           file: deployments/ubuntu.Dockerfile
