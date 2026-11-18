@@ -162,7 +162,11 @@ func (e *executor) startMetricsSampler(ctx context.Context) {
 		proxy = e.egressProxyName()
 	}
 	sample := func() {
-		out, err := exec.CommandContext(ctx, "docker", "stats", "--no-stream",
+		// Own deadline: the job context stays open for hours, and a docker
+		// stats that blocks in disk wait must not pin this sampler to it.
+		sctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		defer cancel()
+		out, err := exec.CommandContext(sctx, "docker", "stats", "--no-stream",
 			"--format", "{{.CPUPerc}} {{.MemUsage}}", e.container).Output()
 		if err != nil {
 			return
@@ -170,7 +174,7 @@ func (e *executor) startMetricsSampler(ctx context.Context) {
 		cpu, mem := parseDockerStats(string(out))
 		m.observe(cpu, mem)
 		if proxy != "" {
-			if pout, perr := exec.CommandContext(ctx, "docker", "stats", "--no-stream",
+			if pout, perr := exec.CommandContext(sctx, "docker", "stats", "--no-stream",
 				"--format", "{{.NetIO}}", proxy).Output(); perr == nil {
 				m.observeEgress(parseNetIO(string(pout)))
 			}

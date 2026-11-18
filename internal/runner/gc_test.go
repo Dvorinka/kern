@@ -10,6 +10,20 @@ import (
 	"go.uber.org/zap"
 )
 
+func TestStaleWorkspaceContainer(t *testing.T) {
+	const live = "526e4794-9f35-48e4-b6f6-c15639082edc"
+	labels := "dev.cloudreve.role=test,dev.cloudreve.worktree=/github/workspaces/" + live + "/cli"
+	if staleWorkspaceContainer(labels, func(id string) bool { return id == live }) {
+		t.Fatal("container pointing at a live workspace must stay")
+	}
+	if !staleWorkspaceContainer(labels, func(string) bool { return false }) {
+		t.Fatal("container pointing at a gone workspace must go")
+	}
+	if staleWorkspaceContainer("com.docker.compose.project=cal", func(string) bool { return false }) {
+		t.Fatal("a container with no workspace label is not ours to remove")
+	}
+}
+
 func TestSweepWorkspaces(t *testing.T) {
 	root := t.TempDir()
 	old := time.Now().Add(-48 * time.Hour)
