@@ -243,6 +243,24 @@ func TestLooksTransientError(t *testing.T) {
 	}
 }
 
+// Git transport deaths during prepare must reach the retryable
+// classification — this is the boundary maybeRequeueTransient reads.
+// Auth failures stay "prepare": they are deterministic, not transient.
+func TestClassifyJobErrorGitTransport(t *testing.T) {
+	for _, msg := range []string{
+		"checkout: clone https://x/y.git: exit status 128 (error: RPC failed; curl 56 Recv failure)",
+		"checkout: clone https://x/y.git: exit status 128 (fatal: unable to access 'https://x/y.git/': Could not resolve host: github.com)",
+		"checkout: fetch: exit status 128 (fatal: the remote end hung up unexpectedly)",
+	} {
+		if got := classifyJobError(msg); got != "network" || !transientRetryKinds[got] {
+			t.Errorf("classifyJobError(%q) = %q, want retryable network", msg, got)
+		}
+	}
+	if got := classifyJobError("checkout: clone https://x/y.git: exit status 128 (fatal: Authentication failed for 'https://x/y.git/')"); got != "prepare" {
+		t.Errorf("classifyJobError auth failure = %q, want prepare", got)
+	}
+}
+
 // #331/#335: jobProgress narrates a live lane — current step, queue wait,
 // and a median-history ETA with a job-local fallback for unrecorded steps.
 func TestJobProgress(t *testing.T) {
