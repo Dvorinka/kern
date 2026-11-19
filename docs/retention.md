@@ -30,4 +30,7 @@ that class.
   truth for history.
 - **Exec session blobs** (`exec/<job>/<exec>.{out,stdin}`) follow
   `KERN_LOG_RETENTION` — they are log-class data.
-- **Artifacts** are quota-bound per project, not time-bound.
+- **Artifacts** are quota-bound per project and expire 90 days after
+  upload by default; `actions/upload-artifact`'s `retention-days`
+  (1–365) overrides that per artifact. The expiry sweep drops the row
+  and the blob.

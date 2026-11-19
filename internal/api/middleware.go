@@ -42,6 +42,7 @@ func (s *Server) requireAuth() gin.HandlerFunc {
 			c.Set(ctxTokenID, grant.ID)
 			c.Set(ctxTokenProjects, grant.Projects)
 			c.Set(ctxTokenLabels, grant.Labels)
+			c.Set(ctxTokenCap, grant.MaxConcurrent)
 			c.Next()
 			return
 		}

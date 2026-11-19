@@ -64,6 +64,18 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 				   AND q.status = 'in_progress') AS running
 			FROM projects p
 			WHERE p.settings->>'max_concurrent_jobs' ~ '^[1-9]\d*$'
+		), token_caps AS MATERIALIZED (
+			-- Per-token concurrency quota (#356): a dispatch token carrying
+			-- max_concurrent_jobs may hold only that many in-progress jobs
+			-- at once, so one tenant cannot flood the pool. A LEFT JOIN
+			-- miss (session/webhook runs, uncapped tokens) is uncapped.
+			SELECT t.id AS token_id, t.max_concurrent_jobs AS max_jobs,
+				(SELECT count(*) FROM jobs q
+				 JOIN workflow_runs qr ON qr.id = q.run_id
+				 WHERE qr.dispatch_token_id = t.id
+				   AND q.status = 'in_progress') AS running
+			FROM api_tokens t
+			WHERE t.max_concurrent_jobs > 0
 		), candidate AS (
 			SELECT j.id
 			FROM jobs j
@@ -71,7 +83,10 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 			CROSS JOIN me
 			JOIN fleet me_f ON me_f.id = me.id
 			LEFT JOIN proj_caps cap ON cap.project_id = r.project_id
+			LEFT JOIN token_caps tcap ON tcap.token_id = r.dispatch_token_id
 			WHERE j.status = 'queued'
+			  -- Token concurrency quota: same shape as the project cap.
+			  AND (tcap.max_jobs IS NULL OR tcap.running < tcap.max_jobs)
 			  -- Project concurrency quota: a project holding its
 			  -- max_concurrent_jobs in-progress limit claims no further
 			  -- slots, so one repo's burst cannot starve the fleet.

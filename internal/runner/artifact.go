@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -67,7 +68,8 @@ func (e *executor) artifactUpload(step StepSpec) (string, int) {
 		return "failure", 1
 	}
 	defer os.Remove(tmp)
-	if err := e.c.uploadArtifact(context.Background(), e.jobID, name, tmp); err != nil {
+	retention, _ := strconv.Atoi(withString(step, "retention-days", "0"))
+	if err := e.c.uploadArtifact(context.Background(), e.jobID, name, tmp, retention); err != nil {
 		e.logStep(step, "KERN: upload artifact: "+err.Error())
 		return "failure", 1
 	}

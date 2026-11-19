@@ -152,7 +152,7 @@ pull_request runs by number; --workflow matches name or path.
 		return `kern token — API tokens
 
   token list
-  token create --name NAME [--scopes read,write] [--projects SLUG] [--labels LABEL] [--days N]
+  token create --name NAME [--scopes read,write] [--projects SLUG] [--labels LABEL] [--days N] [--concurrency N]
   token delete <id>
 `
 	case "config":

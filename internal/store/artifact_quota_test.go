@@ -29,7 +29,7 @@ func TestArtifactQuotaConcurrent(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			_, errs[i] = s.CreateArtifactIfQuota(ctx, run.ID, jobs[0].ID,
-				fmt.Sprintf("a%d", i), fmt.Sprintf("blob/%d", i), size, "sha", quota)
+				fmt.Sprintf("a%d", i), fmt.Sprintf("blob/%d", i), size, "sha", quota, 0)
 		}(i)
 	}
 	wg.Wait()
@@ -69,15 +69,15 @@ func TestArtifactQuotaOverwrite(t *testing.T) {
 	const quota = int64(3 << 20)
 	const size = int64(2 << 20)
 
-	if _, err := s.CreateArtifactIfQuota(ctx, run.ID, jobs[0].ID, "a", "b1", size, "s", quota); err != nil {
+	if _, err := s.CreateArtifactIfQuota(ctx, run.ID, jobs[0].ID, "a", "b1", size, "s", quota, 0); err != nil {
 		t.Fatalf("first insert: %v", err)
 	}
 	// A second 2MiB under a different name would exceed 3MiB — rejected.
-	if _, err := s.CreateArtifactIfQuota(ctx, run.ID, jobs[0].ID, "b", "b2", size, "s", quota); !errors.Is(err, ErrArtifactQuota) {
+	if _, err := s.CreateArtifactIfQuota(ctx, run.ID, jobs[0].ID, "b", "b2", size, "s", quota, 0); !errors.Is(err, ErrArtifactQuota) {
 		t.Fatalf("expected quota rejection, got %v", err)
 	}
 	// Overwriting "a" with the same size replaces, not adds — still fits.
-	if _, err := s.CreateArtifactIfQuota(ctx, run.ID, jobs[0].ID, "a", "b3", size, "s", quota); err != nil {
+	if _, err := s.CreateArtifactIfQuota(ctx, run.ID, jobs[0].ID, "a", "b3", size, "s", quota, 0); err != nil {
 		t.Fatalf("overwrite should fit: %v", err)
 	}
 	total, err := s.ArtifactBytesForProject(ctx, pid)

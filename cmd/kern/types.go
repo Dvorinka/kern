@@ -18,15 +18,16 @@ type user struct {
 }
 
 type apiToken struct {
-	ID         string     `json:"id"`
-	Name       string     `json:"name"`
-	Prefix     string     `json:"prefix"`
-	Scopes     []string   `json:"scopes"`
-	Projects   []string   `json:"projects"`
-	Labels     []string   `json:"labels"`
-	LastUsedAt *time.Time `json:"last_used_at"`
-	ExpiresAt  *time.Time `json:"expires_at"`
-	CreatedAt  time.Time  `json:"created_at"`
+	ID                string     `json:"id"`
+	Name              string     `json:"name"`
+	Prefix            string     `json:"prefix"`
+	Scopes            []string   `json:"scopes"`
+	Projects          []string   `json:"projects"`
+	Labels            []string   `json:"labels"`
+	MaxConcurrentJobs int        `json:"max_concurrent_jobs"`
+	LastUsedAt        *time.Time `json:"last_used_at"`
+	ExpiresAt         *time.Time `json:"expires_at"`
+	CreatedAt         time.Time  `json:"created_at"`
 }
 
 type project struct {

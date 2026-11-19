@@ -29,6 +29,13 @@ func (s *Server) uploadArtifact(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_name", "artifact name may contain letters, digits, '.', '_' and '-'")
 		return
 	}
+	// retention_days overrides the 90-day default expiry (clamped 1..365).
+	retention := 0
+	if raw := c.Query("retention_days"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil {
+			retention = min(max(n, 1), 365)
+		}
+	}
 	key := fmt.Sprintf("artifacts/%s/%s.tar.gz", job.RunID.String(), name)
 	size, sha, err := s.Blobs.Put(key, io.LimitReader(c.Request.Body, 4<<30))
 	if err != nil {
@@ -36,7 +43,7 @@ func (s *Server) uploadArtifact(c *gin.Context) {
 		return
 	}
 	a, err := s.Store.CreateArtifactIfQuota(c.Request.Context(), job.RunID, job.ID,
-		name, key, size, sha, s.artifactQuotaBytes(c, job.RunID))
+		name, key, size, sha, s.artifactQuotaBytes(c, job.RunID), retention)
 	if errors.Is(err, store.ErrArtifactQuota) {
 		_ = s.Blobs.Delete(key)
 		fail(c, http.StatusRequestEntityTooLarge, "quota_exceeded", "artifact quota exceeded")

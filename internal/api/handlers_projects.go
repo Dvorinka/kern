@@ -400,6 +400,7 @@ func (s *Server) triggerRun(c *gin.Context) {
 		Source:            source,
 		Inputs:            req.Inputs,
 		EachRunner:        req.EachRunner,
+		DispatchTokenID:   dispatchTokenID(c),
 	})
 	if err != nil {
 		s.internalError(c, err)
@@ -588,6 +589,7 @@ func (s *Server) triggerRunByPath(c *gin.Context) {
 		Source:            source,
 		Inputs:            req.Inputs,
 		EachRunner:        req.EachRunner,
+		DispatchTokenID:   dispatchTokenID(c),
 	})
 	if err != nil {
 		s.internalError(c, err)

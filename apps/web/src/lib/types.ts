@@ -339,6 +339,7 @@ export interface APIToken {
   scopes: string[];
   projects: string[];
   labels: string[];
+  max_concurrent_jobs: number;
   last_used_at: string | null;
   expires_at: string | null;
   created_at: string;

@@ -18,6 +18,7 @@ const (
 	ctxTokenID       = "kern.token_id"
 	ctxTokenProjects = "kern.token_projects"
 	ctxTokenLabels   = "kern.token_labels"
+	ctxTokenCap      = "kern.token_cap"
 )
 
 // Token grants limit an API token to projects and a runner-label pool.
@@ -42,6 +43,21 @@ func tokenID(c *gin.Context) (uuid.UUID, bool) {
 	}
 	id, ok := v.(uuid.UUID)
 	return id, ok && id != uuid.Nil
+}
+
+// dispatchTokenID stamps the run with the token that started it so the
+// claim query can hold the token to its max_concurrent_jobs budget.
+func dispatchTokenID(c *gin.Context) uuid.UUID {
+	id, _ := tokenID(c)
+	return id
+}
+
+// tokenCap is the dispatching token's max_concurrent_jobs; 0 is uncapped
+// (sessions, and tokens minted without a cap).
+func tokenCap(c *gin.Context) int {
+	v, _ := c.Get(ctxTokenCap)
+	n, _ := v.(int)
+	return n
 }
 
 func grantRestricted(c *gin.Context) bool {

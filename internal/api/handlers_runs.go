@@ -354,6 +354,7 @@ func (s *Server) rerunRun(c *gin.Context) {
 		TrustLevel:        orig.TrustLevel,
 		Source:            source,
 		ConcurrencyGroup:  orig.ConcurrencyGroup,
+		DispatchTokenID:   dispatchTokenID(c),
 	})
 	if err != nil {
 		s.internalError(c, err)

@@ -432,6 +432,7 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			TrustLevel:        trust,
 			Source:            source,
 			Inputs:            inputs,
+			DispatchTokenID:   dispatchTokenID(c),
 		})
 		if err == nil {
 			s.Store.Audit(ctx, user.OrgID, &user.ID, "run.trigger", run.ID.String())
@@ -467,6 +468,7 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			Actor:             user.Email,
 			TrustLevel:        orig.TrustLevel,
 			Source:            source,
+			DispatchTokenID:   dispatchTokenID(c),
 		})
 		if err == nil {
 			s.Store.Audit(ctx, user.OrgID, &user.ID, "run.rerun", orig.ID.String())

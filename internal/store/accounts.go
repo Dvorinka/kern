@@ -364,15 +364,18 @@ func (s *Store) DeleteOtherSessions(ctx context.Context, userID uuid.UUID, keepH
 }
 
 type APIToken struct {
-	ID         uuid.UUID  `json:"id"`
-	Name       string     `json:"name"`
-	Prefix     string     `json:"prefix"`
-	Scopes     []string   `json:"scopes"`
-	Projects   []string   `json:"projects"`
-	Labels     []string   `json:"labels"`
-	LastUsedAt *time.Time `json:"last_used_at"`
-	ExpiresAt  *time.Time `json:"expires_at"`
-	CreatedAt  time.Time  `json:"created_at"`
+	ID       uuid.UUID `json:"id"`
+	Name     string    `json:"name"`
+	Prefix   string    `json:"prefix"`
+	Scopes   []string  `json:"scopes"`
+	Projects []string  `json:"projects"`
+	Labels   []string  `json:"labels"`
+	// MaxConcurrentJobs caps in-progress jobs this token's dispatches may
+	// hold at once. 0 is uncapped.
+	MaxConcurrentJobs int        `json:"max_concurrent_jobs"`
+	LastUsedAt        *time.Time `json:"last_used_at"`
+	ExpiresAt         *time.Time `json:"expires_at"`
+	CreatedAt         time.Time  `json:"created_at"`
 }
 
 // textArray stores an empty slice as '{}' so a NOT NULL text[] never sees NULL.
@@ -383,20 +386,20 @@ func textArray(v []string) []string {
 	return v
 }
 
-func (s *Store) CreateAPIToken(ctx context.Context, userID uuid.UUID, name, prefix, hash string, scopes []string, expiresAt *time.Time, projects, labels []string) (APIToken, error) {
+func (s *Store) CreateAPIToken(ctx context.Context, userID uuid.UUID, name, prefix, hash string, scopes []string, expiresAt *time.Time, projects, labels []string, maxConcurrent int) (APIToken, error) {
 	var t APIToken
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO api_tokens (user_id, name, prefix, token_hash, scopes, expires_at, projects, labels)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		RETURNING id, name, prefix, scopes, projects, labels, last_used_at, expires_at, created_at`,
-		userID, name, prefix, hash, scopes, expiresAt, textArray(projects), textArray(labels)).
-		Scan(&t.ID, &t.Name, &t.Prefix, &t.Scopes, &t.Projects, &t.Labels, &t.LastUsedAt, &t.ExpiresAt, &t.CreatedAt)
+		INSERT INTO api_tokens (user_id, name, prefix, token_hash, scopes, expires_at, projects, labels, max_concurrent_jobs)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		RETURNING id, name, prefix, scopes, projects, labels, max_concurrent_jobs, last_used_at, expires_at, created_at`,
+		userID, name, prefix, hash, scopes, expiresAt, textArray(projects), textArray(labels), maxConcurrent).
+		Scan(&t.ID, &t.Name, &t.Prefix, &t.Scopes, &t.Projects, &t.Labels, &t.MaxConcurrentJobs, &t.LastUsedAt, &t.ExpiresAt, &t.CreatedAt)
 	return t, err
 }
 
 func (s *Store) ListAPITokens(ctx context.Context, userID uuid.UUID) ([]APIToken, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, name, prefix, scopes, projects, labels, last_used_at, expires_at, created_at
+		SELECT id, name, prefix, scopes, projects, labels, max_concurrent_jobs, last_used_at, expires_at, created_at
 		FROM api_tokens WHERE user_id = $1 ORDER BY created_at DESC`, userID)
 	if err != nil {
 		return nil, err
@@ -405,7 +408,7 @@ func (s *Store) ListAPITokens(ctx context.Context, userID uuid.UUID) ([]APIToken
 	out := []APIToken{}
 	for rows.Next() {
 		var t APIToken
-		if err := rows.Scan(&t.ID, &t.Name, &t.Prefix, &t.Scopes, &t.Projects, &t.Labels, &t.LastUsedAt, &t.ExpiresAt, &t.CreatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.Name, &t.Prefix, &t.Scopes, &t.Projects, &t.Labels, &t.MaxConcurrentJobs, &t.LastUsedAt, &t.ExpiresAt, &t.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -421,10 +424,11 @@ func (s *Store) DeleteAPIToken(ctx context.Context, userID, id uuid.UUID) error 
 // TokenGrant is what an API token is allowed to do beyond the user's role.
 // Empty Projects or Labels means unrestricted. ID is the token row.
 type TokenGrant struct {
-	ID       uuid.UUID
-	Scopes   []string
-	Projects []string
-	Labels   []string
+	ID            uuid.UUID
+	Scopes        []string
+	Projects      []string
+	Labels        []string
+	MaxConcurrent int
 }
 
 func (s *Store) UserByAPIToken(ctx context.Context, hash string) (User, TokenGrant, error) {
@@ -433,14 +437,14 @@ func (s *Store) UserByAPIToken(ctx context.Context, hash string) (User, TokenGra
 	err := s.pool.QueryRow(ctx, `
 		SELECT t.id, u.id, u.email, u.name, u.password_hash, u.created_at,
 		       COALESCE(m.org_id, '00000000-0000-0000-0000-000000000000'::uuid),
-		       COALESCE(m.role, 'member'), t.scopes, t.projects, t.labels
+		       COALESCE(m.role, 'member'), t.scopes, t.projects, t.labels, t.max_concurrent_jobs
 		FROM api_tokens t
 		JOIN users u ON u.id = t.user_id
 		LEFT JOIN org_members m ON m.user_id = u.id
 		WHERE t.token_hash = $1 AND (t.expires_at IS NULL OR t.expires_at > now())
 		ORDER BY m.created_at
 		LIMIT 1`, hash).
-		Scan(&g.ID, &u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.CreatedAt, &u.OrgID, &u.Role, &g.Scopes, &g.Projects, &g.Labels)
+		Scan(&g.ID, &u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.CreatedAt, &u.OrgID, &u.Role, &g.Scopes, &g.Projects, &g.Labels, &g.MaxConcurrent)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, TokenGrant{}, ErrNotFound
 	}
