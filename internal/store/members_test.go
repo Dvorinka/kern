@@ -54,7 +54,7 @@ func TestMembersLifecycle(t *testing.T) {
 	if err := s.CreateSession(ctx, member.ID, "deadhash", time.Now().Add(time.Hour)); err != nil {
 		t.Fatalf("session: %v", err)
 	}
-	if _, err := s.CreateAPIToken(ctx, member.ID, "t", "p", "deadtokenhash", []string{"read"}, nil); err != nil {
+	if _, err := s.CreateAPIToken(ctx, member.ID, "t", "p", "deadtokenhash", []string{"read"}, nil, nil, nil); err != nil {
 		t.Fatalf("token: %v", err)
 	}
 	if err := s.RemoveMember(ctx, org.ID, member.ID); err != nil {

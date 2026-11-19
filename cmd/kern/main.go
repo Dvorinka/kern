@@ -25,7 +25,7 @@ Auth:
   login                 exchange email+password for an API token and save it
   logout                revoke the saved token and clear local credentials
   whoami                show the authenticated user
-  token list|create|delete       manage API tokens
+  token list|create|delete       manage API tokens (--projects, --labels)
 
 Config:
   config list|get|set|unset      local CLI config (~/.config/kern/config.json)
@@ -69,7 +69,7 @@ Runners:
   runners enroll [--name N] [--ttl MIN]   mint a one-time join token
 
 Artifacts / cache / secrets:
-  artifacts list|download <id> [--out FILE]
+  artifacts list [--run ID] | download|delete <id> [--out FILE]
   cache list|delete <id>
   secrets list|set|delete [--project S] <name>
   vars list|set|delete [--project S] <name> [value]   project config vars (vars context)
@@ -142,14 +142,18 @@ pull_request runs by number; --workflow matches name or path.
 	case "artifacts", "cache":
 		return `kern ` + name + ` — run artifacts / action cache
 
-  ` + name + ` list
+  artifacts list [--run ID]
+  cache list
   artifacts download <id> [--out FILE]
+  artifacts delete <id>
   cache delete <id>
 `
 	case "token":
 		return `kern token — API tokens
 
-  token list|create|delete [id]
+  token list
+  token create --name NAME [--scopes read,write] [--projects SLUG] [--labels LABEL] [--days N]
+  token delete <id>
 `
 	case "config":
 		return `kern config — local CLI config (~/.config/kern/config.json)

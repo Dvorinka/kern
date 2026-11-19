@@ -183,9 +183,9 @@ func (s *Server) buildRouter() *gin.Engine {
 	// write: member write operations; tokens need the write scope.
 	// admin: org admin or owner role AND the admin token scope. Sessions
 	// carry no scopes, so the role check is what constrains the dashboard.
-	auth := api.Group("", s.requireAuth(), s.requireScope("read"))
-	write := api.Group("", s.requireAuth(), s.requireScope("write"))
-	admin := api.Group("", s.requireAuth(), s.requireRole("admin"), s.requireScope("admin"))
+	auth := api.Group("", s.requireAuth(), s.requireScope("read"), s.constrainGrant())
+	write := api.Group("", s.requireAuth(), s.requireScope("write"), s.constrainGrant())
+	admin := api.Group("", s.requireAuth(), s.requireRole("admin"), s.requireScope("admin"), s.constrainGrant())
 	{
 		auth.POST("/auth/logout", s.logout)
 		auth.GET("/auth/me", s.me)

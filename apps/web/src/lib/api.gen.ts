@@ -383,6 +383,12 @@ export interface paths {
                     "application/json": {
                         name: string;
                         scopes?: ("read" | "write" | "admin")[];
+                        /** @description 0 or omitted never expires */
+                        days?: number;
+                        /** @description Project slugs this token may touch. Empty means the whole org. */
+                        projects?: string[];
+                        /** @description Runner labels a dispatched job's runs-on must be a subset of. Empty means any runner. */
+                        labels?: string[];
                     };
                 };
             };
@@ -3742,6 +3748,10 @@ export interface components {
             id?: string;
             name?: string;
             scopes?: string[];
+            /** @description Empty means every project in the org. */
+            projects?: string[];
+            /** @description Empty means dispatch is not limited to a runner pool. */
+            labels?: string[];
             /** Format: date-time */
             created_at?: string;
             /** Format: date-time */

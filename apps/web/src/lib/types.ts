@@ -337,6 +337,8 @@ export interface APIToken {
   name: string;
   prefix: string;
   scopes: string[];
+  projects: string[];
+  labels: string[];
   last_used_at: string | null;
   expires_at: string | null;
   created_at: string;

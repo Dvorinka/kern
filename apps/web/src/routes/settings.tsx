@@ -850,7 +850,7 @@ function TokensCard() {
 	// The plaintext token is returned exactly once — hold it until dismissed.
 	const [minted, setMinted] = useState<string | null>(null);
 	const create = useMutation({
-		mutationFn: (body: { name: string; scopes: string[]; days: number }) =>
+		mutationFn: (body: { name: string; scopes: string[]; days: number; projects: string[]; labels: string[] }) =>
 			api.post<{ token: string; record: APIToken }>("/auth/tokens", body),
 		onSuccess: (res) => {
 			setMinted(res.token);
@@ -867,10 +867,17 @@ function TokensCard() {
 		e.preventDefault();
 		const fd = new FormData(e.currentTarget);
 		const scopes = ["read", "write", "admin"].filter((s) => fd.get(`scope_${s}`));
+		const csv = (name: string) =>
+			String(fd.get(name) ?? "")
+				.split(",")
+				.map((s) => s.trim())
+				.filter(Boolean);
 		create.mutate({
 			name: String(fd.get("name")).trim(),
 			scopes: scopes.length ? scopes : ["read"],
 			days: parseInt(String(fd.get("days")), 10) || 0,
+			projects: csv("projects"),
+			labels: csv("labels"),
 		});
 	};
 
@@ -878,7 +885,7 @@ function TokensCard() {
 		<Card className="mb-4">
 			<CardHeader
 				title="API tokens"
-				sub="Bearer auth for the kern CLI and scripts — shown once at creation"
+				sub="Bearer auth for the kern CLI and scripts. Projects and labels limit a token to one tenant and one runner pool."
 				actions={
 					<Button size="sm" variant="primary" onClick={() => setCreating((c) => !c)}>
 						New token
@@ -924,6 +931,8 @@ function TokensCard() {
 						placeholder="days (0 = never)"
 						className="w-32"
 					/>
+					<Input name="projects" placeholder="projects (comma, empty = all)" className="w-56" />
+					<Input name="labels" placeholder="runner labels (comma)" className="w-52" />
 					<Button type="submit" variant="primary" size="sm" disabled={create.isPending}>
 						Create
 					</Button>
@@ -944,7 +953,11 @@ function TokensCard() {
 					<Row key={t.id}>
 						<span className="min-w-0 flex-1 truncate font-medium">{t.name}</span>
 						<span className="font-mono text-xs text-[var(--faint)]">{t.prefix}…</span>
-						<span className="text-xs text-[var(--dim)]">{t.scopes.join(", ")}</span>
+						<span className="text-xs text-[var(--dim)]">
+							{t.scopes.join(", ")}
+							{t.projects?.length ? ` · ${t.projects.join(" ")}` : ""}
+							{t.labels?.length ? ` · ${t.labels.join(" ")}` : ""}
+						</span>
 						<span className="w-24 text-right text-xs text-[var(--faint)]">
 							{t.expires_at ? `expires ${relTime(t.expires_at)}` : "no expiry"}
 						</span>

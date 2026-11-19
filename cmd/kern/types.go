@@ -22,6 +22,8 @@ type apiToken struct {
 	Name       string     `json:"name"`
 	Prefix     string     `json:"prefix"`
 	Scopes     []string   `json:"scopes"`
+	Projects   []string   `json:"projects"`
+	Labels     []string   `json:"labels"`
 	LastUsedAt *time.Time `json:"last_used_at"`
 	ExpiresAt  *time.Time `json:"expires_at"`
 	CreatedAt  time.Time  `json:"created_at"`
