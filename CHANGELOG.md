@@ -3,6 +3,13 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
+## [Unreleased]
+
+### Added
+- `kern doctor` warns when a runner's version trails the fleet's newest
+  comparable release — a stuck self-update used to surface only as
+  unexplained behavioural drift.
+
 ## [0.16.0] - 2026-11-19
 
 ### Added
