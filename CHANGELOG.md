@@ -6,6 +6,11 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 ## [Unreleased]
 
 ### Fixed
+- Host toolset drift can now clear. `missingToolsReport` returned a
+  pointer to a nil slice once a sweep came back clean, which marshals to
+  JSON `null`; the server reads `null` as "no report" and keeps the
+  stored list, so healed drift stayed recorded forever. Empty reports
+  now serialize as `[]`.
 - Host toolset self-heal now covers macOS executors. The curated `gh`
   and `minisign` install plans only had Linux and Windows branches, so a
   Darwin host reported permanent drift it could never heal (`gh` installs
