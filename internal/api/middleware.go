@@ -31,14 +31,17 @@ func contextWithTimeout(c *gin.Context, d time.Duration) (context.Context, conte
 func (s *Server) requireAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if token := bearer(c); token != "" {
-			user, scopes, err := s.Store.UserByAPIToken(c.Request.Context(), auth.HashToken(token))
+			user, grant, err := s.Store.UserByAPIToken(c.Request.Context(), auth.HashToken(token))
 			if err != nil {
 				fail(c, http.StatusUnauthorized, "invalid_token", "API token is invalid or expired")
 				return
 			}
 			c.Set(ctxUser, user)
 			c.Set(ctxAuthKind, "api_token")
-			c.Set(ctxAPIScopes, scopes)
+			c.Set(ctxAPIScopes, grant.Scopes)
+			c.Set(ctxTokenID, grant.ID)
+			c.Set(ctxTokenProjects, grant.Projects)
+			c.Set(ctxTokenLabels, grant.Labels)
 			c.Next()
 			return
 		}

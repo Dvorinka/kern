@@ -184,6 +184,15 @@ paths:
               properties:
                 name: { type: string }
                 scopes: { type: array, items: { type: string, enum: [read, write, admin] } }
+                days: { type: integer, description: "0 or omitted never expires" }
+                projects:
+                  type: array
+                  items: { type: string }
+                  description: Project slugs this token may touch. Empty means the whole org.
+                labels:
+                  type: array
+                  items: { type: string }
+                  description: Runner labels a dispatched job's runs-on must be a subset of. Empty means any runner.
       responses:
         "201":
           description: Token minted
@@ -1186,6 +1195,14 @@ components:
         id: { type: string, format: uuid }
         name: { type: string }
         scopes: { type: array, items: { type: string } }
+        projects:
+          type: array
+          items: { type: string }
+          description: Empty means every project in the org.
+        labels:
+          type: array
+          items: { type: string }
+          description: Empty means dispatch is not limited to a runner pool.
         created_at: { type: string, format: date-time }
         last_used_at: { type: string, format: date-time, nullable: true }
     Member:

@@ -138,6 +138,15 @@ func (s *Server) runIDParam(c *gin.Context) (uuid.UUID, bool) {
 		s.internalError(c, err)
 		return uuid.Nil, false
 	}
+	// A project grant must not learn that some other project's run shares
+	// the prefix, so ambiguity is decided only on runs this token can see.
+	if projects := tokenProjects(c); len(projects) > 0 {
+		cands, err = s.runsInGrant(c, cands, projects)
+		if err != nil {
+			s.internalError(c, err)
+			return uuid.Nil, false
+		}
+	}
 	switch len(cands) {
 	case 0:
 		fail(c, http.StatusNotFound, "not_found", "run not found")
@@ -152,6 +161,29 @@ func (s *Server) runIDParam(c *gin.Context) (uuid.UUID, bool) {
 			"prefix matches multiple runs: "+strings.Join(ids, ", ")+" — use a longer prefix")
 	}
 	return uuid.Nil, false
+}
+
+// runsInGrant keeps prefix candidates whose project is in the token grant
+// and in the caller's org. A slug match in another org does not count.
+func (s *Server) runsInGrant(c *gin.Context, cands []store.Run, projects []string) ([]store.Run, error) {
+	user, _ := currentUser(c)
+	kept := make([]store.Run, 0, len(cands))
+	for _, r := range cands {
+		if !grantHas(projects, r.ProjectSlug) {
+			continue
+		}
+		p, err := s.Store.ProjectByID(c.Request.Context(), r.ProjectID)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				continue
+			}
+			return nil, err
+		}
+		if p.OrgID == user.OrgID {
+			kept = append(kept, r)
+		}
+	}
+	return kept, nil
 }
 
 func (s *Server) getRun(c *gin.Context) {
@@ -272,6 +304,16 @@ func (s *Server) rerunRun(c *gin.Context) {
 	if err != nil {
 		s.internalError(c, err)
 		return
+	}
+	if len(tokenLabels(c)) > 0 {
+		ver, err := s.Store.WorkflowVersion(c.Request.Context(), orig.WorkflowVersionID)
+		if err != nil {
+			s.internalError(c, err)
+			return
+		}
+		if !s.enforceDispatchLabels(c, ver.Parsed) {
+			return
+		}
 	}
 	// Optional body switches to an in-place rerun of the finished run's jobs
 	// (gh rerun --failed / --job) instead of seeding a fresh run.

@@ -168,23 +168,26 @@ func (c *cli) cmdToken(ctx context.Context, args []string) error {
 			rows := make([][]string, 0, len(out.Tokens))
 			for _, t := range out.Tokens {
 				rows = append(rows, []string{t.ID, t.Name, t.Prefix,
-					strings.Join(t.Scopes, ","), relT(t.CreatedAt), rel(t.ExpiresAt)})
+					strings.Join(t.Scopes, ","), grantCol(t.Projects), grantCol(t.Labels),
+					relT(t.CreatedAt), rel(t.ExpiresAt)})
 			}
-			table([]string{"ID", "NAME", "PREFIX", "SCOPES", "CREATED", "EXPIRES"}, rows)
+			table([]string{"ID", "NAME", "PREFIX", "SCOPES", "PROJECTS", "LABELS", "CREATED", "EXPIRES"}, rows)
 		})
 	case "create":
 		if err := c.requireAuth(); err != nil {
 			return err
 		}
-		opts, _ := parseFlags(args[1:], "name", "scopes", "days")
+		opts, _ := parseFlags(args[1:], "name", "scopes", "days", "projects", "labels")
 		var out struct {
 			Token  string   `json:"token"`
 			Record apiToken `json:"record"`
 		}
 		err := c.api().post(ctx, "/auth/tokens", map[string]any{
-			"name":   opts["name"],
-			"scopes": splitCSV(opts["scopes"]),
-			"days":   atoi(opts["days"]),
+			"name":     opts["name"],
+			"scopes":   splitCSV(opts["scopes"]),
+			"days":     atoi(opts["days"]),
+			"projects": splitCSV(opts["projects"]),
+			"labels":   splitCSV(opts["labels"]),
 		}, &out)
 		if err != nil {
 			return err
@@ -325,6 +328,13 @@ func atoi(s string) int {
 	n := 0
 	fmt.Sscanf(s, "%d", &n)
 	return n
+}
+
+func grantCol(v []string) string {
+	if len(v) == 0 {
+		return "-"
+	}
+	return strings.Join(v, ",")
 }
 
 func splitCSV(s string) []string {

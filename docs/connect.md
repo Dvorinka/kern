@@ -94,3 +94,26 @@ Tools cover the console's read surface plus the run lifecycle:
 Write actions are audited under the token owner's identity. Secrets and raw logs stay masked server-side — the endpoint exposes nothing the console doesn't. Artifacts, cache, environments, deployments, settings, members and audit export remain HTTP-only for now.
 
 Scopes apply: list/get/log/secret tools need `read`, `kern_trigger_run`/`kern_rerun_run`/`kern_cancel_run` need `write`, `kern_approve_run`/`kern_set_runner_drain` need `admin` plus the admin org role — the same gates as the HTTP routes they mirror.
+
+## Shared runner pools and tenant tokens
+
+A runner pool is a label. Enroll the machines that should take that work with it (`kern-runner join --labels pool-a,linux,docker`) and do not put `pool-a` on anyone else's runners. Claim matches `runs-on` as a subset of the runner's labels, and every runner already counts as `self-hosted` and `kern`. A job that asks only for `self-hosted,linux,docker` can still land on a private runner that also carries those labels. Isolation holds when the workflow's `runs-on` includes the pool label and other tenants' runners do not.
+
+Mint one token per tenant:
+
+```sh
+kern token create --name runway-team-a --scopes read,write \
+  --projects team-a --labels pool-a,linux,docker
+```
+
+`projects` limits every read and dispatch to those slugs. Runs, artifacts and steps outside the list look like a missing resource. Secrets, runners, org settings and MCP stay on a session or an unrestricted token. `labels` is checked when a run is dispatched or rerun: each job's `runs-on` must be a subset of the list, and a job with no `runs-on` is refused. Empty `projects` or `labels` means no limit, which is how existing tokens behave.
+
+A scoped token cannot mint a wider one and can revoke only itself, so rotating a tenant does not rotate the instance token.
+
+Noisy-neighbor cap, per project, already shipped: `kern settings set max_concurrent_jobs N --project team-a` (`0` is uncapped).
+
+Artifacts expire 90 days after upload. The sweeper drops the row and the blob. Delete one early with `DELETE /api/v1/artifacts/:id` or `kern artifacts delete <id>`. List them with `GET /api/v1/artifacts?run_id=`.
+
+### Server and image deploys
+
+KERN does not build inside the serve node's Docker daemon. A shared runner that mounted a tenant's socket would be the noisy neighbor this grant exists to prevent. The job builds on the pool and pushes to a registry the serve node can pull. Runway records the tag and the serve node pulls it. Static sites stay on the Level 1 path: the `runway-out` artifact comes back and is served locally.

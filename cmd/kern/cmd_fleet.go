@@ -246,17 +246,21 @@ func (c *cli) runnerInstall(ctx context.Context, args []string) error {
 
 func (c *cli) cmdArtifacts(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: kern artifacts list|download")
+		return fmt.Errorf("usage: kern artifacts list|download|delete")
 	}
 	if err := c.requireAuth(); err != nil {
 		return err
 	}
 	switch args[0] {
 	case "list":
-		opts, _ := parseFlags(args[1:], "limit")
+		opts, _ := parseFlags(args[1:], "limit", "run")
 		q := url.Values{}
 		if v := opts["limit"]; v != "" {
 			q.Set("limit", v)
+		}
+		// A project-scoped token is refused unless it names the run.
+		if v := opts["run"]; v != "" {
+			q.Set("run_id", v)
 		}
 		var out struct {
 			Artifacts []artifact `json:"artifacts"`
@@ -291,6 +295,15 @@ func (c *cli) cmdArtifacts(ctx context.Context, args []string) error {
 			return err
 		}
 		fmt.Println("saved to", name)
+	case "delete":
+		id, err := strarg(args, 1, "artifact id")
+		if err != nil {
+			return err
+		}
+		if err := c.api().del(ctx, "/artifacts/"+id); err != nil {
+			return err
+		}
+		fmt.Println("artifact deleted")
 	default:
 		return fmt.Errorf("unknown artifacts subcommand %q", args[0])
 	}

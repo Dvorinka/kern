@@ -29,7 +29,7 @@ var subCommands = map[string][]string{
 	"config":       {"list", "get", "set", "unset"},
 	"secrets":      {"list", "set", "delete"},
 	"vars":         {"list", "set", "delete"},
-	"artifacts":    {"list", "download"},
+	"artifacts":    {"list", "download", "delete"},
 	"cache":        {"list", "delete"},
 	"environments": {"list", "set", "delete"},
 	"deployments":  {"list", "approve", "reject"},

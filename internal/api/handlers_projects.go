@@ -26,6 +26,15 @@ func (s *Server) listProjects(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
+	if allow := tokenProjects(c); len(allow) > 0 {
+		kept := make([]store.Project, 0, len(projects))
+		for _, p := range projects {
+			if grantHas(allow, p.Slug) {
+				kept = append(kept, p)
+			}
+		}
+		projects = kept
+	}
 	c.JSON(http.StatusOK, gin.H{"projects": projects})
 }
 
@@ -375,6 +384,9 @@ func (s *Server) triggerRun(c *gin.Context) {
 			}
 		}
 	}
+	if !s.enforceDispatchLabels(c, version.Parsed) {
+		return
+	}
 	run, err := s.Orch.StartRun(c.Request.Context(), store.CreateRunParams{
 		ProjectID:         p.ID,
 		WorkflowID:        wf.ID,
@@ -528,6 +540,10 @@ func (s *Server) triggerRunByPath(c *gin.Context) {
 			"error":       gin.H{"code": "invalid_workflow", "message": "workflow does not compile"},
 			"diagnostics": res.Diagnostics,
 		})
+		return
+	}
+	if msg := runsOnDenial(tokenLabels(c), res.Plan.Jobs); msg != "" {
+		fail(c, http.StatusForbidden, "label_denied", msg)
 		return
 	}
 	name := firstNonEmpty(req.WorkflowName, res.Name, filepath.Base(path))

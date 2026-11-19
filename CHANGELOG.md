@@ -5,6 +5,16 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 
 ## [Unreleased]
 
+### Added
+- API tokens take optional `projects` and `labels` grants. A project list
+  limits the token to those slugs (other projects, secrets, runners and
+  MCP return 403; run ids outside the grant look like a 404). A label
+  list is a runner pool: dispatch and rerun refuse a job whose `runs-on`
+  is not a subset of the list. Empty lists stay org-wide. A scoped token
+  cannot mint a wider token or revoke any token but itself.
+  `kern token create --projects S --labels pool-a` and
+  `kern artifacts delete <id>`. (#356)
+
 ### Fixed
 - A runner that loses its job lease (control plane requeued it, or
   renewals fail for longer than the lease window) now kills the local

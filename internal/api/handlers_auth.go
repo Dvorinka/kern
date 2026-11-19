@@ -97,7 +97,7 @@ func (s *Server) cliToken(c *gin.Context) {
 		return
 	}
 	rec, err := s.Store.CreateAPIToken(c.Request.Context(), user.ID, req.Name,
-		auth.TokenPrefix(token), hash, []string{"read", "write", "admin"}, expires)
+		auth.TokenPrefix(token), hash, []string{"read", "write", "admin"}, expires, nil, nil)
 	if err != nil {
 		s.internalError(c, err)
 		return
@@ -214,9 +214,11 @@ func (s *Server) revokeOtherSessions(c *gin.Context) {
 }
 
 type createTokenRequest struct {
-	Name   string   `json:"name"`
-	Scopes []string `json:"scopes"`
-	Days   int      `json:"days"`
+	Name     string   `json:"name"`
+	Scopes   []string `json:"scopes"`
+	Days     int      `json:"days"`
+	Projects []string `json:"projects"`
+	Labels   []string `json:"labels"`
 }
 
 func (s *Server) createToken(c *gin.Context) {
@@ -238,6 +240,31 @@ func (s *Server) createToken(c *gin.Context) {
 			return
 		}
 	}
+	projects, err := cleanGrantList("project", req.Projects, true)
+	if err != nil {
+		fail(c, http.StatusBadRequest, "invalid_grant", err.Error())
+		return
+	}
+	labels, err := cleanGrantList("label", req.Labels, false)
+	if err != nil {
+		fail(c, http.StatusBadRequest, "invalid_grant", err.Error())
+		return
+	}
+	// A scoped token must not mint a wider one. Sessions are unrestricted.
+	if c.GetString(ctxAuthKind) == "api_token" {
+		if !scopeAllows(c, maxScope(scopes)) {
+			fail(c, http.StatusForbidden, "insufficient_scope", "token cannot mint a broader scope than its own")
+			return
+		}
+		if err := narrowList("project", tokenProjects(c), projects); err != nil {
+			fail(c, http.StatusForbidden, "grant_denied", err.Error())
+			return
+		}
+		if err := narrowList("label", tokenLabels(c), labels); err != nil {
+			fail(c, http.StatusForbidden, "grant_denied", err.Error())
+			return
+		}
+	}
 	var expires *time.Time
 	if req.Days > 0 {
 		t := time.Now().Add(time.Duration(req.Days) * 24 * time.Hour)
@@ -248,12 +275,14 @@ func (s *Server) createToken(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
-	rec, err := s.Store.CreateAPIToken(c.Request.Context(), user.ID, req.Name, auth.TokenPrefix(token), hash, scopes, expires)
+	rec, err := s.Store.CreateAPIToken(c.Request.Context(), user.ID, req.Name, auth.TokenPrefix(token), hash, scopes, expires, projects, labels)
 	if err != nil {
 		s.internalError(c, err)
 		return
 	}
-	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "token.create", req.Name)
+	s.Store.AuditMeta(c.Request.Context(), user.OrgID, &user.ID, "token.create", req.Name, map[string]any{
+		"scopes": scopes, "projects": projects, "labels": labels,
+	})
 	c.JSON(http.StatusCreated, gin.H{"token": token, "record": rec})
 }
 
@@ -264,6 +293,17 @@ func (s *Server) listTokens(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
+	// A scoped token only sees itself. Listing the operator's other tokens
+	// would leak their names and prefixes to a tenant.
+	if own, ok := tokenID(c); ok && grantRestricted(c) {
+		kept := tokens[:0]
+		for _, t := range tokens {
+			if t.ID == own {
+				kept = append(kept, t)
+			}
+		}
+		tokens = kept
+	}
 	c.JSON(http.StatusOK, gin.H{"tokens": tokens})
 }
 
@@ -272,6 +312,10 @@ func (s *Server) deleteToken(c *gin.Context) {
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
 		fail(c, http.StatusBadRequest, "invalid_id", "token id must be a uuid")
+		return
+	}
+	if own, ok := tokenID(c); ok && grantRestricted(c) && own != id {
+		fail(c, http.StatusForbidden, "grant_denied", "a scoped token can only revoke itself")
 		return
 	}
 	if err := s.Store.DeleteAPIToken(c.Request.Context(), user.ID, id); err != nil {

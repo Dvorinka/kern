@@ -2,8 +2,10 @@ package store
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 func (s *Store) ProjectByID(ctx context.Context, id uuid.UUID) (Project, error) {
@@ -45,6 +47,9 @@ func (s *Store) StepByID(ctx context.Context, id uuid.UUID) (Step, uuid.UUID, uu
 		Scan(&st.ID, &st.JobID, &st.Number, &st.Key, &st.Name, &st.Status, &st.Conclusion,
 			&st.ExitCode, &st.StartedAt, &st.CompletedAt, &st.Spec, &st.LogRef, &st.LogBytes,
 			&st.Diagnosis, &st.SummaryRef, &runID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Step{}, uuid.Nil, uuid.Nil, ErrNotFound
+	}
 	if err != nil {
 		return Step{}, uuid.Nil, uuid.Nil, err
 	}
