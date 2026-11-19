@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os/exec"
@@ -64,19 +65,40 @@ func (e *executor) startDiskSampler(ctx context.Context) {
 	}()
 }
 
+// duSampleTimeout bounds one disk-budget sample. An unbounded `du -sb` on a
+// multi-gigabyte cargo/gradle tree sits in uninterruptible IO for the rest
+// of the job and is itself a reason the host load gate stays shut.
+const duSampleTimeout = 8 * time.Second
+
+// duFallbackWalk reports whether du's failure should fall through to a
+// WalkDir. A timeout must not: the walk is slower than the du it replaces.
+// A missing du, or du rejecting -sb (darwin), still walks.
+func duFallbackWalk(err error) bool {
+	if err == nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return false
+	}
+	var exit *exec.ExitError
+	return errors.As(err, &exit) || errors.Is(err, exec.ErrNotFound)
+}
+
 // dirSizeBytes totals regular-file bytes under path. `du -sb` is used when
 // available (linux runner hosts); the WalkDir fallback covers darwin du and
 // Windows, where the flag does not exist.
 func dirSizeBytes(path string) (int64, error) {
-	if out, err := exec.Command("du", "-sb", path).Output(); err == nil {
+	ctx, cancel := context.WithTimeout(context.Background(), duSampleTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "du", "-sb", path).Output()
+	if err == nil {
 		if f := strings.Fields(string(out)); len(f) == 2 {
 			if n, perr := strconv.ParseInt(f[0], 10, 64); perr == nil {
 				return n, nil
 			}
 		}
+	} else if !duFallbackWalk(err) {
+		return 0, err
 	}
 	var total int64
-	err := filepath.WalkDir(path, func(_ string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(path, func(_ string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}

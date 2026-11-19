@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -128,6 +129,7 @@ func (a *Agent) diskGCLoop(ctx context.Context) {
 	a.sweepBoundedCache()
 	a.sweepToolcacheIncomplete()
 	a.sweepOrphanServices(ctx)
+	a.sweepStaleWorkspaceContainers(ctx)
 	a.sweepWorkspaceLinks()
 	a.pruneDangling(ctx)
 	a.maybePruneDisk(ctx)
@@ -142,10 +144,83 @@ func (a *Agent) diskGCLoop(ctx context.Context) {
 			a.sweepBoundedCache()
 			a.sweepToolcacheIncomplete()
 			a.sweepOrphanServices(ctx)
+			a.sweepStaleWorkspaceContainers(ctx)
 			a.sweepWorkspaceLinks()
 			a.pruneDangling(ctx)
 			a.maybePruneDisk(ctx)
 		}
+	}
+}
+
+// workspaceRef finds a job id stamped into a container label by a step that
+// started its own compose stack. Those containers are not named kern-*, so
+// the kern-job sweep never sees them, and a runner that dies mid-job never
+// comes back to reap them.
+var workspaceRef = regexp.MustCompile(`/github/workspaces/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})`)
+
+func workspaceIDsFromLabels(labels string) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	for _, m := range workspaceRef.FindAllStringSubmatch(labels, -1) {
+		id := strings.ToLower(m[1])
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+// staleWorkspaceContainer is true when every job id named in the labels is
+// gone. A label that names a live job keeps the container.
+func staleWorkspaceContainer(labels string, live func(id string) bool) bool {
+	ids := workspaceIDsFromLabels(labels)
+	if len(ids) == 0 {
+		return false
+	}
+	for _, id := range ids {
+		if live(id) {
+			return false
+		}
+	}
+	return true
+}
+
+// sweepStaleWorkspaceContainers removes compose stacks a job started and
+// then abandoned. Live means the job is executing here or its work dir is
+// still on disk.
+func (a *Agent) sweepStaleWorkspaceContainers(ctx context.Context) {
+	out, err := exec.CommandContext(ctx, "docker", "ps", "-a", "--format", "{{.ID}}\t{{.Names}}\t{{.Labels}}").Output()
+	if err != nil {
+		return
+	}
+	live := func(id string) bool {
+		if a.jobActive(id) {
+			return true
+		}
+		if dirExists(filepath.Join("/github/workspaces", id)) {
+			return true
+		}
+		return a.cfg.WorkRoot != "" && dirExists(filepath.Join(a.cfg.WorkRoot, id))
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		id, rest, ok := strings.Cut(line, "\t")
+		if !ok {
+			continue
+		}
+		name, labels, ok := strings.Cut(rest, "\t")
+		if !ok || id == "" || !staleWorkspaceContainer(labels, live) {
+			continue
+		}
+		rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		err := exec.CommandContext(rctx, "docker", "rm", "-f", id).Run()
+		cancel()
+		if err != nil {
+			a.log.Debug("workspace sweep: rm failed", zap.String("name", name), zap.Error(err))
+			continue
+		}
+		a.log.Info("workspace sweep: removed stale container", zap.String("name", name))
 	}
 }
 

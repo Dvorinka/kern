@@ -3,6 +3,18 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
+## [Unreleased]
+
+### Fixed
+- A runner that loses its job lease (control plane requeued it, or
+  renewals fail for longer than the lease window) now kills the local
+  job instead of leaving the container to write. Disk-budget samples
+  give `du` eight seconds and do not fall through to a full tree walk
+  on timeout. `docker stats` samples use the same bound.
+- The disk sweep removes containers a job started whose labels still
+  name a `/github/workspaces/<job>` that is gone. Compose test stacks
+  are not named `kern-*`, so the old sweep left them running.
+
 ## [0.15.1] - 2026-11-17
 
 ### Fixed

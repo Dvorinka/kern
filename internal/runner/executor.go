@@ -12,7 +12,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -1058,10 +1060,35 @@ func cloneArgs(run ClaimRun, ws string) []string {
 	return append(args, "clone", "--quiet", "--depth", "1", "--", run.RepoURL, ws)
 }
 
+// leaseRenewGiveUp is how many consecutive renewal failures abort a local
+// job. Renewals are 20s apart and the server lease is 90s, so five misses
+// means the control plane has already requeued the job. Keeping the
+// container after that is how a reaped release keeps writing and pins the
+// host load gate shut.
+const leaseRenewGiveUp = 5
+
+// leaseRenewAbort decides whether the local job must die. A 404/409 means
+// this runner no longer holds the lease (reaped, requeued, or finished) —
+// the container is an orphan and has to stop now. Other errors, including
+// a control plane that is briefly unreachable, accumulate and abort only
+// past leaseRenewGiveUp. A successful renewal clears the streak.
+func leaseRenewAbort(err error, cancelled bool, failures int) (abort bool, next int) {
+	if err == nil {
+		return cancelled, 0
+	}
+	var api *APIError
+	if errors.As(err, &api) && (api.Status == http.StatusNotFound || api.Status == http.StatusConflict) {
+		return true, 0
+	}
+	next = failures + 1
+	return next >= leaseRenewGiveUp, next
+}
+
 // leaseHeartbeat renews the job lease while the job runs.
 func (e *executor) leaseHeartbeat() {
 	t := time.NewTicker(20 * time.Second)
 	defer t.Stop()
+	failures := 0
 	for {
 		select {
 		case <-e.stop:
@@ -1070,13 +1097,18 @@ func (e *executor) leaseHeartbeat() {
 			hctx, hcancel := context.WithTimeout(context.Background(), 10*time.Second)
 			cancelled, err := e.c.renew(hctx, e.jobID)
 			hcancel()
-			if err != nil {
-				e.log.Warn("lease renewal failed", zap.String("job_id", e.jobID), zap.Error(err))
-				continue
-			}
-			if cancelled {
+			// Assign, don't := — a new name here would shadow the streak.
+			var abort bool
+			abort, failures = leaseRenewAbort(err, cancelled, failures)
+			if abort {
+				if err != nil {
+					e.log.Warn("lease lost; aborting local job", zap.String("job_id", e.jobID), zap.Error(err))
+				}
 				e.markCancelled()
 				return
+			}
+			if err != nil {
+				e.log.Warn("lease renewal failed", zap.String("job_id", e.jobID), zap.Error(err))
 			}
 		}
 	}
