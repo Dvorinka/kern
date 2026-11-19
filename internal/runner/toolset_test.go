@@ -90,6 +90,16 @@ func TestToolsetHealDue(t *testing.T) {
 	}
 }
 
+// Darwin plans must exist — macOS host executors otherwise report
+// permanent unhealable drift for every curated tool.
+func TestDarwinPlansExist(t *testing.T) {
+	for name, plan := range map[string]string{"gh": ghInstall, "minisign": minisignInstall} {
+		if !strings.Contains(plan, "Darwin)") {
+			t.Fatalf("%s: no Darwin branch in install plan", name)
+		}
+	}
+}
+
 // Windows plans must cover both arches — a regression that drops the
 // arm64 branch leaves Windows-on-ARM runners unable to self-heal.
 func TestWindowsPlansCoverARM(t *testing.T) {

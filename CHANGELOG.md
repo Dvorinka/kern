@@ -3,6 +3,16 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
+## [Unreleased]
+
+### Fixed
+- Host toolset self-heal now covers macOS executors. The curated `gh`
+  and `minisign` install plans only had Linux and Windows branches, so a
+  Darwin host reported permanent drift it could never heal (`gh` installs
+  from the pinned macOS zip for amd64/arm64 into a writable PATH dir;
+  `minisign` has no pinned Intel macOS binary upstream, so it installs
+  via Homebrew when present and reports the gap otherwise).
+
 ## [0.16.0] - 2026-11-19
 
 ### Added

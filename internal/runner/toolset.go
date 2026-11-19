@@ -62,6 +62,15 @@ const ghInstall = `os=$(uname -s) && case "$os" in ` +
 	` && curl -fsSL "https://github.com/cli/cli/releases/download/v2.104.0/gh_2.104.0_windows_$a.zip" -o "$tmp/gh.zip"` +
 	` && echo "$s  $tmp/gh.zip" | sha256sum -c - && unzip -o "$tmp/gh.zip" -d "$tmp"` +
 	` && install -m0755 "$tmp/bin/gh.exe" "$dest/gh.exe" && rm -rf "$tmp" && "$dest/gh.exe" version;; ` +
+	`Darwin) arch=$(uname -m) && case "$arch" in ` +
+	`arm64) a=arm64; s=23b12706219b9892e44236f988444a24adcf29284e16b35e03ba5b863fb6eb8e;; ` +
+	`x86_64) a=amd64; s=a8c2a708dbae89dc7c05ba7b0beafc95bd8d09ab4a3505467b77d32ebf364dc6;; ` +
+	`*) echo "unsupported arch $arch" >&2; exit 1;; esac` +
+	` && dest=/usr/local/bin && { [ -w "$dest" ] || dest=/opt/homebrew/bin; } && [ -w "$dest" ] || { echo "no writable PATH dir for tool install" >&2; exit 1; }` +
+	` && case ":$PATH:" in *":$dest:"*) ;; *) echo "$dest not on PATH" >&2; exit 1;; esac` +
+	` && tmp=$(mktemp -d) && curl -fsSL "https://github.com/cli/cli/releases/download/v2.104.0/gh_2.104.0_macOS_$a.zip" -o "$tmp/gh.zip"` +
+	` && echo "$s  $tmp/gh.zip" | shasum -a 256 -c - && unzip -o "$tmp/gh.zip" -d "$tmp"` +
+	` && install -m0755 "$tmp"/gh_*/bin/gh "$dest/gh" && rm -rf "$tmp" && "$dest/gh" version;; ` +
 	`*) echo "unsupported os $os" >&2; exit 1;; esac`
 
 const minisignInstall = `os=$(uname -s) && case "$os" in ` +
@@ -75,6 +84,10 @@ const minisignInstall = `os=$(uname -s) && case "$os" in ` +
 	` && curl -fsSL "https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-win64.zip" -o "$tmp/m.zip"` +
 	` && echo "37b600344e20c19314b2e82813db2bfdcc408b77b876f7727889dbd46d539479  $tmp/m.zip" | sha256sum -c -` +
 	` && unzip -o "$tmp/m.zip" -d "$tmp" && install -m0755 "$tmp/minisign-win64/$a/minisign.exe" "$dest/minisign.exe" && rm -rf "$tmp" && "$dest/minisign.exe" -v;; ` +
+	// Upstream ships no checksum-pinned Intel macOS binary (macos.zip is
+	// arm64-only); Homebrew's formula carries its own pinned sha256.
+	`Darwin) if command -v brew >/dev/null 2>&1; then brew install minisign && minisign -v;` +
+	` else echo "no minisign plan for macOS without Homebrew" >&2; exit 1; fi;; ` +
 	`*) echo "unsupported os $os" >&2; exit 1;; esac`
 
 var toolInstalls = map[string]toolPlan{
