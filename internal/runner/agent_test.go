@@ -34,6 +34,30 @@ func TestMemClaimPaused(t *testing.T) {
 	}
 }
 
+func TestOverLoadedPSIGate(t *testing.T) {
+	defer func(p func() (float64, bool), l func() (float64, bool), c func() int) {
+		cgroupPressureFn, loadAvg1Fn, cpusVisibleFn = p, l, c
+	}(cgroupPressureFn, loadAvg1Fn, cpusVisibleFn)
+	loadAvg1Fn = func() (float64, bool) { return 999, true }
+	cpusVisibleFn = func() int { return 1 }
+	a := &Agent{cfg: Config{PsiGate: 25, MaxLoadPerCPU: 2}, log: zap.NewNop()}
+
+	// PSI readable replaces loadavg: huge host load, quiet container, no pause.
+	cgroupPressureFn = func() (float64, bool) { return 5, true }
+	if a.overLoaded() {
+		t.Fatal("psi 5 under gate 25 should not pause despite saturated loadavg")
+	}
+	cgroupPressureFn = func() (float64, bool) { return 40, true }
+	if !a.overLoaded() {
+		t.Fatal("psi 40 over gate 25 should pause")
+	}
+	// PSI unreadable falls back to the loadavg gate.
+	cgroupPressureFn = func() (float64, bool) { return 0, false }
+	if !a.overLoaded() {
+		t.Fatal("psi unavailable should fall back to loadavg gate")
+	}
+}
+
 func TestOverLoadedUsesVisibleCPUs(t *testing.T) {
 	defer func(l func() (float64, bool), c func() int) {
 		loadAvg1Fn, cpusVisibleFn = l, c

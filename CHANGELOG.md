@@ -3,6 +3,17 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
+## [Unreleased]
+
+### Added
+- `KERN_RUNNER_PSI_GATE` — optional cgroup-v2 PSI overload gate for Linux
+  runners. When set, claiming pauses while the worst PSI `some avg10`
+  across cpu/memory/io exceeds the threshold, replacing the loadavg gate.
+  PSI is hierarchical per-cgroup, so an LXC runner measures its own
+  container instead of the hypervisor host's loadavg — a saturated
+  neighbour no longer pauses healthy runners fleet-wide. Unreadable PSI
+  falls back to the loadavg gate; `0` keeps existing behaviour.
+
 ## [0.16.0] - 2026-11-19
 
 ### Added

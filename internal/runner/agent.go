@@ -34,6 +34,14 @@ type Config struct {
 	// MaxLoadPerCPU pauses claiming while loadavg1 exceeds this multiple of
 	// the host's CPU count (KERN_RUNNER_LOAD_GATE). Zero disables the gate.
 	MaxLoadPerCPU float64
+	// PsiGate, when >0, replaces the loadavg overload gate on Linux cgroup
+	// v2: claiming pauses while the worst PSI "some avg10" across
+	// cpu/memory/io exceeds this percent (KERN_RUNNER_PSI_GATE). PSI is
+	// hierarchical per-cgroup, so an LXC runner measures its own container
+	// instead of the hypervisor host's loadavg — a neighbour's meltdown no
+	// longer pauses healthy runners. Unreadable PSI falls back to the
+	// loadavg gate. Zero keeps the loadavg gate.
+	PsiGate float64
 	// ImageMaxAge is how long a pulled job image may sit unused before the
 	// GC removes it (KERN_RUNNER_IMAGE_MAX_AGE). Zero disables collection.
 	ImageMaxAge time.Duration
@@ -750,15 +758,34 @@ func jobErrorHint(msg, workRoot string) string {
 
 // loadAvg1Fn and cpusVisibleFn stub the host probes in tests.
 var (
-	loadAvg1Fn    = loadAvg1
-	cpusVisibleFn = cpusVisible
+	loadAvg1Fn       = loadAvg1
+	cpusVisibleFn    = cpusVisible
+	cgroupPressureFn = cgroupPressure
 )
 
 // overLoaded reports whether the claim gate is engaged: loadavg1 above
 // MaxLoadPerCPU per CPU means the host is saturated and new work would only
 // slow the jobs already running. The CPU count comes from /proc/cpuinfo —
 // the same kernel that publishes loadavg — not the container's cpuset.
+// With PsiGate >0 and readable cgroup v2 PSI files the probe switches to
+// per-cgroup pressure instead: loadavg is host-wide inside an LXC, so a
+// saturated neighbour used to pause every runner on the hypervisor.
 func (a *Agent) overLoaded() bool {
+	if a.cfg.PsiGate > 0 {
+		if psi, ok := cgroupPressureFn(); ok {
+			if psi <= a.cfg.PsiGate {
+				if a.loadPaused.CompareAndSwap(true, false) {
+					a.log.Info("psi pressure cleared: resuming claims")
+				}
+				return false
+			}
+			if a.loadPaused.CompareAndSwap(false, true) {
+				a.log.Warn("psi pressure: pausing claims",
+					zap.Float64("pressure_avg10", psi), zap.Float64("gate", a.cfg.PsiGate))
+			}
+			return true
+		}
+	}
 	if a.cfg.MaxLoadPerCPU <= 0 {
 		return false
 	}
