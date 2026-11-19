@@ -844,6 +844,10 @@ func looksTransientError(msg string) bool {
 		"port is already allocated", "address already in use",
 		"driver failed programming external connectivity",
 		"failed to set up container networking", "signal: killed", "oomkilled",
+		// Git transport deaths during checkout/clone — smart-http RPC
+		// resets, DNS blips, peer disconnects. Auth failures say
+		// "Authentication failed"/"403", never these.
+		"rpc failed", "could not resolve host", "remote end hung up",
 	} {
 		if strings.Contains(m, sig) {
 			return true

@@ -3,6 +3,14 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
+## [Unreleased]
+
+### Fixed
+- Prepare-phase git clone/fetch transport deaths (`RPC failed`,
+  `Could not resolve host`, `remote end hung up`) now classify as
+  transient and auto-requeue under `max_transient_retries` instead of
+  failing the job outright. Auth failures still classify `prepare`.
+
 ## [0.16.0] - 2026-11-19
 
 ### Added
