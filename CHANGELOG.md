@@ -3,6 +3,16 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
+## [Unreleased]
+
+### Fixed
+- `npm config get cache` no longer fails inside jobs on host executors.
+  npm redacts UUID-looking values and refuses to print them; the per-job
+  work root is a UUID, so a HOME-derived cache path made
+  `actions/setup-node`'s `cache: npm` lookup exit 1 (seen on the macOS
+  runner). `npm_config_cache` now points at the shared uuid-free
+  `_cache/npm` dir, which also warms the npm cache across jobs.
+
 ## [0.16.0] - 2026-11-19
 
 ### Added
