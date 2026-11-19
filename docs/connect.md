@@ -103,16 +103,19 @@ Mint one token per tenant:
 
 ```sh
 kern token create --name runway-team-a --scopes read,write \
-  --projects team-a --labels pool-a,linux,docker
+  --projects team-a --labels pool-a,linux,docker \
+  --concurrency 4
 ```
 
 `projects` limits every read and dispatch to those slugs. Runs, artifacts and steps outside the list look like a missing resource. Secrets, runners, org settings and MCP stay on a session or an unrestricted token. `labels` is checked when a run is dispatched or rerun: each job's `runs-on` must be a subset of the list, and a job with no `runs-on` is refused. Empty `projects` or `labels` means no limit, which is how existing tokens behave.
 
-A scoped token cannot mint a wider one and can revoke only itself, so rotating a tenant does not rotate the instance token.
+A scoped token cannot mint a wider one and can revoke only itself, so rotating a tenant does not rotate the instance token. A capped token likewise cannot mint a higher or unlimited cap.
 
-Noisy-neighbor cap, per project, already shipped: `kern settings set max_concurrent_jobs N --project team-a` (`0` is uncapped).
+`--concurrency` caps the in-progress jobs a token's dispatches may hold across the whole fleet. Runs record the dispatching token, and the claim query skips a capped token's queued jobs once its in-progress count reaches the cap — one tenant's burst queues behind itself instead of starving the pool. `0` (the default) is uncapped, and runs from sessions, webhooks and cron are never token-capped.
 
-Artifacts expire 90 days after upload. The sweeper drops the row and the blob. Delete one early with `DELETE /api/v1/artifacts/:id` or `kern artifacts delete <id>`. List them with `GET /api/v1/artifacts?run_id=`.
+The project-level cap composes with it: `kern settings set max_concurrent_jobs N --project team-a` (`0` is uncapped). A job is claimable only while both its project and its dispatch token are under budget.
+
+Artifacts expire 90 days after upload by default; `actions/upload-artifact` accepts `retention-days` (clamped to 1–365) to shorten or extend that per artifact. The sweeper drops the row and the blob. Delete one early with `DELETE /api/v1/artifacts/:id` or `kern artifacts delete <id>`. List them with `GET /api/v1/artifacts?run_id=`.
 
 ### Server and image deploys
 

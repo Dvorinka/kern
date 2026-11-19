@@ -14,6 +14,18 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
   cannot mint a wider token or revoke any token but itself.
   `kern token create --projects S --labels pool-a` and
   `kern artifacts delete <id>`. (#356)
+- Per-token job concurrency caps for shared-pool tenants.
+  `kern token create --concurrency N` (or `max_concurrent` on
+  `POST /auth/tokens`) limits how many in-progress jobs that token's
+  dispatches may hold fleet-wide; the claim query queues the excess
+  behind the token's own running work instead of letting one tenant
+  flood the pool. `0` stays uncapped, sessions/webhooks/cron are never
+  token-capped, and a capped token cannot mint a higher or unlimited
+  cap. Runs record their dispatching token in
+  `workflow_runs.dispatch_token_id`. (#356)
+- `actions/upload-artifact` honours `retention-days` (clamped to
+  1–365, default 90), forwarded as `?retention_days=` on the upload.
+  Re-uploading an existing name refreshes its expiry. (#356)
 
 ### Fixed
 - A runner that loses its job lease (control plane requeued it, or

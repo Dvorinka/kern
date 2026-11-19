@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"golang.org/x/term"
@@ -167,27 +168,32 @@ func (c *cli) cmdToken(ctx context.Context, args []string) error {
 		c.orJSON(out.Tokens, func() {
 			rows := make([][]string, 0, len(out.Tokens))
 			for _, t := range out.Tokens {
+				capCol := "—"
+				if t.MaxConcurrentJobs > 0 {
+					capCol = strconv.Itoa(t.MaxConcurrentJobs)
+				}
 				rows = append(rows, []string{t.ID, t.Name, t.Prefix,
-					strings.Join(t.Scopes, ","), grantCol(t.Projects), grantCol(t.Labels),
+					strings.Join(t.Scopes, ","), grantCol(t.Projects), grantCol(t.Labels), capCol,
 					relT(t.CreatedAt), rel(t.ExpiresAt)})
 			}
-			table([]string{"ID", "NAME", "PREFIX", "SCOPES", "PROJECTS", "LABELS", "CREATED", "EXPIRES"}, rows)
+			table([]string{"ID", "NAME", "PREFIX", "SCOPES", "PROJECTS", "LABELS", "CAP", "CREATED", "EXPIRES"}, rows)
 		})
 	case "create":
 		if err := c.requireAuth(); err != nil {
 			return err
 		}
-		opts, _ := parseFlags(args[1:], "name", "scopes", "days", "projects", "labels")
+		opts, _ := parseFlags(args[1:], "name", "scopes", "days", "projects", "labels", "concurrency")
 		var out struct {
 			Token  string   `json:"token"`
 			Record apiToken `json:"record"`
 		}
 		err := c.api().post(ctx, "/auth/tokens", map[string]any{
-			"name":     opts["name"],
-			"scopes":   splitCSV(opts["scopes"]),
-			"days":     atoi(opts["days"]),
-			"projects": splitCSV(opts["projects"]),
-			"labels":   splitCSV(opts["labels"]),
+			"name":           opts["name"],
+			"scopes":         splitCSV(opts["scopes"]),
+			"days":           atoi(opts["days"]),
+			"projects":       splitCSV(opts["projects"]),
+			"labels":         splitCSV(opts["labels"]),
+			"max_concurrent": atoi(opts["concurrency"]),
 		}, &out)
 		if err != nil {
 			return err

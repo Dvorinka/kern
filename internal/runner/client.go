@@ -376,14 +376,17 @@ func (c *client) cancelCheck(ctx context.Context, jobID string) (bool, error) {
 	return out.Cancelled, nil
 }
 
-func (c *client) uploadArtifact(ctx context.Context, jobID, name, path string) error {
+func (c *client) uploadArtifact(ctx context.Context, jobID, name, path string, retentionDays int) error {
 	fh, err := os.Open(path)
 	if err != nil {
 		return err
 	}
 	defer fh.Close()
-	return c.do(ctx, http.MethodPut,
-		"/api/v1/runners/jobs/"+url.PathEscape(jobID)+"/artifacts/"+url.PathEscape(name), fh2bytes(fh), nil)
+	u := "/api/v1/runners/jobs/" + url.PathEscape(jobID) + "/artifacts/" + url.PathEscape(name)
+	if retentionDays > 0 {
+		u += "?retention_days=" + strconv.Itoa(retentionDays)
+	}
+	return c.do(ctx, http.MethodPut, u, fh2bytes(fh), nil)
 }
 
 func (c *client) downloadArtifact(ctx context.Context, jobID, name, path string) error {

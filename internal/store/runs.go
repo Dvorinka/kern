@@ -89,6 +89,10 @@ type CreateRunParams struct {
 	// a fresh registration pins just the new runner).
 	EachRunner  bool
 	RunnerNames []string
+	// DispatchTokenID records the API token that started the run so the
+	// claim query can enforce the token's max_concurrent_jobs. Zero when
+	// the run came from a session, webhook or cron.
+	DispatchTokenID uuid.UUID
 }
 
 // releaseClassRun reports whether a run is release-class: a tag push or a
@@ -144,14 +148,16 @@ func (s *Store) createRunOnce(ctx context.Context, p CreateRunParams, jobs []Job
 	err = tx.QueryRow(ctx, `
 		INSERT INTO workflow_runs
 			(project_id, workflow_id, workflow_version_id, run_number, event, ref, sha,
-			 commit_message, actor, trust_level, source, concurrency_group, cancel_in_progress, status)
+			 commit_message, actor, trust_level, source, concurrency_group, cancel_in_progress, status,
+			 dispatch_token_id)
 		VALUES ($1, $2, $3,
 		        (SELECT COALESCE(MAX(run_number), 0) + 1 FROM workflow_runs WHERE workflow_id = $2),
-		        $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		        $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+		        NULLIF($14, '00000000-0000-0000-0000-000000000000'::uuid))
 		RETURNING id`,
 		p.ProjectID, p.WorkflowID, p.WorkflowVersionID, p.Event, p.Ref, p.SHA,
 		p.CommitMessage, p.Actor, p.TrustLevel, source, p.ConcurrencyGroup, p.CancelInProgress,
-		status).Scan(&id)
+		status, p.DispatchTokenID).Scan(&id)
 	if err != nil {
 		return Run{}, err
 	}

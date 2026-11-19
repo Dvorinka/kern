@@ -850,7 +850,7 @@ function TokensCard() {
 	// The plaintext token is returned exactly once — hold it until dismissed.
 	const [minted, setMinted] = useState<string | null>(null);
 	const create = useMutation({
-		mutationFn: (body: { name: string; scopes: string[]; days: number; projects: string[]; labels: string[] }) =>
+		mutationFn: (body: { name: string; scopes: string[]; days: number; projects: string[]; labels: string[]; max_concurrent: number }) =>
 			api.post<{ token: string; record: APIToken }>("/auth/tokens", body),
 		onSuccess: (res) => {
 			setMinted(res.token);
@@ -878,6 +878,7 @@ function TokensCard() {
 			days: parseInt(String(fd.get("days")), 10) || 0,
 			projects: csv("projects"),
 			labels: csv("labels"),
+			max_concurrent: parseInt(String(fd.get("concurrency")), 10) || 0,
 		});
 	};
 
@@ -933,6 +934,14 @@ function TokensCard() {
 					/>
 					<Input name="projects" placeholder="projects (comma, empty = all)" className="w-56" />
 					<Input name="labels" placeholder="runner labels (comma)" className="w-52" />
+					<Input
+						name="concurrency"
+						type="number"
+						min={0}
+						max={128}
+						placeholder="job cap (0 = ∞)"
+						className="w-32"
+					/>
 					<Button type="submit" variant="primary" size="sm" disabled={create.isPending}>
 						Create
 					</Button>
@@ -957,6 +966,7 @@ function TokensCard() {
 							{t.scopes.join(", ")}
 							{t.projects?.length ? ` · ${t.projects.join(" ")}` : ""}
 							{t.labels?.length ? ` · ${t.labels.join(" ")}` : ""}
+							{t.max_concurrent_jobs ? ` · cap ${t.max_concurrent_jobs}` : ""}
 						</span>
 						<span className="w-24 text-right text-xs text-[var(--faint)]">
 							{t.expires_at ? `expires ${relTime(t.expires_at)}` : "no expiry"}

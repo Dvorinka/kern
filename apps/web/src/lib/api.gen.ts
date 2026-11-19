@@ -389,6 +389,8 @@ export interface paths {
                         projects?: string[];
                         /** @description Runner labels a dispatched job's runs-on must be a subset of. Empty means any runner. */
                         labels?: string[];
+                        /** @description In-progress job cap for runs this token dispatches. 0 or omitted means uncapped. A capped token cannot mint a higher or unlimited cap. */
+                        max_concurrent?: number;
                     };
                 };
             };
@@ -3598,7 +3600,10 @@ export interface paths {
         /** Upload an artifact (tar.gz); subject to project artifact_quota_mb */
         put: {
             parameters: {
-                query?: never;
+                query?: {
+                    /** @description Days until the artifact expires. Omitted or invalid falls back to the 90-day default; values are clamped to 1–365. */
+                    retention_days?: number;
+                };
                 header?: never;
                 path: {
                     jobID: string;
@@ -3752,6 +3757,8 @@ export interface components {
             projects?: string[];
             /** @description Empty means dispatch is not limited to a runner pool. */
             labels?: string[];
+            /** @description In-progress job cap for runs this token dispatches. 0 means uncapped. */
+            max_concurrent_jobs?: number;
             /** Format: date-time */
             created_at?: string;
             /** Format: date-time */

@@ -97,7 +97,7 @@ func (s *Server) cliToken(c *gin.Context) {
 		return
 	}
 	rec, err := s.Store.CreateAPIToken(c.Request.Context(), user.ID, req.Name,
-		auth.TokenPrefix(token), hash, []string{"read", "write", "admin"}, expires, nil, nil)
+		auth.TokenPrefix(token), hash, []string{"read", "write", "admin"}, expires, nil, nil, 0)
 	if err != nil {
 		s.internalError(c, err)
 		return
@@ -214,11 +214,12 @@ func (s *Server) revokeOtherSessions(c *gin.Context) {
 }
 
 type createTokenRequest struct {
-	Name     string   `json:"name"`
-	Scopes   []string `json:"scopes"`
-	Days     int      `json:"days"`
-	Projects []string `json:"projects"`
-	Labels   []string `json:"labels"`
+	Name          string   `json:"name"`
+	Scopes        []string `json:"scopes"`
+	Days          int      `json:"days"`
+	Projects      []string `json:"projects"`
+	Labels        []string `json:"labels"`
+	MaxConcurrent int      `json:"max_concurrent"`
 }
 
 func (s *Server) createToken(c *gin.Context) {
@@ -250,6 +251,10 @@ func (s *Server) createToken(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_grant", err.Error())
 		return
 	}
+	if req.MaxConcurrent < 0 || req.MaxConcurrent > 128 {
+		fail(c, http.StatusBadRequest, "invalid_grant", "max_concurrent must be between 0 and 128")
+		return
+	}
 	// A scoped token must not mint a wider one. Sessions are unrestricted.
 	if c.GetString(ctxAuthKind) == "api_token" {
 		if !scopeAllows(c, maxScope(scopes)) {
@@ -264,6 +269,11 @@ func (s *Server) createToken(c *gin.Context) {
 			fail(c, http.StatusForbidden, "grant_denied", err.Error())
 			return
 		}
+		// A capped token cannot mint an uncapped or more generous one.
+		if own := tokenCap(c); own > 0 && (req.MaxConcurrent == 0 || req.MaxConcurrent > own) {
+			fail(c, http.StatusForbidden, "grant_denied", "a capped token cannot mint a higher or unlimited job cap")
+			return
+		}
 	}
 	var expires *time.Time
 	if req.Days > 0 {
@@ -275,13 +285,13 @@ func (s *Server) createToken(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
-	rec, err := s.Store.CreateAPIToken(c.Request.Context(), user.ID, req.Name, auth.TokenPrefix(token), hash, scopes, expires, projects, labels)
+	rec, err := s.Store.CreateAPIToken(c.Request.Context(), user.ID, req.Name, auth.TokenPrefix(token), hash, scopes, expires, projects, labels, req.MaxConcurrent)
 	if err != nil {
 		s.internalError(c, err)
 		return
 	}
 	s.Store.AuditMeta(c.Request.Context(), user.OrgID, &user.ID, "token.create", req.Name, map[string]any{
-		"scopes": scopes, "projects": projects, "labels": labels,
+		"scopes": scopes, "projects": projects, "labels": labels, "max_concurrent": req.MaxConcurrent,
 	})
 	c.JSON(http.StatusCreated, gin.H{"token": token, "record": rec})
 }

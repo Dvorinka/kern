@@ -24,27 +24,16 @@ type Artifact struct {
 	ProjectSlug string `json:"project_slug"`
 }
 
-func (s *Store) CreateArtifact(ctx context.Context, runID, jobID uuid.UUID, name, blobRef string, size int64, sha256 string) (Artifact, error) {
-	var a Artifact
-	err := s.pool.QueryRow(ctx, `
-		INSERT INTO artifacts (run_id, job_id, name, blob_ref, size_bytes, sha256, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, now() + interval '90 days')
-		ON CONFLICT (run_id, name) DO UPDATE SET
-			job_id = EXCLUDED.job_id, blob_ref = EXCLUDED.blob_ref,
-			size_bytes = EXCLUDED.size_bytes, sha256 = EXCLUDED.sha256
-		RETURNING id, run_id, job_id, name, size_bytes, sha256, blob_ref, created_at, expires_at`,
-		runID, jobID, name, blobRef, size, sha256).
-		Scan(&a.ID, &a.RunID, &a.JobID, &a.Name, &a.SizeBytes, &a.SHA256, &a.BlobRef, &a.CreatedAt, &a.ExpiresAt)
-	return a, err
-}
-
 // CreateArtifactIfQuota inserts an artifact only when the project's live
 // artifact bytes stay within quotaBytes (<= 0 = unlimited), replacing any
 // same-name artifact's bytes in the total. The project row is locked FOR
 // UPDATE for the transaction so concurrent uploads serialize: a second
 // uploader blocks until the first commits, then reads totals that already
 // include it — closing the check-then-insert race a plain read could not.
-func (s *Store) CreateArtifactIfQuota(ctx context.Context, runID, jobID uuid.UUID, name, blobRef string, size int64, sha256 string, quotaBytes int64) (Artifact, error) {
+func (s *Store) CreateArtifactIfQuota(ctx context.Context, runID, jobID uuid.UUID, name, blobRef string, size int64, sha256 string, quotaBytes int64, retentionDays int) (Artifact, error) {
+	if retentionDays <= 0 {
+		retentionDays = 90
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return Artifact{}, err
@@ -73,12 +62,13 @@ func (s *Store) CreateArtifactIfQuota(ctx context.Context, runID, jobID uuid.UUI
 	var a Artifact
 	err = tx.QueryRow(ctx, `
 		INSERT INTO artifacts (run_id, job_id, name, blob_ref, size_bytes, sha256, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, now() + interval '90 days')
+		VALUES ($1, $2, $3, $4, $5, $6, now() + make_interval(days => $7))
 		ON CONFLICT (run_id, name) DO UPDATE SET
 			job_id = EXCLUDED.job_id, blob_ref = EXCLUDED.blob_ref,
-			size_bytes = EXCLUDED.size_bytes, sha256 = EXCLUDED.sha256
+			size_bytes = EXCLUDED.size_bytes, sha256 = EXCLUDED.sha256,
+			expires_at = EXCLUDED.expires_at
 		RETURNING id, run_id, job_id, name, size_bytes, sha256, blob_ref, created_at, expires_at`,
-		runID, jobID, name, blobRef, size, sha256).
+		runID, jobID, name, blobRef, size, sha256, retentionDays).
 		Scan(&a.ID, &a.RunID, &a.JobID, &a.Name, &a.SizeBytes, &a.SHA256, &a.BlobRef, &a.CreatedAt, &a.ExpiresAt)
 	if err != nil {
 		return Artifact{}, err
