@@ -6,6 +6,12 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 ## [Unreleased]
 
 ### Added
+- Security scanning dogfoods on every push/PR via
+  `.github/workflows/security.yml`: Trivy filesystem scan (vuln +
+  misconfig + secret, HIGH/CRITICAL gate), OSV-Scanner dependency CVEs,
+  Gitleaks working-tree and git-history secret scans, and a CycloneDX
+  SBOM uploaded as a run artifact. A weekly cron rescan surfaces newly
+  published CVEs without a code change.
 - `kern doctor` warns when a runner's version trails the fleet's newest
   comparable release — a stuck self-update used to surface only as
   unexplained behavioural drift.

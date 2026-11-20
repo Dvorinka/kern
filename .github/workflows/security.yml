@@ -1,0 +1,128 @@
+name: Security Scan
+# Dogfood security pipeline: dependency CVEs, misconfig/IaC, secrets and an
+# SBOM artifact on every push/PR, plus a weekly schedule rescan so newly
+# published CVEs surface without a code change. Plain run steps in pinned
+# scanner images — no docker:// actions needed.
+on:
+  push:
+    branches: [master]
+  pull_request:
+  schedule:
+    - cron: "41 5 * * 1" # Mondays 05:41 UTC — off-peak fleet time
+jobs:
+  trivy:
+    runs-on: [self-hosted, linux, x64]
+    # Fork PRs can rewrite this file; only same-repo heads may execute it
+    # on the self-hosted fleet. Push and schedule events always pass.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    env:
+      # /kern/cache is the runner-persistent mount on KERN and a plain
+      # writable dir on GitHub-hosted runners; either way the vuln DB
+      # stays warm between runs on KERN.
+      TRIVY_CACHE_DIR: /kern/cache/trivy
+    steps:
+      - uses: actions/checkout@v7
+      - name: install trivy
+        # The aquasec/trivy image's bare `trivy` entrypoint gets SIGKILLed
+        # mid-step inside GitHub-hosted job containers, so install the
+        # pinned binary instead — identical behaviour on KERN and GHA.
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          base="https://github.com/aquasecurity/trivy/releases/download/v0.76.2"
+          curl -sfL "$base/trivy_0.76.2_checksums.txt" -o /tmp/trivy-sums.txt
+          curl -sfL "$base/trivy_0.76.2_Linux-64bit.tar.gz" -o /tmp/trivy_0.76.2_Linux-64bit.tar.gz
+          grep "trivy_0.76.2_Linux-64bit.tar.gz" /tmp/trivy-sums.txt | (cd /tmp && sha256sum -c -)
+          tar -xzf /tmp/trivy_0.76.2_Linux-64bit.tar.gz -C "$HOME/.local/bin" trivy
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: filesystem scan (vuln + misconfig + secret)
+        run: >
+          trivy fs --scanners vuln,misconfig,secret
+          --severity HIGH,CRITICAL --exit-code 1
+          --skip-dirs .git --format table .
+      - name: json report
+        if: always()
+        run: >
+          trivy fs --scanners vuln,misconfig,secret
+          --severity HIGH,CRITICAL --skip-dirs .git
+          --format json -o trivy-fs.json .
+      - name: cyclonedx SBOM
+        if: always()
+        run: >
+          trivy fs --format cyclonedx --list-all-pkgs
+          --skip-dirs .git -o sbom.cdx.json .
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: trivy-${{ github.run_id }}
+          path: |
+            trivy-fs.json
+            sbom.cdx.json
+          if-no-files-found: warn
+          retention-days: 90
+  osv:
+    runs-on: [self-hosted, linux, x64]
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v7
+      - name: install osv-scanner
+        # Same reason as trivy: CLI-tool images die mid-step inside
+        # GitHub-hosted job containers. Pinned binary + sha256 instead.
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          base="https://github.com/google/osv-scanner/releases/download/v2.7.1"
+          curl -sfL "$base/osv-scanner_SHA256SUMS" -o /tmp/osv-sums.txt
+          curl -sfL "$base/osv-scanner_linux_amd64" -o /tmp/osv-scanner_linux_amd64
+          expected=$(grep "osv-scanner_linux_amd64" /tmp/osv-sums.txt | awk '{print $1}')
+          echo "$expected  /tmp/osv-scanner_linux_amd64" | sha256sum -c -
+          install -m 755 /tmp/osv-scanner_linux_amd64 "$HOME/.local/bin/osv-scanner"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: dependency scan (OSV)
+        run: osv-scanner scan source --recursive --format json --output-file osv-results.json .
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: osv-${{ github.run_id }}
+          path: osv-results.json
+          if-no-files-found: warn
+          retention-days: 90
+  secrets:
+    runs-on: [self-hosted, linux, x64]
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v7
+      - name: install gitleaks
+        # Same reason as trivy: CLI-tool images die mid-step inside
+        # GitHub-hosted job containers. Pinned binary + sha256 instead.
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          base="https://github.com/gitleaks/gitleaks/releases/download/v8.30.1"
+          curl -sfL "$base/gitleaks_8.30.1_checksums.txt" -o /tmp/gl-sums.txt
+          curl -sfL "$base/gitleaks_8.30.1_linux_x64.tar.gz" -o /tmp/gitleaks_8.30.1_linux_x64.tar.gz
+          grep "gitleaks_8.30.1_linux_x64.tar.gz" /tmp/gl-sums.txt | (cd /tmp && sha256sum -c -)
+          tar -xzf /tmp/gitleaks_8.30.1_linux_x64.tar.gz -C "$HOME/.local/bin" gitleaks
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: deepen history for the git scan
+        # KERN checkout is depth-1; only fetch when actually shallow, and
+        # warn rather than silently scan partial history if it fails.
+        run: |
+          if command -v git >/dev/null 2>&1 && [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
+            git fetch --unshallow origin || echo "gitleaks: unshallow failed — scanning available history only"
+          fi
+      - name: working tree
+        run: >
+          gitleaks dir --redact --exit-code 1 --no-banner --verbose
+          --report-format json --report-path gitleaks-dir.json .
+      - name: git history
+        if: always()
+        run: >
+          gitleaks git --redact --exit-code 1 --no-banner --verbose
+          --report-format json --report-path gitleaks-git.json .
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: gitleaks-${{ github.run_id }}
+          path: |
+            gitleaks-dir.json
+            gitleaks-git.json
+          if-no-files-found: warn
+          retention-days: 90
