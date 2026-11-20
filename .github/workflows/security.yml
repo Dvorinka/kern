@@ -12,6 +12,9 @@ on:
 jobs:
   trivy:
     runs-on: [self-hosted, linux, x64]
+    # Fork PRs can rewrite this file; only same-repo heads may execute it
+    # on the self-hosted fleet. Push and schedule events always pass.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     container:
       image: aquasec/trivy:0.76.2
     env:
@@ -47,6 +50,7 @@ jobs:
           retention-days: 90
   osv:
     runs-on: [self-hosted, linux, x64]
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     container:
       image: ghcr.io/google/osv-scanner:v2.7.1
     steps:
@@ -64,12 +68,18 @@ jobs:
           retention-days: 90
   secrets:
     runs-on: [self-hosted, linux, x64]
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     container:
       image: zricethezav/gitleaks:v8.30.1
     steps:
       - uses: actions/checkout@v7
       - name: deepen history for the git scan
-        run: command -v git >/dev/null 2>&1 && git fetch --unshallow origin 2>/dev/null || true
+        # KERN checkout is depth-1; only fetch when actually shallow, and
+        # warn rather than silently scan partial history if it fails.
+        run: |
+          if command -v git >/dev/null 2>&1 && [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
+            git fetch --unshallow origin || echo "gitleaks: unshallow failed — scanning available history only"
+          fi
       - name: working tree
         run: >
           gitleaks dir --redact --exit-code 1 --no-banner --verbose
