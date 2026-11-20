@@ -46,6 +46,43 @@ func loadAvg1() (float64, bool) {
 	return v, err == nil
 }
 
+// psiSomeAvg10 reads the "some" avg10 percentage from a cgroup v2 PSI file
+// (cpu.pressure, memory.pressure, io.pressure). PSI is hierarchical — a
+// cgroup's file covers its whole subtree — so inside an LXC the runner
+// measures its own container's stalls, not the hypervisor host's loadavg.
+func psiSomeAvg10(path string) (float64, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if !strings.HasPrefix(line, "some ") {
+			continue
+		}
+		for _, f := range strings.Fields(line) {
+			if strings.HasPrefix(f, "avg10=") {
+				if v, err := strconv.ParseFloat(f[len("avg10="):], 64); err == nil {
+					return v, true
+				}
+			}
+		}
+	}
+	return 0, false
+}
+
+// cgroupPressure returns the worst "some avg10" across the cgroup v2 PSI
+// files present. ok=false when none are readable — cgroup v1, a runtime
+// that does not delegate PSI, or a non-Linux build (stubbed elsewhere).
+func cgroupPressure() (float64, bool) {
+	worst := -1.0
+	for _, ctl := range []string{"cpu", "memory", "io"} {
+		if v, ok := psiSomeAvg10("/sys/fs/cgroup/" + ctl + ".pressure"); ok && v > worst {
+			worst = v
+		}
+	}
+	return worst, worst >= 0
+}
+
 // cpusVisible counts the processors the kernel reports via /proc/cpuinfo.
 // That is the machine /proc/loadavg describes — inside an LXC or a cpuset
 // docker container, runtime.NumCPU reflects the container's quota while
