@@ -95,7 +95,8 @@ either `toolset heal failed` or `toolset tool has no windows install plan`.
   the runner's PATH every sweep (~30 heartbeats); drift rides the heartbeat as
   `missing_tools` so the fleet view shows it.
 - With `self_heal=auto` the runner installs missing tools from curated,
-  checksum-pinned plans — `gh` and `minisign` have plans; any other name gets
+  checksum-pinned plans — `gh`, `minisign`, `trivy`, `osv-scanner` and
+  `gitleaks` have plans; any other name gets
   the generic package-manager template (apt/apk/dnf) on Linux only.
 - Identical still-missing sets back off for 30 minutes
   (`toolsetHealCooldown`) instead of re-downloading every sweep; a changed

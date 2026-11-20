@@ -3,6 +3,7 @@ package runner
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -108,7 +109,10 @@ func TestMissingToolsReportEmptySerializesAsArray(t *testing.T) {
 // Darwin plans must exist — macOS host executors otherwise report
 // permanent unhealable drift for every curated tool.
 func TestDarwinPlansExist(t *testing.T) {
-	for name, plan := range map[string]string{"gh": ghInstall, "minisign": minisignInstall} {
+	for name, plan := range map[string]string{
+		"gh": ghInstall, "minisign": minisignInstall,
+		"trivy": trivyInstall, "osv-scanner": osvScannerInstall, "gitleaks": gitleaksInstall,
+	} {
 		if !strings.Contains(plan, "Darwin)") {
 			t.Fatalf("%s: no Darwin branch in install plan", name)
 		}
@@ -117,8 +121,12 @@ func TestDarwinPlansExist(t *testing.T) {
 
 // Windows plans must cover both arches — a regression that drops the
 // arm64 branch leaves Windows-on-ARM runners unable to self-heal.
+// trivy is exempt: upstream ships no Windows ARM64 asset.
 func TestWindowsPlansCoverARM(t *testing.T) {
-	for name, plan := range map[string]string{"gh": ghInstall, "minisign": minisignInstall} {
+	for name, plan := range map[string]string{
+		"gh": ghInstall, "minisign": minisignInstall,
+		"osv-scanner": osvScannerInstall, "gitleaks": gitleaksInstall,
+	} {
 		idx := strings.Index(plan, "MINGW*|MSYS*|CYGWIN*|Windows*)")
 		if idx < 0 {
 			t.Fatalf("%s: no Windows branch in install plan", name)
@@ -129,6 +137,26 @@ func TestWindowsPlansCoverARM(t *testing.T) {
 		}
 		if !strings.Contains(win, "KERN_TOOL_BIN") {
 			t.Fatalf("%s: Windows branch does not install into KERN_TOOL_BIN", name)
+		}
+	}
+	if idx := strings.Index(trivyInstall, "MINGW*|MSYS*|CYGWIN*|Windows*)"); idx < 0 {
+		t.Fatal("trivy: no Windows branch in install plan")
+	}
+}
+
+// Install plans are shell strings assembled by concatenation — a
+// malformed quote or case terminator only surfaces when a runner tries
+// to heal. Parse every plan without executing it.
+func TestInstallPlansParseAsShell(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh available")
+	}
+	for name, plan := range toolInstalls {
+		for _, fix := range plan.Fix {
+			if out, err := exec.Command(sh, "-n", "-c", fix).CombinedOutput(); err != nil {
+				t.Errorf("%s: install plan does not parse: %v: %s", name, err, strings.TrimSpace(string(out)))
+			}
 		}
 	}
 }

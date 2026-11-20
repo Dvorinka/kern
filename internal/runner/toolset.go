@@ -90,9 +90,99 @@ const minisignInstall = `os=$(uname -s) && case "$os" in ` +
 	` else echo "no minisign plan for macOS without Homebrew" >&2; exit 1; fi;; ` +
 	`*) echo "unsupported os $os" >&2; exit 1;; esac`
 
+// The security scanners the fleet's security.yml workflow uses. Same
+// contract as gh/minisign: pinned release, per-arch sha256 baked in,
+// PATH-visible install target. Trivy publishes no Windows ARM64 asset,
+// so that arch reports unsupported rather than installing nothing.
+const trivyInstall = `os=$(uname -s) && case "$os" in ` +
+	`Linux) arch=$(uname -m) && case "$arch" in ` +
+	`x86_64) f=trivy_0.76.2_Linux-64bit.tar.gz; s=bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf;; ` +
+	`aarch64|arm64) f=trivy_0.76.2_Linux-ARM64.tar.gz; s=ab9d51f86e6a5fb936f605faff6b593ac51bc378fff4d3e8b9d58358b9c367c3;; ` +
+	`*) echo "unsupported arch $arch" >&2; exit 1;; esac` +
+	` && tmp=$(mktemp -d) && curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v0.76.2/$f" -o "$tmp/$f"` +
+	` && echo "$s  $tmp/$f" | sha256sum -c - && tar -xzf "$tmp/$f" -C "$tmp"` +
+	` && install -m0755 "$tmp/trivy" /usr/local/bin/trivy && rm -rf "$tmp" && trivy --version;; ` +
+	`MINGW*|MSYS*|CYGWIN*|Windows*) [ -n "${KERN_TOOL_BIN:-}" ] || { echo "no writable PATH dir for tool install" >&2; exit 1; };` +
+	` arch=$(uname -m) && case "$arch" in ` +
+	`x86_64|amd64) f=trivy_0.76.2_windows-64bit.zip; s=691f737a7e5566a673c3a74dab9160552ec32101e953b659e5c77443d16dddb6;; ` +
+	`*) echo "unsupported arch $arch" >&2; exit 1;; esac` +
+	` && dest=$(cygpath -u "$KERN_TOOL_BIN") && tmp=$(mktemp -d)` +
+	` && curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v0.76.2/$f" -o "$tmp/$f"` +
+	` && echo "$s  $tmp/$f" | sha256sum -c - && unzip -o "$tmp/$f" -d "$tmp"` +
+	` && install -m0755 "$tmp/trivy.exe" "$dest/trivy.exe" && rm -rf "$tmp" && "$dest/trivy.exe" --version;; ` +
+	`Darwin) arch=$(uname -m) && case "$arch" in ` +
+	`arm64) f=trivy_0.76.2_macOS-ARM64.tar.gz; s=ae7ea358326960406b703c77b2ac490190797d80b306b5b50c2a27221da0a5b8;; ` +
+	`x86_64) f=trivy_0.76.2_macOS-64bit.tar.gz; s=e08bb9ea449ecf66c6bfb03cbb8697c503ff33d35fc585c9747e3eaeb7ed4c7b;; ` +
+	`*) echo "unsupported arch $arch" >&2; exit 1;; esac` +
+	` && dest=/usr/local/bin && { [ -w "$dest" ] || dest=/opt/homebrew/bin; } && [ -w "$dest" ] || { echo "no writable PATH dir for tool install" >&2; exit 1; }` +
+	` && case ":$PATH:" in *":$dest:"*) ;; *) echo "$dest not on PATH" >&2; exit 1;; esac` +
+	` && tmp=$(mktemp -d) && curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v0.76.2/$f" -o "$tmp/$f"` +
+	` && echo "$s  $tmp/$f" | shasum -a 256 -c - && tar -xzf "$tmp/$f" -C "$tmp"` +
+	` && install -m0755 "$tmp/trivy" "$dest/trivy" && rm -rf "$tmp" && "$dest/trivy" --version;; ` +
+	`*) echo "unsupported os $os" >&2; exit 1;; esac`
+
+const osvScannerInstall = `os=$(uname -s) && case "$os" in ` +
+	`Linux) arch=$(uname -m) && case "$arch" in ` +
+	`x86_64) f=osv-scanner_linux_amd64; s=fb7dab19a8bd9bbe5c3189f09d4b7ee1820c9553a23bac202648a56efd2f6ee8;; ` +
+	`aarch64|arm64) f=osv-scanner_linux_arm64; s=983d22fbad9724514e3fcc6acc83b5fa64c5ffa6b0d9f510028f22c1b223ff81;; ` +
+	`*) echo "unsupported arch $arch" >&2; exit 1;; esac` +
+	` && tmp=$(mktemp -d) && curl -fsSL "https://github.com/google/osv-scanner/releases/download/v2.7.1/$f" -o "$tmp/osv-scanner"` +
+	` && echo "$s  $tmp/osv-scanner" | sha256sum -c -` +
+	` && install -m0755 "$tmp/osv-scanner" /usr/local/bin/osv-scanner && rm -rf "$tmp" && osv-scanner --version;; ` +
+	`MINGW*|MSYS*|CYGWIN*|Windows*) [ -n "${KERN_TOOL_BIN:-}" ] || { echo "no writable PATH dir for tool install" >&2; exit 1; };` +
+	` arch=$(uname -m) && case "$arch" in ` +
+	`x86_64|amd64) f=osv-scanner_windows_amd64.exe; s=7121dcf420aefbbf89a7f0050c4d3094e079ff93afd334dfc96f16b02ec85800;; ` +
+	`aarch64|arm64) f=osv-scanner_windows_arm64.exe; s=5f3998b55c9268f8468502bbcb60645038fd5b145ee5e685e6ae2a32e923afc7;; ` +
+	`*) echo "unsupported arch $arch" >&2; exit 1;; esac` +
+	` && dest=$(cygpath -u "$KERN_TOOL_BIN") && tmp=$(mktemp -d)` +
+	` && curl -fsSL "https://github.com/google/osv-scanner/releases/download/v2.7.1/$f" -o "$tmp/osv-scanner.exe"` +
+	` && echo "$s  $tmp/osv-scanner.exe" | sha256sum -c -` +
+	` && install -m0755 "$tmp/osv-scanner.exe" "$dest/osv-scanner.exe" && rm -rf "$tmp" && "$dest/osv-scanner.exe" --version;; ` +
+	`Darwin) arch=$(uname -m) && case "$arch" in ` +
+	`arm64) f=osv-scanner_darwin_arm64; s=b8420d5485ba792626315f1bf9a5a2046e971d38eea75bf9090c38852dbc3b1b;; ` +
+	`x86_64) f=osv-scanner_darwin_amd64; s=b22c02877a811c8f78956e8643efa554932b7378f590d13f8e97d4e9448a29f3;; ` +
+	`*) echo "unsupported arch $arch" >&2; exit 1;; esac` +
+	` && dest=/usr/local/bin && { [ -w "$dest" ] || dest=/opt/homebrew/bin; } && [ -w "$dest" ] || { echo "no writable PATH dir for tool install" >&2; exit 1; }` +
+	` && case ":$PATH:" in *":$dest:"*) ;; *) echo "$dest not on PATH" >&2; exit 1;; esac` +
+	` && tmp=$(mktemp -d) && curl -fsSL "https://github.com/google/osv-scanner/releases/download/v2.7.1/$f" -o "$tmp/osv-scanner"` +
+	` && echo "$s  $tmp/osv-scanner" | shasum -a 256 -c -` +
+	` && install -m0755 "$tmp/osv-scanner" "$dest/osv-scanner" && rm -rf "$tmp" && "$dest/osv-scanner" --version;; ` +
+	`*) echo "unsupported os $os" >&2; exit 1;; esac`
+
+const gitleaksInstall = `os=$(uname -s) && case "$os" in ` +
+	`Linux) arch=$(uname -m) && case "$arch" in ` +
+	`x86_64) f=gitleaks_8.30.1_linux_x64.tar.gz; s=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb;; ` +
+	`aarch64|arm64) f=gitleaks_8.30.1_linux_arm64.tar.gz; s=e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080;; ` +
+	`*) echo "unsupported arch $arch" >&2; exit 1;; esac` +
+	` && tmp=$(mktemp -d) && curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/$f" -o "$tmp/$f"` +
+	` && echo "$s  $tmp/$f" | sha256sum -c - && tar -xzf "$tmp/$f" -C "$tmp"` +
+	` && install -m0755 "$tmp/gitleaks" /usr/local/bin/gitleaks && rm -rf "$tmp" && gitleaks version;; ` +
+	`MINGW*|MSYS*|CYGWIN*|Windows*) [ -n "${KERN_TOOL_BIN:-}" ] || { echo "no writable PATH dir for tool install" >&2; exit 1; };` +
+	` arch=$(uname -m) && case "$arch" in ` +
+	`x86_64|amd64) f=gitleaks_8.30.1_windows_x64.zip; s=d29144deff3a68aa93ced33dddf84b7fdc26070add4aa0f4513094c8332afc4e;; ` +
+	`aarch64|arm64) f=gitleaks_8.30.1_windows_arm64.zip; s=b95f5e4f5c425cedca7ee203d9afd29597e692c4924a12ed42f970537c72cc0f;; ` +
+	`*) echo "unsupported arch $arch" >&2; exit 1;; esac` +
+	` && dest=$(cygpath -u "$KERN_TOOL_BIN") && tmp=$(mktemp -d)` +
+	` && curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/$f" -o "$tmp/$f"` +
+	` && echo "$s  $tmp/$f" | sha256sum -c - && unzip -o "$tmp/$f" -d "$tmp"` +
+	` && install -m0755 "$tmp/gitleaks.exe" "$dest/gitleaks.exe" && rm -rf "$tmp" && "$dest/gitleaks.exe" version;; ` +
+	`Darwin) arch=$(uname -m) && case "$arch" in ` +
+	`arm64) f=gitleaks_8.30.1_darwin_arm64.tar.gz; s=b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5;; ` +
+	`x86_64) f=gitleaks_8.30.1_darwin_x64.tar.gz; s=dfe101a4db2255fc85120ac7f3d25e4342c3c20cf749f2c20a18081af1952709;; ` +
+	`*) echo "unsupported arch $arch" >&2; exit 1;; esac` +
+	` && dest=/usr/local/bin && { [ -w "$dest" ] || dest=/opt/homebrew/bin; } && [ -w "$dest" ] || { echo "no writable PATH dir for tool install" >&2; exit 1; }` +
+	` && case ":$PATH:" in *":$dest:"*) ;; *) echo "$dest not on PATH" >&2; exit 1;; esac` +
+	` && tmp=$(mktemp -d) && curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/$f" -o "$tmp/$f"` +
+	` && echo "$s  $tmp/$f" | shasum -a 256 -c - && tar -xzf "$tmp/$f" -C "$tmp"` +
+	` && install -m0755 "$tmp/gitleaks" "$dest/gitleaks" && rm -rf "$tmp" && "$dest/gitleaks" version;; ` +
+	`*) echo "unsupported os $os" >&2; exit 1;; esac`
+
 var toolInstalls = map[string]toolPlan{
-	"gh":       {Pkg: "cli/cli release tarball", Fix: []string{ghInstall}},
-	"minisign": {Pkg: "jedisct1/minisign release tarball", Fix: []string{minisignInstall}},
+	"gh":          {Pkg: "cli/cli release tarball", Fix: []string{ghInstall}},
+	"minisign":    {Pkg: "jedisct1/minisign release tarball", Fix: []string{minisignInstall}},
+	"trivy":       {Pkg: "aquasecurity/trivy release tarball", Fix: []string{trivyInstall}},
+	"osv-scanner": {Pkg: "google/osv-scanner release binary", Fix: []string{osvScannerInstall}},
+	"gitleaks":    {Pkg: "gitleaks/gitleaks release tarball", Fix: []string{gitleaksInstall}},
 }
 
 // toolHints names tools that cannot self-install from a fixed template —
