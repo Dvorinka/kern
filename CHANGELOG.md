@@ -16,6 +16,12 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
   container instead of the hypervisor host's loadavg — a saturated
   neighbour no longer pauses healthy runners fleet-wide. Unreadable PSI
   falls back to the loadavg gate; `0` keeps existing behaviour.
+- Curated install plans for the security scanners `trivy`, `osv-scanner`
+  and `gitleaks` — pinned releases with per-arch sha256 digests across
+  Linux, Windows and macOS, matching the `gh`/`minisign` self-heal
+  contract. Declare them in the org `toolset` setting and host executors
+  keep every runner scanner-equipped; `trivy` reports unsupported on
+  Windows ARM64 because upstream ships no such asset.
 
 ### Fixed
 - Prepare-phase git clone/fetch transport deaths (`RPC failed`,
