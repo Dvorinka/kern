@@ -205,6 +205,9 @@ func TestLooksTransientError(t *testing.T) {
 		"read tcp: connection reset by peer",
 		"create container: Cannot connect to the Docker daemon at unix:///var/run/docker.sock",
 		"docker run: error during connect: dial unix /var/run/docker.sock: connect: no such file",
+		"checkout: clone https://x/y.git: exit status 128 (error: RPC failed; curl 56 Recv failure)",
+		"checkout: clone https://x/y.git: exit status 128 (fatal: unable to access 'https://x/y.git/': Could not resolve host: github.com)",
+		"checkout: fetch: exit status 128 (fatal: the remote end hung up unexpectedly)",
 	} {
 		if !looksTransientError(msg) {
 			t.Errorf("expected transient: %s", msg)
@@ -213,6 +216,7 @@ func TestLooksTransientError(t *testing.T) {
 	for _, msg := range []string{
 		"step failed with exit code 1",
 		"image does not exist: foo",
+		"checkout: clone https://x/y.git: exit status 128 (fatal: Authentication failed for 'https://x/y.git/')",
 		"",
 	} {
 		if looksTransientError(msg) {
@@ -236,6 +240,24 @@ func TestLooksTransientError(t *testing.T) {
 	}
 	if got := classifyJobError("create container: Cannot connect to the Docker daemon"); got != "daemon_gone" {
 		t.Errorf("classifyJobError daemon = %q", got)
+	}
+}
+
+// Git transport deaths during prepare must reach the retryable
+// classification — this is the boundary maybeRequeueTransient reads.
+// Auth failures stay "prepare": they are deterministic, not transient.
+func TestClassifyJobErrorGitTransport(t *testing.T) {
+	for _, msg := range []string{
+		"checkout: clone https://x/y.git: exit status 128 (error: RPC failed; curl 56 Recv failure)",
+		"checkout: clone https://x/y.git: exit status 128 (fatal: unable to access 'https://x/y.git/': Could not resolve host: github.com)",
+		"checkout: fetch: exit status 128 (fatal: the remote end hung up unexpectedly)",
+	} {
+		if got := classifyJobError(msg); got != "network" || !transientRetryKinds[got] {
+			t.Errorf("classifyJobError(%q) = %q, want retryable network", msg, got)
+		}
+	}
+	if got := classifyJobError("checkout: clone https://x/y.git: exit status 128 (fatal: Authentication failed for 'https://x/y.git/')"); got != "prepare" {
+		t.Errorf("classifyJobError auth failure = %q, want prepare", got)
 	}
 }
 

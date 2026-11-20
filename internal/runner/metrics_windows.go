@@ -51,6 +51,9 @@ func cpuCounters() (busy, total uint64, ok bool) {
 // loadAvg1 has no Windows equivalent; the overload claim gate stays off.
 func loadAvg1() (float64, bool) { return 0, false }
 
+// cgroupPressure has no Windows equivalent; PSI is a Linux cgroup v2 feature.
+func cgroupPressure() (float64, bool) { return 0, false }
+
 func cpusVisible() int { return runtime.NumCPU() }
 
 // memInfo reports physical total/available via GlobalMemoryStatusEx.

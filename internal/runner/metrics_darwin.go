@@ -47,6 +47,9 @@ func loadAvg1() (float64, bool) {
 	return float64(binary.LittleEndian.Uint32(data[0:])) / float64(fscale), true
 }
 
+// cgroupPressure has no Darwin equivalent; PSI is a Linux cgroup v2 feature.
+func cgroupPressure() (float64, bool) { return 0, false }
+
 func cpusVisible() int {
 	if n, err := unix.SysctlUint32("hw.ncpu"); err == nil && n > 0 {
 		return int(n)

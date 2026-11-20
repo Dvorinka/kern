@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/dvorinka/kern/internal/update"
 )
 
 type doctorCheck struct {
@@ -153,9 +155,16 @@ func (c *cli) doctorFleet(ctx context.Context, add func(string, string, string))
 		add("fleet", "warn", "runner list unavailable: "+err.Error())
 		return nil
 	}
+	// Fleet version skew: a runner behind the fleet's newest comparable
+	// version runs stale claim/lease/toolset code — non-comparable
+	// versions ("dev") neither set the bar nor warn.
+	fleetNewest := fleetNewestVersion(runners.Runners)
 	for _, r := range runners.Runners {
 		if r.Draining {
 			continue // intentional
+		}
+		if fleetNewest != "" && r.Version != "" && update.Newer(r.Version, fleetNewest) {
+			add("runner "+r.Name, "warn", fmt.Sprintf("version %s behind fleet %s", r.Version, fleetNewest))
 		}
 		if r.Status != "online" {
 			d := fmt.Sprintf("runner %s is %s", r.Name, r.Status)
@@ -193,6 +202,22 @@ func (c *cli) doctorFleet(ctx context.Context, add func(string, string, string))
 		}
 	}
 	return runners.Runners
+}
+
+// fleetNewestVersion returns the newest comparable runner version in the
+// fleet — "" when none parse. Draining runners neither set the bar nor
+// count, matching the per-runner warn below.
+func fleetNewestVersion(rs []runnerRow) string {
+	newest := ""
+	for _, r := range rs {
+		if r.Draining || r.Version == "" || !update.Comparable(r.Version) {
+			continue
+		}
+		if newest == "" || update.Newer(newest, r.Version) {
+			newest = r.Version
+		}
+	}
+	return newest
 }
 
 const (

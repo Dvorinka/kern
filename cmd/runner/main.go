@@ -47,6 +47,9 @@ Flags (each has an environment fallback, listed with it):
 
 Environment only:
   KERN_RUNNER_LOAD_GATE     pause claims while loadavg1 > n * cpu count (0=off)
+  KERN_RUNNER_PSI_GATE      pause claims while cgroup PSI some-avg10 > n% (Linux
+                            cgroup v2; replaces the loadavg gate, falls back to
+                            it when PSI is unreadable, 0=off)
   KERN_RUNNER_IMAGE_MAX_AGE GC pulled job images unused this long (default 168h, 0=off)
   KERN_RUNNER_PREPULL       comma-separated images to keep pulled (job pulls hit local cache)
   KERN_RUNNER_DISK_MIN_FREE_PCT  prune docker + pause claims when work-root fs free drops below % (default 10, 0=off)
@@ -318,6 +321,9 @@ func agentConfig(o options) runner.Config {
 	}
 	if v := os.Getenv("KERN_RUNNER_LOAD_GATE"); v != "" {
 		cfg.MaxLoadPerCPU, _ = strconv.ParseFloat(v, 64)
+	}
+	if v := os.Getenv("KERN_RUNNER_PSI_GATE"); v != "" {
+		cfg.PsiGate, _ = strconv.ParseFloat(v, 64)
 	}
 	if v := os.Getenv("KERN_RUNNER_IMAGE_MAX_AGE"); v != "" {
 		cfg.ImageMaxAge, _ = time.ParseDuration(v)
