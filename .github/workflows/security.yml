@@ -30,9 +30,9 @@ jobs:
           mkdir -p "$HOME/.local/bin"
           base="https://github.com/aquasecurity/trivy/releases/download/v0.76.2"
           curl -sfL "$base/trivy_0.76.2_checksums.txt" -o /tmp/trivy-sums.txt
-          curl -sfL "$base/trivy_0.76.2_Linux-64bit.tar.gz" -o /tmp/trivy.tgz
-          grep "trivy_0.76.2_Linux-64bit.tar.gz" /tmp/trivy-sums.txt | sha256sum -c -
-          tar -xzf /tmp/trivy.tgz -C "$HOME/.local/bin" trivy
+          curl -sfL "$base/trivy_0.76.2_Linux-64bit.tar.gz" -o /tmp/trivy_0.76.2_Linux-64bit.tar.gz
+          grep "trivy_0.76.2_Linux-64bit.tar.gz" /tmp/trivy-sums.txt | (cd /tmp && sha256sum -c -)
+          tar -xzf /tmp/trivy_0.76.2_Linux-64bit.tar.gz -C "$HOME/.local/bin" trivy
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: filesystem scan (vuln + misconfig + secret)
         run: >
@@ -97,9 +97,9 @@ jobs:
           mkdir -p "$HOME/.local/bin"
           base="https://github.com/gitleaks/gitleaks/releases/download/v8.30.1"
           curl -sfL "$base/gitleaks_8.30.1_checksums.txt" -o /tmp/gl-sums.txt
-          curl -sfL "$base/gitleaks_8.30.1_linux_x64.tar.gz" -o /tmp/gitleaks.tgz
-          grep "gitleaks_8.30.1_linux_x64.tar.gz" /tmp/gl-sums.txt | sha256sum -c -
-          tar -xzf /tmp/gitleaks.tgz -C "$HOME/.local/bin" gitleaks
+          curl -sfL "$base/gitleaks_8.30.1_linux_x64.tar.gz" -o /tmp/gitleaks_8.30.1_linux_x64.tar.gz
+          grep "gitleaks_8.30.1_linux_x64.tar.gz" /tmp/gl-sums.txt | (cd /tmp && sha256sum -c -)
+          tar -xzf /tmp/gitleaks_8.30.1_linux_x64.tar.gz -C "$HOME/.local/bin" gitleaks
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: deepen history for the git scan
         # KERN checkout is depth-1; only fetch when actually shallow, and
