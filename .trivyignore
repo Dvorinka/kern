@@ -1,0 +1,9 @@
+# DS-0002: no USER directive — intentional. This image is the KERN runner
+# baseline: the agent starts as root (docker socket, tool caches) and drops
+# to an unprivileged uid per job unless the run trust level allows root.
+DS-0002
+
+# DS-0029: apt-get without --no-install-recommends — intentional. Chrome's
+# recommends pull the font packages non-ASCII document rendering needs
+# (see the comment above the RUN in deployments/ubuntu.Dockerfile).
+DS-0029
