@@ -15,14 +15,25 @@ jobs:
     # Fork PRs can rewrite this file; only same-repo heads may execute it
     # on the self-hosted fleet. Push and schedule events always pass.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    container:
-      image: aquasec/trivy:0.76.2
     env:
-      # Job containers mount the runner-persistent cache at /kern/cache;
-      # pointing Trivy at it keeps the vuln DB warm between runs.
+      # /kern/cache is the runner-persistent mount on KERN and a plain
+      # writable dir on GitHub-hosted runners; either way the vuln DB
+      # stays warm between runs on KERN.
       TRIVY_CACHE_DIR: /kern/cache/trivy
     steps:
       - uses: actions/checkout@v7
+      - name: install trivy
+        # The aquasec/trivy image's bare `trivy` entrypoint gets SIGKILLed
+        # mid-step inside GitHub-hosted job containers, so install the
+        # pinned binary instead — identical behaviour on KERN and GHA.
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          base="https://github.com/aquasecurity/trivy/releases/download/v0.76.2"
+          curl -sfL "$base/trivy_0.76.2_checksums.txt" -o /tmp/trivy-sums.txt
+          curl -sfL "$base/trivy_0.76.2_Linux-64bit.tar.gz" -o /tmp/trivy.tgz
+          grep "trivy_0.76.2_Linux-64bit.tar.gz" /tmp/trivy-sums.txt | sha256sum -c -
+          tar -xzf /tmp/trivy.tgz -C "$HOME/.local/bin" trivy
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: filesystem scan (vuln + misconfig + secret)
         run: >
           trivy fs --scanners vuln,misconfig,secret
