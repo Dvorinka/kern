@@ -803,6 +803,12 @@ func (e *executor) jobEnv() map[string]string {
 		// Actions that run `npm i -g` (tauri-action) need a writable
 		// global prefix; the image's is root-owned.
 		"NPM_CONFIG_PREFIX": e.actionHomePath() + "/.npm-global",
+		// npm's `config get cache` redacts UUID-looking values and then
+		// refuses to print them — the per-job workRoot is a UUID, so a
+		// HOME-derived cache path makes setup-node's cache lookup fail on
+		// host executors. Pin the cache to the shared uuid-free _cache
+		// dir; it doubles as a warm cross-job store.
+		"npm_config_cache": e.cachePath() + "/npm",
 		// The provisioned node bin dir leads PATH so its bundled yarn,
 		// yarnpkg and corepack shims resolve inside JS actions too —
 		// setup-node@v4 runs `yarn --version` on seeing a lockfile and

@@ -5,11 +5,40 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 
 ## [Unreleased]
 
+### Added
+- `kern doctor` warns when a runner's version trails the fleet's newest
+  comparable release — a stuck self-update used to surface only as
+  unexplained behavioural drift.
+- `KERN_RUNNER_PSI_GATE` — optional cgroup-v2 PSI overload gate for Linux
+  runners. When set, claiming pauses while the worst PSI `some avg10`
+  across cpu/memory/io exceeds the threshold, replacing the loadavg gate.
+  PSI is hierarchical per-cgroup, so an LXC runner measures its own
+  container instead of the hypervisor host's loadavg — a saturated
+  neighbour no longer pauses healthy runners fleet-wide. Unreadable PSI
+  falls back to the loadavg gate; `0` keeps existing behaviour.
+
 ### Fixed
 - Prepare-phase git clone/fetch transport deaths (`RPC failed`,
   `Could not resolve host`, `remote end hung up`) now classify as
   transient and auto-requeue under `max_transient_retries` instead of
   failing the job outright. Auth failures still classify `prepare`.
+- Host toolset drift can now clear. `missingToolsReport` returned a
+  pointer to a nil slice once a sweep came back clean, which marshals to
+  JSON `null`; the server reads `null` as "no report" and keeps the
+  stored list, so healed drift stayed recorded forever. Empty reports
+  now serialize as `[]`.
+- Host toolset self-heal now covers macOS executors. The curated `gh`
+  and `minisign` install plans only had Linux and Windows branches, so a
+  Darwin host reported permanent drift it could never heal (`gh` installs
+  from the pinned macOS zip for amd64/arm64 into a writable PATH dir;
+  `minisign` has no pinned Intel macOS binary upstream, so it installs
+  via Homebrew when present and reports the gap otherwise).
+- `npm config get cache` no longer fails inside jobs on host executors.
+  npm redacts UUID-looking values and refuses to print them; the per-job
+  work root is a UUID, so a HOME-derived cache path made
+  `actions/setup-node`'s `cache: npm` lookup exit 1 (seen on the macOS
+  runner). `npm_config_cache` now points at the shared uuid-free
+  `_cache/npm` dir, which also warms the npm cache across jobs.
 
 ## [0.16.0] - 2026-11-19
 
