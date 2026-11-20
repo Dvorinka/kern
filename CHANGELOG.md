@@ -5,6 +5,8 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-21
+
 ### Added
 - Security scanning dogfoods on every push/PR via
   `.github/workflows/security.yml`: Trivy filesystem scan (vuln +
