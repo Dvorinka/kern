@@ -14,6 +14,25 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
   neighbour no longer pauses healthy runners fleet-wide. Unreadable PSI
   falls back to the loadavg gate; `0` keeps existing behaviour.
 
+### Fixed
+- Host toolset drift can now clear. `missingToolsReport` returned a
+  pointer to a nil slice once a sweep came back clean, which marshals to
+  JSON `null`; the server reads `null` as "no report" and keeps the
+  stored list, so healed drift stayed recorded forever. Empty reports
+  now serialize as `[]`.
+- Host toolset self-heal now covers macOS executors. The curated `gh`
+  and `minisign` install plans only had Linux and Windows branches, so a
+  Darwin host reported permanent drift it could never heal (`gh` installs
+  from the pinned macOS zip for amd64/arm64 into a writable PATH dir;
+  `minisign` has no pinned Intel macOS binary upstream, so it installs
+  via Homebrew when present and reports the gap otherwise).
+- `npm config get cache` no longer fails inside jobs on host executors.
+  npm redacts UUID-looking values and refuses to print them; the per-job
+  work root is a UUID, so a HOME-derived cache path made
+  `actions/setup-node`'s `cache: npm` lookup exit 1 (seen on the macOS
+  runner). `npm_config_cache` now points at the shared uuid-free
+  `_cache/npm` dir, which also warms the npm cache across jobs.
+
 ## [0.16.0] - 2026-11-19
 
 ### Added

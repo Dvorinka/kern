@@ -354,7 +354,9 @@ func (a *Agent) missingToolsReport() *[]string {
 	if !a.toolsetValid {
 		return nil
 	}
-	m := append([]string(nil), a.toolsetCache...)
+	// []string{} not nil: a nil slice marshals to JSON null, which the
+	// server reads as "no report" — healed drift would never clear.
+	m := append([]string{}, a.toolsetCache...)
 	return &m
 }
 

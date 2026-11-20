@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -87,6 +88,30 @@ func TestToolsetHealDue(t *testing.T) {
 	a.toolsetHealAt = time.Now().Add(-toolsetHealCooldown - time.Second)
 	if !a.toolsetHealDue([]string{"gh", "minisign"}) {
 		t.Fatal("identical set past cooldown should be due again")
+	}
+}
+
+// A healed (empty) sweep must serialize as [] — JSON null decodes to a
+// nil pointer server-side, which means "no report" and leaves stale
+// drift recorded forever.
+func TestMissingToolsReportEmptySerializesAsArray(t *testing.T) {
+	a := &Agent{toolsetValid: true}
+	b, err := json.Marshal(a.missingToolsReport())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != "[]" {
+		t.Fatalf("empty report marshals to %s, want []", b)
+	}
+}
+
+// Darwin plans must exist — macOS host executors otherwise report
+// permanent unhealable drift for every curated tool.
+func TestDarwinPlansExist(t *testing.T) {
+	for name, plan := range map[string]string{"gh": ghInstall, "minisign": minisignInstall} {
+		if !strings.Contains(plan, "Darwin)") {
+			t.Fatalf("%s: no Darwin branch in install plan", name)
+		}
 	}
 }
 
