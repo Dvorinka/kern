@@ -54,7 +54,7 @@ jobs:
       - name: dependency scan (OSV)
         # The image's entrypoint is /osv-scanner but the binary is not on
         # PATH — invoke it by absolute path.
-        run: /osv-scanner scan source --recursive --format json --output osv-results.json .
+        run: /osv-scanner scan source --recursive --format json --output-file osv-results.json .
       - uses: actions/upload-artifact@v7
         if: always()
         with:
