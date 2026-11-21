@@ -51,41 +51,35 @@ func (c *cli) cmdDiagnose(ctx context.Context, args []string) error {
 		}
 	}
 
-	var detail runDetail
-	if err := c.api().get(ctx, "/runs/"+id, nil, &detail); err != nil {
+	// One endpoint carries the whole bundle — the old path fanned out to
+	// 2+2N sequential calls (#376).
+	var resp struct {
+		Run     run `json:"run"`
+		Jobs    []struct {
+			Job   job        `json:"job"`
+			Steps []diagStep `json:"steps"`
+		} `json:"jobs"`
+		Runners map[string]runnerRow `json:"runners"`
+	}
+	q := url.Values{}
+	q.Set("tail", fmt.Sprintf("%d", tail))
+	if err := c.api().get(ctx, "/runs/"+id+"/diagnose", q, &resp); err != nil {
 		return err
-	}
-	var runners struct {
-		Runners []runnerRow `json:"runners"`
-	}
-	_ = c.api().get(ctx, "/runners", nil, &runners) // identity is nice-to-have
-	byID := map[string]runnerRow{}
-	for _, r := range runners.Runners {
-		byID[r.ID] = r
 	}
 
 	bundle := diagnoseBundle{
 		Server: c.server, At: time.Now().UTC().Format(time.RFC3339),
-		Run: detail.Run, Jobs: []diagJob{},
+		Run: resp.Run, Jobs: []diagJob{},
 	}
-	for _, j := range detail.Jobs {
-		if opts["job"] != "" && j.Key != opts["job"] && j.JobKey != opts["job"] && j.Name != opts["job"] {
+	for _, j := range resp.Jobs {
+		if opts["job"] != "" && j.Job.Key != opts["job"] && j.Job.JobKey != opts["job"] && j.Job.Name != opts["job"] {
 			continue
 		}
-		dj := diagJob{Job: j}
-		if r, ok := byID[j.RunnerID]; ok {
+		dj := diagJob{Job: j.Job}
+		if r, ok := resp.Runners[j.Job.RunnerID]; ok && j.Job.RunnerID != "" {
 			dj.Runner = &r
 		}
-		for _, st := range j.Steps {
-			ds := diagStep{step: st}
-			if needsLogTail(st) {
-				text, size, err := c.logTail(ctx, st.ID, tail)
-				if err == nil {
-					ds.LogTail, ds.LogSize = text, size
-				}
-			}
-			dj.Steps = append(dj.Steps, ds)
-		}
+		dj.Steps = j.Steps
 		bundle.Jobs = append(bundle.Jobs, dj)
 	}
 
@@ -106,26 +100,6 @@ func needsLogTail(st step) bool {
 		return true
 	}
 	return len(st.Diagnosis) > 0 && string(st.Diagnosis) != "null"
-}
-
-// logTail returns up to tail bytes from the end of a step's log plus the
-// full size, so the reader knows what was cut.
-func (c *cli) logTail(ctx context.Context, stepID string, tail int64) (string, int64, error) {
-	var probe stepLog
-	if err := c.api().get(ctx, "/steps/"+stepID+"/logs",
-		url.Values{"offset": {"0"}, "limit": {"1"}}, &probe); err != nil {
-		return "", 0, err
-	}
-	offset := int64(0)
-	if probe.Size > tail {
-		offset = probe.Size - tail
-	}
-	var chunk stepLog
-	if err := c.api().get(ctx, "/steps/"+stepID+"/logs",
-		url.Values{"offset": {fmt.Sprint(offset)}, "limit": {fmt.Sprint(tail)}}, &chunk); err != nil {
-		return "", probe.Size, err
-	}
-	return chunk.Text, probe.Size, nil
 }
 
 func printDiagnose(b diagnoseBundle, tail int64) {
