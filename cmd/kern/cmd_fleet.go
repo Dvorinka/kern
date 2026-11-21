@@ -40,9 +40,85 @@ func (c *cli) resolveRunner(ctx context.Context, arg string) (runnerRow, error) 
 	return runnerRow{}, fmt.Errorf("no runner named or matching %q", arg)
 }
 
+// selectRunners resolves batch targets (#376): positional runner names/ids,
+// or selector flags — --all, --label L, --outdated (below the fleet's newest
+// version), --offline (no heartbeat in the online window). Selectors may
+// combine; with none and no positionals it errors rather than acting on an
+// implicit fleet-wide set.
+func (c *cli) selectRunners(ctx context.Context, args []string) ([]runnerRow, map[string]string, error) {
+	opts, pos := parseFlagsEx(args, []string{"all", "outdated", "offline", "dry-run"}, "label")
+	var out struct {
+		Runners []runnerRow `json:"runners"`
+	}
+	if err := c.api().get(ctx, "/runners", nil, &out); err != nil {
+		return nil, nil, err
+	}
+	if len(pos) > 0 {
+		var sel []runnerRow
+		for _, a := range pos {
+			var match *runnerRow
+			for i, r := range out.Runners {
+				if r.ID == a || r.Name == a {
+					sel = append(sel, r)
+					match = nil
+					break
+				}
+				if len(a) >= 4 && strings.HasPrefix(r.ID, a) {
+					if match != nil {
+						return nil, nil, fmt.Errorf("id prefix %q matches more than one runner", a)
+					}
+					match = &out.Runners[i]
+				}
+			}
+			if match == nil {
+				return nil, nil, fmt.Errorf("no runner named or matching %q", a)
+			}
+			sel = append(sel, *match)
+		}
+		return sel, opts, nil
+	}
+	var sel []runnerRow
+	newest := fleetNewestVersion(out.Runners)
+	online := func(r runnerRow) bool {
+		return r.LastHeartbeatAt != nil && time.Since(*r.LastHeartbeatAt) < 45*time.Second
+	}
+	labeled := func(r runnerRow) bool {
+		for _, l := range r.Labels {
+			if l == opts["label"] {
+				return true
+			}
+		}
+		return false
+	}
+	for _, r := range out.Runners {
+		if opts["all"] != "true" {
+			if opts["label"] != "" && !labeled(r) {
+				continue
+			}
+			if opts["outdated"] == "true" && (r.Version == "" || r.Version == newest) {
+				continue
+			}
+			if opts["offline"] == "true" && online(r) {
+				continue
+			}
+			if opts["label"] == "" && opts["outdated"] != "true" && opts["offline"] != "true" {
+				continue // no selector matched this runner — skip
+			}
+		}
+		sel = append(sel, r)
+	}
+	if len(sel) == 0 && opts["all"] != "true" && opts["label"] == "" && opts["outdated"] != "true" && opts["offline"] != "true" {
+		return nil, nil, fmt.Errorf("give runner names/ids or a selector (--all, --label, --outdated, --offline)")
+	}
+	if len(sel) == 0 {
+		return nil, nil, fmt.Errorf("no runners match the selector")
+	}
+	return sel, opts, nil
+}
+
 func (c *cli) cmdRunners(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: kern runners list|drain|undrain|self-update|wake|install|delete|enroll")
+		return fmt.Errorf("usage: kern runners list|drain|undrain|self-update|wake|rollout|install|delete|enroll|env|jit")
 	}
 	if err := c.requireAuth(); err != nil {
 		return err
@@ -90,77 +166,86 @@ func (c *cli) cmdRunners(ctx context.Context, args []string) error {
 				}
 			}
 		})
-	case "drain", "undrain":
-		arg, err := strarg(rest, 0, "runner id|name")
+	case "drain", "undrain", "delete":
+		runners, opts, err := c.selectRunners(ctx, rest)
 		if err != nil {
 			return err
 		}
-		r, err := c.resolveRunner(ctx, arg)
+		for _, r := range runners {
+			if opts["dry-run"] == "true" {
+				fmt.Println(r.Name, "would", sub)
+				continue
+			}
+			var err error
+			if sub == "delete" {
+				err = c.api().del(ctx, "/runners/"+r.ID)
+			} else {
+				err = c.api().post(ctx, "/runners/"+r.ID+"/drain",
+					map[string]any{"draining": sub == "drain"}, nil)
+			}
+			if err != nil {
+				return err
+			}
+			fmt.Println(r.Name, sub+"ed")
+		}
+	case "self-update", "wake":
+		// Legacy form `<runner> on|off` still works; batch form takes
+		// --on/--off plus targets or selectors (#376).
+		bools := []string{"on", "off", "all", "outdated", "offline", "dry-run"}
+		raw, pos := parseFlagsEx(rest, bools, "label")
+		on := ""
+		if len(pos) > 0 && (pos[len(pos)-1] == "on" || pos[len(pos)-1] == "off") {
+			on = pos[len(pos)-1]
+			pos = pos[:len(pos)-1]
+		}
+		if raw["on"] == "true" {
+			on = "on"
+		}
+		if raw["off"] == "true" {
+			on = "off"
+		}
+		if on == "" {
+			return fmt.Errorf("%s needs on|off (or --on/--off)", sub)
+		}
+		targets := append([]string{}, pos...)
+		if raw["label"] != "" {
+			targets = append(targets, "--label", raw["label"])
+		}
+		for _, b := range []string{"all", "outdated", "offline", "dry-run"} {
+			if raw[b] == "true" {
+				targets = append(targets, "--"+b)
+			}
+		}
+		runners, opts, err := c.selectRunners(ctx, targets)
 		if err != nil {
 			return err
 		}
-		if err := c.api().post(ctx, "/runners/"+r.ID+"/drain",
-			map[string]any{"draining": sub == "drain"}, nil); err != nil {
-			return err
+		for _, r := range runners {
+			if opts["dry-run"] == "true" {
+				fmt.Println(r.Name, "would", sub, on)
+				continue
+			}
+			var err error
+			if sub == "wake" {
+				err = c.api().patch(ctx, "/runners/"+r.ID,
+					map[string]any{"wake_on_demand": on == "on"}, nil)
+			} else {
+				err = c.api().post(ctx, "/runners/"+r.ID+"/auto-update",
+					map[string]any{"enabled": on == "on"}, nil)
+			}
+			if err != nil {
+				return err
+			}
+			fmt.Printf("%s %s %s\n", r.Name, map[string]string{"wake": "wake_on_demand", "self-update": "self-update"}[sub], on)
 		}
-		fmt.Println(r.Name, sub+"ed")
-	case "self-update":
-		arg, err := strarg(rest, 0, "runner id|name")
-		if err != nil {
-			return err
-		}
-		on, err := strarg(rest, 1, "on|off")
-		if err != nil {
-			return err
-		}
-		if on != "on" && on != "off" {
-			return fmt.Errorf("self-update takes on|off, got %q", on)
-		}
-		r, err := c.resolveRunner(ctx, arg)
-		if err != nil {
-			return err
-		}
-		if err := c.api().post(ctx, "/runners/"+r.ID+"/auto-update",
-			map[string]any{"enabled": on == "on"}, nil); err != nil {
-			return err
-		}
-		fmt.Printf("%s self-update %s\n", r.Name, on)
-	case "wake":
-		arg, err := strarg(rest, 0, "runner id|name")
-		if err != nil {
-			return err
-		}
-		on, err := strarg(rest, 1, "on|off")
-		if err != nil {
-			return err
-		}
-		if on != "on" && on != "off" {
-			return fmt.Errorf("wake takes on|off, got %q", on)
-		}
-		r, err := c.resolveRunner(ctx, arg)
-		if err != nil {
-			return err
-		}
-		if err := c.api().patch(ctx, "/runners/"+r.ID,
-			map[string]any{"wake_on_demand": on == "on"}, nil); err != nil {
-			return err
-		}
-		fmt.Printf("%s wake_on_demand %s\n", r.Name, on)
+	case "rollout":
+		return c.runnerRollout(ctx, rest)
+	case "env":
+		return c.runnerEnv(ctx, rest)
+	case "jit":
+		return c.runnerJIT(ctx, rest)
 	case "install":
 		return c.runnerInstall(ctx, rest)
-	case "delete":
-		arg, err := strarg(rest, 0, "runner id|name")
-		if err != nil {
-			return err
-		}
-		r, err := c.resolveRunner(ctx, arg)
-		if err != nil {
-			return err
-		}
-		if err := c.api().del(ctx, "/runners/"+r.ID); err != nil {
-			return err
-		}
-		fmt.Println(r.Name, "deleted")
 	case "enroll":
 		opts, _ := parseFlags(rest, "name", "ttl")
 		var out struct {
@@ -186,6 +271,196 @@ func (c *cli) cmdRunners(ctx context.Context, args []string) error {
 	default:
 		return fmt.Errorf("unknown runners subcommand %q", sub)
 	}
+	return nil
+}
+
+// runnerEnv manages the operator env-override map on a runner:
+//
+//	kern runners env <runner>                 list overrides
+//	kern runners env <runner> set K=V [K=V…]  merge overrides
+//	kern runners env <runner> unset K [K…]    remove keys
+//
+// PATCH replaces the whole map, so set/unset read-modify-write against the
+// current row (#376).
+func (c *cli) runnerEnv(ctx context.Context, args []string) error {
+	arg, err := strarg(args, 0, "runner id|name")
+	if err != nil {
+		return err
+	}
+	r, err := c.resolveRunner(ctx, arg)
+	if err != nil {
+		return err
+	}
+	op := "get"
+	if len(args) > 1 {
+		op = args[1]
+	}
+	env := r.Env
+	if env == nil {
+		env = map[string]string{}
+	}
+	switch op {
+	case "get", "list":
+	case "set":
+		if len(args) < 3 {
+			return fmt.Errorf("usage: kern runners env <runner> set KEY=VALUE…")
+		}
+		for _, kv := range args[2:] {
+			k, v, ok := strings.Cut(kv, "=")
+			if !ok || k == "" {
+				return fmt.Errorf("expected KEY=VALUE, got %q", kv)
+			}
+			env[k] = v
+		}
+	case "unset":
+		if len(args) < 3 {
+			return fmt.Errorf("usage: kern runners env <runner> unset KEY…")
+		}
+		for _, k := range args[2:] {
+			delete(env, k)
+		}
+	default:
+		return fmt.Errorf("env takes get|set|unset, got %q", op)
+	}
+	if op == "set" || op == "unset" {
+		if err := c.api().patch(ctx, "/runners/"+r.ID,
+			map[string]any{"env": env}, nil); err != nil {
+			return err
+		}
+		fmt.Println(r.Name, "env updated")
+	}
+	if c.json {
+		printJSON(env)
+		return nil
+	}
+	if len(env) == 0 {
+		fmt.Println(r.Name, "has no env overrides")
+		return nil
+	}
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		fmt.Printf("%s=%s\n", k, env[k])
+	}
+	return nil
+}
+
+// runnerRollout does a sequential rolling upgrade (#376): per runner —
+// drain, wait for active jobs to empty, enable auto-update, wait for the
+// reported version to move, undrain. Sequential keeps one runner's worth of
+// capacity out at a time; --wait bounds each phase (default 10m).
+func (c *cli) runnerRollout(ctx context.Context, args []string) error {
+	opts, pos := parseFlags(args, "wait")
+	wait := time.Duration(atoi(opts["wait"])) * time.Minute
+	if wait <= 0 {
+		wait = 10 * time.Minute
+	}
+	runners, dry, err := c.selectRunners(ctx, pos)
+	if err != nil {
+		return err
+	}
+	fresh := func(id string) (runnerRow, error) {
+		var out struct {
+			Runners []runnerRow `json:"runners"`
+		}
+		if err := c.api().get(ctx, "/runners", nil, &out); err != nil {
+			return runnerRow{}, err
+		}
+		for _, r := range out.Runners {
+			if r.ID == id {
+				return r, nil
+			}
+		}
+		return runnerRow{}, fmt.Errorf("runner %s disappeared", shortID(id))
+	}
+	poll := func(id string, what string, ok func(runnerRow) bool) error {
+		deadline := time.Now().Add(wait)
+		for {
+			r, err := fresh(id)
+			if err != nil {
+				return err
+			}
+			if ok(r) {
+				return nil
+			}
+			if time.Now().After(deadline) {
+				return fmt.Errorf("timed out waiting for %s", what)
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(3 * time.Second):
+			}
+		}
+	}
+	for _, r := range runners {
+		if dry["dry-run"] == "true" {
+			fmt.Println(r.Name, "would roll")
+			continue
+		}
+		fmt.Printf("%s: draining\n", r.Name)
+		if err := c.api().post(ctx, "/runners/"+r.ID+"/drain",
+			map[string]any{"draining": true}, nil); err != nil {
+			return err
+		}
+		if err := poll(r.ID, "active jobs to finish", func(x runnerRow) bool {
+			return x.ActiveJobs == 0
+		}); err != nil {
+			return err
+		}
+		want := r.Version
+		if err := c.api().post(ctx, "/runners/"+r.ID+"/auto-update",
+			map[string]any{"enabled": true}, nil); err != nil {
+			return err
+		}
+		verr := poll(r.ID, "version bump", func(x runnerRow) bool {
+			return x.Version != "" && x.Version != want
+		})
+		if uerr := c.api().post(ctx, "/runners/"+r.ID+"/drain",
+			map[string]any{"draining": false}, nil); uerr != nil {
+			return uerr
+		}
+		if verr != nil {
+			fmt.Printf("%s: update not observed within %s — undrained\n", r.Name, wait)
+			continue
+		}
+		now, _ := fresh(r.ID)
+		fmt.Printf("%s: %s -> %s\n", r.Name, want, now.Version)
+	}
+	return nil
+}
+
+// runnerJIT mints an ephemeral JIT runner credential for external scalers —
+// POST /api/v1/runners (handlers_runners.go jitRunner). The plaintext token
+// is shown once (#376).
+func (c *cli) runnerJIT(ctx context.Context, args []string) error {
+	opts, _ := parseFlags(args, "name", "labels")
+	var labels []string
+	for _, l := range strings.Split(opts["labels"], ",") {
+		if l = strings.TrimSpace(l); l != "" {
+			labels = append(labels, l)
+		}
+	}
+	var out struct {
+		RunnerID   string `json:"runner_id"`
+		Name       string `json:"name"`
+		Token      string `json:"token"`
+		ControlURL string `json:"control_url"`
+	}
+	if err := c.api().post(ctx, "/runners", map[string]any{
+		"name": opts["name"], "labels": labels,
+	}, &out); err != nil {
+		return err
+	}
+	if c.json {
+		printJSON(out)
+		return nil
+	}
+	fmt.Printf("jit runner %s (%s) — token shown once:\n%s\n\n", out.Name, shortID(out.RunnerID), out.Token)
+	fmt.Printf("kern-runner --control %s --token %s\n", out.ControlURL, out.Token)
 	return nil
 }
 
