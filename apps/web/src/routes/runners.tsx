@@ -50,6 +50,30 @@ export function RunnersPage() {
 	});
 	const [staleDismissed, setStaleDismissed] = useState(false);
 	const [confirmDel, setConfirmDel] = useState<string | null>(null);
+	// Bulk selection — drain/undrain/delete the checked runners with the
+	// same per-runner mutations, fanned out in parallel.
+	const [sel, setSel] = useState<Set<string>>(new Set());
+	const toggleSel = (id: string) =>
+		setSel((s) => {
+			const n = new Set(s);
+			if (n.has(id)) n.delete(id); else n.add(id);
+			return n;
+		});
+	const bulk = useMutation({
+		mutationFn: async (v: { ids: string[]; op: "drain" | "undrain" | "delete" }) => {
+			await Promise.all(
+				v.ids.map((id) =>
+					v.op === "delete"
+						? api.del(`/runners/${id}`)
+						: api.post(`/runners/${id}/drain`, { draining: v.op === "drain" }),
+				),
+			);
+		},
+		onSuccess: () => {
+			setSel(new Set());
+			qc.invalidateQueries({ queryKey: ["runners"] });
+		},
+	});
 
 	// Offline runners whose last heartbeat is older than a week are almost
 	// certainly decommissioned leftovers (replaced VMs, retired agents).
@@ -139,7 +163,30 @@ export function RunnersPage() {
 							}
 						/>
 					) : (
-						data.runners.map((r) => {
+						<>
+						{sel.size > 0 && (
+							<div className="frow" style={{ padding: "6px 12px" }}>
+								<span className="fn">{sel.size} selected</span>
+								<span className="ml-auto flex gap-1">
+									<Button size="sm" variant="ghost" disabled={bulk.isPending}
+										onClick={() => bulk.mutate({ ids: [...sel], op: "drain" })}>
+										Drain
+									</Button>
+									<Button size="sm" variant="ghost" disabled={bulk.isPending}
+										onClick={() => bulk.mutate({ ids: [...sel], op: "undrain" })}>
+										Undrain
+									</Button>
+									<Button size="sm" variant="ghost" disabled={bulk.isPending}
+										onClick={() => bulk.mutate({ ids: [...sel], op: "delete" })}>
+										Delete
+									</Button>
+									<Button size="sm" variant="ghost" onClick={() => setSel(new Set())}>
+										Clear
+									</Button>
+								</span>
+							</div>
+						)}
+						{data.runners.map((r) => {
 							const busy = (r.active_jobs ?? 0) > 0;
 							const cpu = r.cpu_percent != null ? Math.round(r.cpu_percent) : null;
 							const mem =
@@ -152,6 +199,13 @@ export function RunnersPage() {
 									: null;
 							return (
 								<div key={r.id} className="frow">
+									<input
+										type="checkbox"
+										aria-label={`Select ${r.name}`}
+										checked={sel.has(r.id)}
+										onChange={() => toggleSel(r.id)}
+										style={{ marginRight: 10 }}
+									/>
 									<div className="fn">
 										<b>
 											{r.icon && (
@@ -294,7 +348,8 @@ export function RunnersPage() {
 									)}
 								</div>
 							);
-						})
+						})}
+						</>
 					)}
 				</div>
 			)}

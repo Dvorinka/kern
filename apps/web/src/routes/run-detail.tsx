@@ -57,15 +57,47 @@ export function RunDetailPage() {
 
 	const [jobId, setJobId] = useState<string | null>(null);
 	const [stepN, setStepN] = useState<number | null>(null);
-	// ?job=<key|id> deep links — trace lanes and queue rows land on a
-	// specific job's log.
-	const [params] = useSearchParams();
+	// ?job=<key|id>&step=<n> deep links — trace lanes and queue rows land on
+	// a specific job's log; picking a job/step writes the URL back so the
+	// selection is shareable and survives reload.
+	const [params, setParams] = useSearchParams();
 	const wantJob = params.get("job");
+	const wantStep = params.get("step");
 	useEffect(() => {
-		if (!wantJob || !data) return;
-		const j = data.jobs.find((j) => j.job_key === wantJob || j.id === wantJob || j.name === wantJob);
-		if (j) setJobId(j.id);
-	}, [wantJob, data]);
+		if (!data) return;
+		if (wantJob) {
+			const j = data.jobs.find(
+				(j) => j.job_key === wantJob || j.id === wantJob || j.name === wantJob,
+			);
+			if (j) setJobId(j.id);
+		}
+		if (wantStep) setStepN(Number(wantStep) || null);
+	}, [wantJob, wantStep, data]);
+	const syncParams = (jid: string | null, n: number | null) =>
+		setParams(
+			(prev) => {
+				const p = new URLSearchParams(prev);
+				if (jid) p.set("job", jid); else p.delete("job");
+				if (n != null) p.set("step", String(n)); else p.delete("step");
+				return p;
+			},
+			{ replace: true },
+		);
+	const pickJob = (jid: string) => {
+		setJobId(jid);
+		setStepN(null);
+		syncParams(jid, null);
+	};
+	const pickStep = (n: number | null) => {
+		setStepN(n);
+		const js = data?.jobs ?? [];
+		const j =
+			js.find((j) => j.id === jobId) ??
+			js.find((j) => j.status === "in_progress") ??
+			js.find((j) => j.conclusion === "failure") ??
+			js[0];
+		syncParams(j?.id ?? null, n);
+	};
 
 	const runnerNames = new Map((runners?.runners ?? []).map((r) => [r.id, r.name]));
 
@@ -191,19 +223,16 @@ export function RunDetailPage() {
 				run={run}
 				jobs={jobs}
 				runners={runnerNames}
-				onPickJob={(jid) => {
-					setJobId(jid);
-					setStepN(null);
-				}}
+				onPickJob={pickJob}
 			/>
 			{job && (
 				<StepsPanel
 					jobs={jobs}
 					job={job}
 					runners={runnerNames}
-					onPickJob={setJobId}
+					onPickJob={pickJob}
 					stepN={stepN}
-					onPickStep={setStepN}
+					onPickStep={pickStep}
 					live={live}
 				/>
 			)}
