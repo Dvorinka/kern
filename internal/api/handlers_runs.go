@@ -565,6 +565,178 @@ func (s *Server) stepLogStream(c *gin.Context) {
 	}
 }
 
+// runDiagnose bundles everything `kern diagnose` needs in one request (#376)
+// instead of 2+2N fan-out: run, jobs with steps, per-failed-step log tails
+// from blob storage, and a runner identity map for jobs that claimed one.
+func (s *Server) runDiagnose(c *gin.Context) {
+	user, _ := currentUser(c)
+	id, ok := s.runIDParam(c)
+	if !ok {
+		return
+	}
+	tail := int64(parseInt(c.DefaultQuery("tail", "65536"), 65536))
+	if tail <= 0 || tail > 1<<20 {
+		tail = 64 << 10
+	}
+	run, err := s.Store.Run(c.Request.Context(), id)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	jobs, err := s.Store.JobsForRun(c.Request.Context(), run.ID)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	type diagStep struct {
+		store.Step
+		LogTail string `json:"log_tail,omitempty"`
+		LogSize int64  `json:"log_size,omitempty"`
+	}
+	type diagJob struct {
+		Job   store.Job  `json:"job"`
+		Steps []diagStep `json:"steps"`
+	}
+	failed := func(st store.Step) bool {
+		if st.Conclusion != "" && st.Conclusion != "success" && st.Conclusion != "skipped" {
+			return true
+		}
+		return len(st.Diagnosis) > 0 && string(st.Diagnosis) != "null"
+	}
+	out := make([]diagJob, 0, len(jobs))
+	for _, j := range jobs {
+		dj := diagJob{Job: j}
+		steps, err := s.Store.StepsForJob(c.Request.Context(), j.ID)
+		if err != nil {
+			continue
+		}
+		for _, st := range steps {
+			ds := diagStep{Step: st}
+			if failed(st) && st.LogRef != "" {
+				size, err := s.Blobs.Size(st.LogRef)
+				if err == nil {
+					ds.LogSize = size
+					off := size - tail
+					if off < 0 {
+						off = 0
+					}
+					data, _, err := s.Blobs.ReadFrom(st.LogRef, off, int(tail))
+					if err == nil {
+						ds.LogTail = string(data)
+					}
+				}
+			}
+			dj.Steps = append(dj.Steps, ds)
+		}
+		out = append(out, dj)
+	}
+	// Runner identity is nice-to-have context: which host ran which job.
+	runners, err := s.Store.Runners(c.Request.Context(), user.OrgID)
+	byID := map[uuid.UUID]gin.H{}
+	if err == nil {
+		for _, r := range runners {
+			byID[r.ID] = gin.H{"id": r.ID, "name": r.Name, "hostname": r.Hostname,
+				"os": r.OS, "arch": r.Arch, "version": r.Version, "labels": r.Labels}
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"run": run, "jobs": out, "runners": byID})
+}
+
+// runStream multiplexes a whole run over one SSE channel (#376): a state
+// snapshot, job/step transition events, and interleaved log chunks tagged
+// with job_id+step. `kern runs watch` and live multi-job tails consume this
+// instead of polling each step's stream.
+func (s *Server) runStream(c *gin.Context) {
+	id, ok := s.runIDParam(c)
+	if !ok {
+		return
+	}
+	follow := c.Query("follow") != "0"
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+	flusher, _ := c.Writer.(http.Flusher)
+	send := func(event string, payload any) bool {
+		b, err := json.Marshal(payload)
+		if err != nil {
+			return false
+		}
+		c.Writer.WriteString("event: " + event + "\ndata: ")
+		c.Writer.Write(b)
+		c.Writer.WriteString("\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return true
+	}
+
+	ctx := c.Request.Context()
+	jobState := map[uuid.UUID]string{}
+	stepState := map[uuid.UUID]string{}
+	offsets := map[uuid.UUID]int64{}
+	deadline := time.Now().Add(2 * time.Hour)
+	for {
+		run, err := s.Store.Run(ctx, id)
+		if err != nil {
+			send("error", gin.H{"message": "run load failed"})
+			return
+		}
+		jobs, err := s.Store.JobsForRun(ctx, run.ID)
+		if err != nil {
+			send("error", gin.H{"message": "jobs load failed"})
+			return
+		}
+		for _, j := range jobs {
+			js := j.Status + "|" + j.Conclusion
+			if jobState[j.ID] != js {
+				jobState[j.ID] = js
+				if !send("job", gin.H{"job_id": j.ID, "name": j.Name,
+					"status": j.Status, "conclusion": j.Conclusion}) {
+					return
+				}
+			}
+			steps, err := s.Store.StepsForJob(ctx, j.ID)
+			if err != nil {
+				continue
+			}
+			for _, st := range steps {
+				ss := st.Status + "|" + st.Conclusion
+				if stepState[st.ID] != ss {
+					stepState[st.ID] = ss
+					if !send("step", gin.H{"job_id": j.ID, "step_id": st.ID,
+						"number": st.Number, "name": st.Name,
+						"status": st.Status, "conclusion": st.Conclusion}) {
+						return
+					}
+				}
+				if st.LogRef == "" {
+					continue
+				}
+				data, _, err := s.Blobs.ReadFrom(st.LogRef, offsets[st.ID], 64<<10)
+				if err == nil && len(data) > 0 {
+					if !send("log", gin.H{"job_id": j.ID, "step": st.Number,
+						"step_id": st.ID, "offset": offsets[st.ID],
+						"text": string(data)}) {
+						return
+					}
+					offsets[st.ID] += int64(len(data))
+				}
+			}
+		}
+		if run.Status == "completed" || run.Status == "cancelled" ||
+			run.Status == "failed" || !follow || time.Now().After(deadline) {
+			send("end", gin.H{"status": run.Status, "conclusion": run.Conclusion})
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(800 * time.Millisecond):
+		}
+	}
+}
+
 // StepByIDParam resolves the step id path parameter, writing an error response when invalid.
 // The step's run must belong to the caller's org — step ids are unguessable
 // but not authorization (#368).
