@@ -86,18 +86,18 @@ func TestCacheLookupAndEviction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.CacheLookup(ctx, pid, "sum-key", []string{"", "sum-"}, []string{"trusted"})
+	got, err := s.CacheLookup(ctx, pid, "sum-key", "", []string{"", "sum-"}, []string{"trusted"})
 	if err != nil || got.BlobRef != "blob-exact" {
 		t.Fatalf("exact lookup = %q err=%v, want blob-exact", got.BlobRef, err)
 	}
-	got, err = s.CacheLookup(ctx, pid, "missing", []string{"", "sum-"}, []string{"trusted"})
+	got, err = s.CacheLookup(ctx, pid, "missing", "", []string{"", "sum-"}, []string{"trusted"})
 	if err != nil || got.ID != other.ID {
 		t.Fatalf("prefix lookup = %s err=%v, want newer prefix %s", got.ID, err, other.ID)
 	}
-	if _, err := s.CacheLookup(ctx, pid, "missing", []string{""}, []string{"trusted"}); !errors.Is(err, ErrNotFound) {
+	if _, err := s.CacheLookup(ctx, pid, "missing", "", []string{""}, []string{"trusted"}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("empty prefix = %v, want not found", err)
 	}
-	if _, err := s.CacheLookup(ctx, pid, "sum-key", nil, []string{"fork"}); !errors.Is(err, ErrNotFound) {
+	if _, err := s.CacheLookup(ctx, pid, "sum-key", "", nil, []string{"fork"}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("wrong scope = %v, want not found", err)
 	}
 	if _, err := s.SaveCacheEntry(ctx, pid, "sum-key", "v1", "trusted", "blob-again", 1); !errors.Is(err, ErrExists) {

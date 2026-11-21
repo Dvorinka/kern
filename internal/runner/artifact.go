@@ -110,6 +110,7 @@ func (e *executor) artifactDownload(step StepSpec) (string, int) {
 			e.logStep(step, "KERN: extract artifact: "+err.Error())
 			return "failure", 1
 		}
+		chownTree(dir, e.execUID()) // extract ran as runner user (#369)
 		os.Remove(tmp)
 	}
 	e.logStep(step, fmt.Sprintf("KERN: downloaded %d artifact(s) into %s", len(names), dest))
@@ -166,21 +167,32 @@ func tarGz(files []artifactEntry, out string) error {
 	gw := gzip.NewWriter(fh)
 	tw := tar.NewWriter(gw)
 	for _, f := range files {
-		info, err := os.Stat(f.file)
+		// Lstat preserves symlinks — node_modules/.bin and .pnpm are
+		// symlink forests; Stat+IsRegular silently stripped them (#369).
+		info, err := os.Lstat(f.file)
 		if err != nil || info.IsDir() {
 			continue
+		}
+		var link string
+		if info.Mode()&os.ModeSymlink != 0 {
+			if link, err = os.Readlink(f.file); err != nil {
+				continue
+			}
 		}
 		rel, err := filepath.Rel(f.root, f.file)
 		if err != nil || strings.HasPrefix(rel, "..") {
 			continue
 		}
-		hdr, err := tar.FileInfoHeader(info, "")
+		hdr, err := tar.FileInfoHeader(info, link)
 		if err != nil {
 			return err
 		}
 		hdr.Name = filepath.ToSlash(rel)
 		if err := tw.WriteHeader(hdr); err != nil {
 			return err
+		}
+		if hdr.Typeflag == tar.TypeSymlink {
+			continue // header carries the link target; no body
 		}
 		src, err := os.Open(f.file)
 		if err != nil {

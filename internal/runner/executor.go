@@ -47,6 +47,20 @@ func cacheDir(workRoot string) string {
 	return filepath.Join(workRoot, "_cache")
 }
 
+// jobCacheDir picks the host dir mounted at /kern/cache. Trusted jobs share
+// the runner-level cache (toolchains, pnpm store, gradle init.d). Untrusted
+// fork/PR jobs get a per-job scratch dir instead — the shared tree contains
+// executable material (gradle init scripts, action copies, tool binaries)
+// that a poisoned write would aim at the next trusted job (#369).
+func (e *executor) jobCacheDir() string {
+	if !e.privileged() {
+		dir := filepath.Join(e.cfg.WorkRoot, e.jobID, "cache")
+		_ = os.MkdirAll(dir, 0o777)
+		return dir
+	}
+	return cacheDir(e.cfg.WorkRoot)
+}
+
 // hostCABundle is the trust store some job images do not ship.
 // It is mounted at a KERN-owned path, never at /etc/ssl/certs — a distro
 // package postinst (ca-certificates) replaces that file atomically and a
@@ -668,7 +682,7 @@ func (e *executor) startContainer(ctx context.Context) error {
 		"-v", scriptDir+":"+containerScriptDir+":ro",
 		"-v", actionsMount,
 		"-v", filepath.Join(e.cfg.WorkRoot, "_node")+":"+containerNodeRoot+":ro",
-		"-v", cacheDir(e.cfg.WorkRoot)+":"+containerCacheDir,
+		"-v", e.jobCacheDir()+":"+containerCacheDir,
 		"-v", filepath.Join(workRoot, "home")+":"+containerActionHome,
 	)
 	if !e.privileged() {

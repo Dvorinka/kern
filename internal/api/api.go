@@ -73,6 +73,13 @@ func New(cfg *config.Config, st *store.Store, orch *orchestrator.Orchestrator, b
 	s.wireCommitStatus()
 	s.Engine = s.buildRouter()
 	s.sweepGHCacheUploads()
+	go func() {
+		// Running only at startup leaked handles and /tmp dirs for every
+		// abandoned upload in long-lived processes (#369).
+		for range time.Tick(10 * time.Minute) {
+			s.sweepGHCacheUploads()
+		}
+	}()
 	return s
 }
 
