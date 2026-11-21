@@ -528,6 +528,12 @@ func (e *executor) pull(ctx context.Context) error {
 	if _, err := exec.LookPath("docker"); err != nil {
 		return fmt.Errorf("docker binary not found on runner host")
 	}
+	// Digest-pinned refs are immutable — a local copy is definitionally
+	// fresh, so skip the registry round-trip entirely (#372). Mutable
+	// tags still pull to pick up repushed images.
+	if strings.Contains(e.claim.Job.Image, "@sha256:") && e.imageExists(ctx, e.claim.Job.Image) {
+		return nil
+	}
 	if err := e.docker(ctx, "pull", "-q", e.claim.Job.Image); err != nil {
 		// A registry hiccup or an unauthenticated private ref must not kill a
 		// job whose image is already on the host; the daemon resolves the local
@@ -564,12 +570,22 @@ func (e *executor) imageEnvPath(ctx context.Context) string {
 	return ""
 }
 
+// imageHomeCache memoizes imageUserHome across jobs on this runner —
+// an image's uid-1000 home is fixed per tag fetch, and the throwaway
+// `docker run --rm` probe cost a container lifecycle on every job (#372).
+// Keyed by image ref; a repushed tag re-probes on runner restart, an
+// acceptable staleness bound.
+var imageHomeCache sync.Map // image ref -> uid-1000 home ("" = none)
+
 // imageUserHome reports the home directory of uid 1000 in the job image's
 // /etc/passwd — what getpwuid(3) returns inside the container. JVM tools
 // (Gradle, Maven, Java itself) resolve user.home this way and ignore $HOME.
 // Returns "" when the image has no uid-1000 entry or the probe fails; the
 // caller then skips the extra home mount.
 func (e *executor) imageUserHome(ctx context.Context) string {
+	if home, ok := imageHomeCache.Load(e.claim.Job.Image); ok {
+		return home.(string)
+	}
 	out, err := exec.CommandContext(ctx, "docker", "run", "--rm", "--network", "none",
 		"--entrypoint", "sh", e.claim.Job.Image, "-c",
 		`awk -F: '$3==1000 {print $6; exit}' /etc/passwd 2>/dev/null || true`).Output()
@@ -581,8 +597,9 @@ func (e *executor) imageUserHome(ctx context.Context) string {
 	// a missing entry) skips the extra mount rather than shadowing system
 	// directories in the job container.
 	if !strings.HasPrefix(home, "/home/") || strings.ContainsAny(home, " \t\n\r") {
-		return ""
+		home = ""
 	}
+	imageHomeCache.Store(e.claim.Job.Image, home)
 	return home
 }
 
@@ -809,6 +826,18 @@ func (e *executor) jobEnv() map[string]string {
 		// host executors. Pin the cache to the shared uuid-free _cache
 		// dir; it doubles as a warm cross-job store.
 		"npm_config_cache": e.cachePath() + "/npm",
+		// Language toolchains default to $HOME — which is the per-job
+		// ephemeral actionHome — so without these every job rebuilds
+		// cold (#372). Dir names match the gc.go eviction units so the
+		// cache sweeper already bounds them.
+		"GOMODCACHE":          e.cachePath() + "/gomod",
+		"GOCACHE":             e.cachePath() + "/gocache",
+		"GOLANGCI_LINT_CACHE": e.cachePath() + "/golangci-lint",
+		"PIP_CACHE_DIR":       e.cachePath() + "/pip",
+		"UV_CACHE_DIR":        e.cachePath() + "/uv",
+		"YARN_CACHE_FOLDER":   e.cachePath() + "/yarn",
+		"RUSTUP_HOME":         e.cachePath() + "/rustup",
+		"SCCACHE_DIR":         e.cachePath() + "/sccache",
 		// The provisioned node bin dir leads PATH so its bundled yarn,
 		// yarnpkg and corepack shims resolve inside JS actions too —
 		// setup-node@v4 runs `yarn --version` on seeing a lockfile and
