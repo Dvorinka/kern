@@ -141,15 +141,15 @@ func TestCacheLookupAndEviction(t *testing.T) {
 func TestWebhookDeliveryIsIdempotent(t *testing.T) {
 	s, ctx := testStore(t)
 	id := "delivery-" + uuid.NewString()
-	fresh, err := s.SaveWebhookDelivery(ctx, "github", id, "push", []byte(`{"ok":true}`))
+	fresh, err := s.SaveWebhookDelivery(ctx, "github", id, "push", []byte(`{"ok":true}`), nil)
 	if err != nil || !fresh {
 		t.Fatalf("first save fresh=%v err=%v", fresh, err)
 	}
-	again, err := s.SaveWebhookDelivery(ctx, "github", id, "push", []byte(`{"ok":true}`))
+	again, err := s.SaveWebhookDelivery(ctx, "github", id, "push", []byte(`{"ok":true}`), nil)
 	if err != nil || again {
 		t.Fatalf("duplicate fresh=%v err=%v, want false", again, err)
 	}
-	if _, err := s.SaveWebhookDelivery(ctx, "github", id+"-bad", "push", []byte(`not-json`)); !errors.Is(err, errInvalidJSON) {
+	if _, err := s.SaveWebhookDelivery(ctx, "github", id+"-bad", "push", []byte(`not-json`), nil); !errors.Is(err, errInvalidJSON) {
 		t.Fatalf("invalid payload err = %v", err)
 	}
 }

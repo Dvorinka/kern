@@ -57,6 +57,7 @@ func testStore(t testing.TB) (*Store, context.Context) {
 	for _, table := range []string{
 		"steps", "job_leases", "jobs", "artifacts", "cache_entries",
 		"workflow_runs", "workflow_versions", "workflows", "runners",
+		"webhook_deliveries",
 		// Membership rows are reset too: role mutations in one test (e.g.
 		// demoting the bootstrap owner) must not leak into the next, and
 		// Bootstrap's ON CONFLICT DO NOTHING cannot restore a changed role.
@@ -386,7 +387,8 @@ func TestEnvironmentApprovalGate(t *testing.T) {
 	if err := s.pool.QueryRow(ctx, `SELECT id FROM users LIMIT 1`).Scan(&userID); err != nil {
 		t.Fatalf("user: %v", err)
 	}
-	dep, released, err := s.ApproveDeployment(ctx, job.ID, userID, "it@kern.local", "member")
+	org, _ := s.FirstOrg(ctx)
+	dep, released, err := s.ApproveDeployment(ctx, org.ID, job.ID, userID, "it@kern.local", "member")
 	if err != nil {
 		t.Fatalf("approve: %v", err)
 	}
@@ -400,7 +402,7 @@ func TestEnvironmentApprovalGate(t *testing.T) {
 	if j.Status != "queued" {
 		t.Fatalf("job = %s, want queued", j.Status)
 	}
-	if _, _, err := s.ApproveDeployment(ctx, job.ID, userID, "it@kern.local", "member"); err == nil {
+	if _, _, err := s.ApproveDeployment(ctx, org.ID, job.ID, userID, "it@kern.local", "member"); err == nil {
 		t.Fatal("double approval should fail")
 	}
 	claimed, err := s.ClaimJob(ctx, r.ID, time.Minute)
@@ -442,7 +444,8 @@ func TestDeploymentReject(t *testing.T) {
 	if err := s.pool.QueryRow(ctx, `SELECT id FROM users LIMIT 1`).Scan(&userID); err != nil {
 		t.Fatalf("user: %v", err)
 	}
-	dep, err := s.RejectDeployment(ctx, job.ID, userID, "member")
+	org, _ := s.FirstOrg(ctx)
+	dep, err := s.RejectDeployment(ctx, org.ID, job.ID, userID, "member")
 	if err != nil {
 		t.Fatalf("reject: %v", err)
 	}
@@ -468,6 +471,7 @@ func TestEnvironmentRules(t *testing.T) {
 		other, "other-"+other.String()[:8]+"@kern.local"); err != nil {
 		t.Fatalf("other user: %v", err)
 	}
+	org, _ := s.FirstOrg(ctx)
 
 	env, err := s.PutEnvironment(ctx, pid, "prod", EnvironmentInput{
 		Protected: true, RequiredApprovals: 1, Reviewers: []string{userID.String()},
@@ -531,10 +535,10 @@ func TestEnvironmentRules(t *testing.T) {
 	if err := s.SetJobWaitingApproval(ctx, job.ID); err != nil {
 		t.Fatalf("park: %v", err)
 	}
-	if _, _, err := s.ApproveDeployment(ctx, job.ID, other, "other@kern.local", "member"); !errors.Is(err, ErrNotReviewer) {
+	if _, _, err := s.ApproveDeployment(ctx, org.ID, job.ID, other, "other@kern.local", "member"); !errors.Is(err, ErrNotReviewer) {
 		t.Fatalf("outsider approve = %v, want ErrNotReviewer", err)
 	}
-	if _, released, err := s.ApproveDeployment(ctx, job.ID, userID, "it@kern.local", "member"); err != nil || released {
+	if _, released, err := s.ApproveDeployment(ctx, org.ID, job.ID, userID, "it@kern.local", "member"); err != nil || released {
 		t.Fatalf("approve during wait: released=%v err=%v", released, err)
 	}
 	if n, err := s.ReleaseDueDeployments(ctx); err != nil || n != 0 {

@@ -149,6 +149,9 @@ type Run struct {
 	WorkflowPath string `json:"workflow_path"`
 	ProjectSlug  string `json:"project_slug"`
 	ProjectName  string `json:"project_name"`
+	// OrgID is the owning org, joined from projects. Internal only —
+	// handlers compare it against the caller's org for tenant isolation.
+	OrgID uuid.UUID `json:"-"`
 }
 
 type Job struct {

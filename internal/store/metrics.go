@@ -5,30 +5,37 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
-// Overview computes dashboard aggregates from live data only.
-func (s *Store) Overview(ctx context.Context) (Overview, error) {
+// Overview computes dashboard aggregates from live data only, scoped to one
+// org — cross-tenant counts must never leak into another org's dashboard.
+func (s *Store) Overview(ctx context.Context, orgID uuid.UUID) (Overview, error) {
 	var o Overview
 	err := s.pool.QueryRow(ctx, `
 		SELECT
-			(SELECT count(*) FROM workflow_runs),
-			(SELECT count(*) FROM workflow_runs WHERE conclusion = 'success'),
-			(SELECT count(*) FROM workflow_runs WHERE conclusion = 'failure'),
-			(SELECT count(*) FROM workflow_runs WHERE status IN ('awaiting_approval', 'queued', 'in_progress')),
-			(SELECT count(*) FROM jobs WHERE status = 'queued'),
-			(SELECT count(*) FROM jobs WHERE status = 'in_progress'),
-			(SELECT count(*) FROM runners WHERE status = 'online'),
-			(SELECT count(*) FROM runners),
-			COALESCE((SELECT avg(GREATEST(0, extract(epoch FROM started_at - queued_at)))
-				FROM jobs WHERE status = 'completed' AND started_at IS NOT NULL
-				AND queued_at > now() - interval '24 hours'), 0),
-			COALESCE((SELECT avg(extract(epoch FROM completed_at - started_at))
-				FROM workflow_runs WHERE completed_at IS NOT NULL AND started_at IS NOT NULL), 0),
-			COALESCE((SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY GREATEST(0, extract(epoch FROM started_at - queued_at)))
-				FROM jobs WHERE status = 'completed' AND started_at IS NOT NULL
-				AND queued_at > now() - interval '24 hours'), 0),
-			(SELECT max(created_at) FROM workflow_runs)`).
+			(SELECT count(*) FROM workflow_runs r JOIN projects p ON p.id = r.project_id WHERE p.org_id = $1),
+			(SELECT count(*) FROM workflow_runs r JOIN projects p ON p.id = r.project_id WHERE p.org_id = $1 AND r.conclusion = 'success'),
+			(SELECT count(*) FROM workflow_runs r JOIN projects p ON p.id = r.project_id WHERE p.org_id = $1 AND r.conclusion = 'failure'),
+			(SELECT count(*) FROM workflow_runs r JOIN projects p ON p.id = r.project_id WHERE p.org_id = $1 AND r.status IN ('awaiting_approval', 'queued', 'in_progress')),
+			(SELECT count(*) FROM jobs j JOIN workflow_runs r ON r.id = j.run_id JOIN projects p ON p.id = r.project_id WHERE p.org_id = $1 AND j.status = 'queued'),
+			(SELECT count(*) FROM jobs j JOIN workflow_runs r ON r.id = j.run_id JOIN projects p ON p.id = r.project_id WHERE p.org_id = $1 AND j.status = 'in_progress'),
+			(SELECT count(*) FROM runners WHERE org_id = $1 AND status = 'online'),
+			(SELECT count(*) FROM runners WHERE org_id = $1),
+			COALESCE((SELECT avg(GREATEST(0, extract(epoch FROM j.started_at - j.queued_at)))
+				FROM jobs j JOIN workflow_runs r ON r.id = j.run_id JOIN projects p ON p.id = r.project_id
+				WHERE p.org_id = $1 AND j.status = 'completed' AND j.started_at IS NOT NULL
+				AND j.queued_at > now() - interval '24 hours'), 0),
+			COALESCE((SELECT avg(extract(epoch FROM r.completed_at - r.started_at))
+				FROM workflow_runs r JOIN projects p ON p.id = r.project_id
+				WHERE p.org_id = $1 AND r.completed_at IS NOT NULL AND r.started_at IS NOT NULL), 0),
+			COALESCE((SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY GREATEST(0, extract(epoch FROM j.started_at - j.queued_at)))
+				FROM jobs j JOIN workflow_runs r ON r.id = j.run_id JOIN projects p ON p.id = r.project_id
+				WHERE p.org_id = $1 AND j.status = 'completed' AND j.started_at IS NOT NULL
+				AND j.queued_at > now() - interval '24 hours'), 0),
+			(SELECT max(r.created_at) FROM workflow_runs r JOIN projects p ON p.id = r.project_id WHERE p.org_id = $1)`,
+		orgID).
 		Scan(&o.RunsTotal, &o.RunsSuccess, &o.RunsFailure, &o.RunsActive, &o.JobsQueued,
 			&o.JobsRunning, &o.RunnersOnline, &o.RunnersTotal, &o.AvgQueueSeconds,
 			&o.AvgRunSeconds, &o.P95QueueSeconds, &o.LastRunAt)
@@ -36,9 +43,10 @@ func (s *Store) Overview(ctx context.Context) (Overview, error) {
 }
 
 // CacheStats reports cache hit information once cache actions exist.
-func (s *Store) CacheStats(ctx context.Context) (entries int64, bytes int64, err error) {
+func (s *Store) CacheStats(ctx context.Context, orgID uuid.UUID) (entries int64, bytes int64, err error) {
 	err = s.pool.QueryRow(ctx, `
-		SELECT count(*), COALESCE(sum(size_bytes), 0) FROM cache_entries`).Scan(&entries, &bytes)
+		SELECT count(*), COALESCE(sum(c.size_bytes), 0) FROM cache_entries c
+		JOIN projects p ON p.id = c.project_id WHERE p.org_id = $1`, orgID).Scan(&entries, &bytes)
 	return entries, bytes, err
 }
 
@@ -64,28 +72,33 @@ var (
 
 // QueueWaitHistogram buckets job queue waits over the last 24h. started_at is
 // set at claim time, so in-progress jobs already contribute their final wait.
-func (s *Store) QueueWaitHistogram(ctx context.Context) (DurationHistogram, error) {
+func (s *Store) QueueWaitHistogram(ctx context.Context, orgID uuid.UUID) (DurationHistogram, error) {
 	return s.durationHistogram(ctx, `
-		SELECT GREATEST(0, extract(epoch FROM started_at - queued_at))
-		FROM jobs
-		WHERE started_at IS NOT NULL AND queued_at > now() - interval '24 hours'`,
-		queueWaitEdges)
+		SELECT GREATEST(0, extract(epoch FROM j.started_at - j.queued_at))
+		FROM jobs j
+		JOIN workflow_runs r ON r.id = j.run_id
+		JOIN projects p ON p.id = r.project_id
+		WHERE p.org_id = $1 AND j.started_at IS NOT NULL AND j.queued_at > now() - interval '24 hours'`,
+		queueWaitEdges, orgID)
 }
 
 // StepDurationHistogram buckets completed step durations over the last 24h.
-func (s *Store) StepDurationHistogram(ctx context.Context) (DurationHistogram, error) {
+func (s *Store) StepDurationHistogram(ctx context.Context, orgID uuid.UUID) (DurationHistogram, error) {
 	return s.durationHistogram(ctx, `
-		SELECT extract(epoch FROM completed_at - started_at)
-		FROM steps
-		WHERE started_at IS NOT NULL AND completed_at IS NOT NULL
-		  AND completed_at > now() - interval '24 hours'`,
-		stepDurationEdges)
+		SELECT extract(epoch FROM st.completed_at - st.started_at)
+		FROM steps st
+		JOIN jobs j ON j.id = st.job_id
+		JOIN workflow_runs r ON r.id = j.run_id
+		JOIN projects p ON p.id = r.project_id
+		WHERE p.org_id = $1 AND st.started_at IS NOT NULL AND st.completed_at IS NOT NULL
+		  AND st.completed_at > now() - interval '24 hours'`,
+		stepDurationEdges, orgID)
 }
 
 // durationHistogram runs rowsSQL (a single numeric-seconds column) and folds
 // it into per-bucket counts. Edges are compile-time constants — safe to
-// interpolate.
-func (s *Store) durationHistogram(ctx context.Context, rowsSQL string, edges []float64) (DurationHistogram, error) {
+// interpolate. rowsSQL must reference $1 as the org filter.
+func (s *Store) durationHistogram(ctx context.Context, rowsSQL string, edges []float64, args ...any) (DurationHistogram, error) {
 	var b strings.Builder
 	b.WriteString("SELECT ")
 	for i, e := range edges {
@@ -102,7 +115,7 @@ func (s *Store) durationHistogram(ctx context.Context, rowsSQL string, edges []f
 		edges[len(edges)-1], rowsSQL)
 
 	out := DurationHistogram{Buckets: edges, Counts: make([]uint64, len(edges)+1)}
-	row := s.pool.QueryRow(ctx, b.String())
+	row := s.pool.QueryRow(ctx, b.String(), args...)
 	dest := make([]any, 0, len(edges)+3)
 	for range edges {
 		dest = append(dest, &out.Counts[len(dest)])
@@ -130,12 +143,13 @@ type RunnerUtilizationRow struct {
 // RunnerUtilization lists every runner with its heartbeat metrics and live
 // job count. Runners that never reported metrics still appear (ActiveJobs
 // only) so fleet size is visible before the first heartbeat lands.
-func (s *Store) RunnerUtilization(ctx context.Context) ([]RunnerUtilizationRow, error) {
+func (s *Store) RunnerUtilization(ctx context.Context, orgID uuid.UUID) ([]RunnerUtilizationRow, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT o.slug, r.name, r.cpu_percent, r.mem_used_bytes, r.disk_free_bytes,
 		       (SELECT count(*) FROM jobs j WHERE j.runner_id = r.id AND j.status = 'in_progress')
 		FROM runners r JOIN orgs o ON o.id = r.org_id
-		ORDER BY o.slug, r.name`)
+		WHERE r.org_id = $1
+		ORDER BY o.slug, r.name`, orgID)
 	if err != nil {
 		return nil, err
 	}
@@ -152,12 +166,12 @@ func (s *Store) RunnerUtilization(ctx context.Context) ([]RunnerUtilizationRow, 
 }
 
 // RecentFailures lists failing runs for the overview panel.
-func (s *Store) RecentFailures(ctx context.Context, limit int) ([]Run, error) {
+func (s *Store) RecentFailures(ctx context.Context, orgID uuid.UUID, limit int) ([]Run, error) {
 	limit, _ = page(limit, 0)
 	rows, err := s.pool.Query(ctx, runSelect+`
-		WHERE r.conclusion = 'failure'
+		WHERE r.conclusion = 'failure' AND p.org_id = $2
 		ORDER BY r.created_at DESC
-		LIMIT $1`, limit)
+		LIMIT $1`, limit, orgID)
 	if err != nil {
 		return nil, err
 	}
@@ -174,12 +188,13 @@ func (s *Store) RecentFailures(ctx context.Context, limit int) ([]Run, error) {
 }
 
 // QueueSeries returns per-minute run counts for the last hour.
-func (s *Store) QueueSeries(ctx context.Context) ([]TimeSeriesPoint, error) {
+func (s *Store) QueueSeries(ctx context.Context, orgID uuid.UUID) ([]TimeSeriesPoint, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT date_trunc('minute', created_at) AS bucket, count(*)
-		FROM workflow_runs
-		WHERE created_at > now() - interval '1 hour'
-		GROUP BY bucket ORDER BY bucket`)
+		SELECT date_trunc('minute', r.created_at) AS bucket, count(*)
+		FROM workflow_runs r
+		JOIN projects p ON p.id = r.project_id
+		WHERE p.org_id = $1 AND r.created_at > now() - interval '1 hour'
+		GROUP BY bucket ORDER BY bucket`, orgID)
 	if err != nil {
 		return nil, err
 	}

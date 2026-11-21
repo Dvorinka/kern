@@ -264,7 +264,7 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 		projects, err = s.Store.Projects(ctx, user.OrgID)
 		out = projects
 	case "kern_list_runs":
-		f := store.RunFilter{Status: mcpArgStringOr(params, "status"), Limit: mcpArgInt(params, "limit", 20)}
+		f := store.RunFilter{OrgID: user.OrgID, Status: mcpArgStringOr(params, "status"), Limit: mcpArgInt(params, "limit", 20)}
 		if slug := mcpArgStringOr(params, "project"); slug != "" {
 			var p store.Project
 			p, err = s.Store.Project(ctx, user.OrgID, slug)
@@ -285,6 +285,9 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 		}
 		var run store.Run
 		run, err = s.Store.Run(ctx, id)
+		if err == nil && run.OrgID != user.OrgID {
+			err = fmt.Errorf("run not found")
+		}
 		if err == nil {
 			var jobs []store.Job
 			jobs, err = s.Store.JobsForRun(ctx, run.ID)
@@ -307,9 +310,21 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 		}
 		n := mcpArgInt(params, "step", 0)
 		tail := mcpArgInt(params, "tail", 8192)
+		// The job must belong to the caller's org before its log is read.
+		var runID uuid.UUID
+		runID, _, err = s.Store.JobRunID(ctx, jobID)
+		if err == nil {
+			var run store.Run
+			run, err = s.Store.Run(ctx, runID)
+			if err == nil && run.OrgID != user.OrgID {
+				err = fmt.Errorf("job not found")
+			}
+		}
 		var ref string
 		var size int64
-		ref, size, err = s.Store.StepLogRef(ctx, jobID, n)
+		if err == nil {
+			ref, size, err = s.Store.StepLogRef(ctx, jobID, n)
+		}
 		if err == nil && ref == "" {
 			err = fmt.Errorf("step has no log")
 		}
@@ -450,6 +465,9 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			break
 		}
 		orig, rerr := s.Store.Run(ctx, id)
+		if rerr == nil && orig.OrgID != user.OrgID {
+			rerr = fmt.Errorf("run not found")
+		}
 		if rerr != nil {
 			err = rerr
 			break
@@ -555,6 +573,15 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 		id, perr := uuid.Parse(mcpArgStringOr(params, "run_id"))
 		if perr != nil {
 			err = fmt.Errorf("run_id must be a UUID")
+			break
+		}
+		// Tenant check before any mutation: a foreign run id must look
+		// identical to a missing one (#368).
+		if r, rerr := s.Store.Run(ctx, id); rerr != nil {
+			err = rerr
+			break
+		} else if r.OrgID != user.OrgID {
+			err = fmt.Errorf("run not found")
 			break
 		}
 		if call.Name == "kern_approve_run" {
