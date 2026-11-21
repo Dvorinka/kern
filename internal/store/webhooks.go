@@ -27,6 +27,45 @@ func (s *Store) SaveWebhookDelivery(ctx context.Context, provider, deliveryID, e
 	return tag.RowsAffected() == 1, nil
 }
 
+// WebhookTask is a claimed-but-unprocessed github delivery.
+type WebhookTask struct {
+	DeliveryID string
+	Event      string
+	Payload    []byte
+}
+
+// ClaimStaleGithubDeliveries atomically marks stuck deliveries 'processing'
+// and returns them. FOR UPDATE SKIP LOCKED keeps HA replicas from claiming
+// the same row; rows already 'processing' for over five minutes are reclaimed
+// in case the previous owner died mid-flight.
+func (s *Store) ClaimStaleGithubDeliveries(ctx context.Context, limit int) ([]WebhookTask, error) {
+	rows, err := s.pool.Query(ctx, `
+		UPDATE webhook_deliveries SET status = 'processing'
+		WHERE id IN (
+			SELECT id FROM webhook_deliveries
+			WHERE provider = 'github' AND processed_at IS NULL
+			  AND received_at < now() - interval '30 seconds'
+			  AND (status <> 'processing' OR received_at < now() - interval '5 minutes')
+			ORDER BY received_at
+			LIMIT $1
+			FOR UPDATE SKIP LOCKED
+		)
+		RETURNING delivery_id, event, payload`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []WebhookTask
+	for rows.Next() {
+		var t WebhookTask
+		if err := rows.Scan(&t.DeliveryID, &t.Event, &t.Payload); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) MarkWebhookProcessed(ctx context.Context, deliveryID, status, errMsg string) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE webhook_deliveries SET status = $2, error = $3, processed_at = now()

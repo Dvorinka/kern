@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -52,22 +51,20 @@ func (s *Store) CacheLookup(ctx context.Context, projectID uuid.UUID, key string
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return CacheEntry{}, err
 	}
-	for _, p := range prefixes {
-		if strings.TrimSpace(p) == "" {
-			continue
-		}
-		e, err = scanCacheEntry(s.pool.QueryRow(ctx,
-			`SELECT `+cacheCols+` FROM cache_entries
-			 WHERE project_id = $1 AND starts_with(key, $2) AND scope = ANY($3)
-			 ORDER BY created_at DESC LIMIT 1`, projectID, p, scopes))
-		if err == nil {
-			return e, nil
-		}
-		if !errors.Is(err, pgx.ErrNoRows) {
-			return CacheEntry{}, err
-		}
+	// One query for all restore prefixes: the lowest ordinal prefix with a hit
+	// wins, newest entry within it — identical to the prior per-prefix loop
+	// but without the per-prefix round trip (#374).
+	e, err = scanCacheEntry(s.pool.QueryRow(ctx,
+		`SELECT `+cacheCols+` FROM (
+			SELECT ce.*, p.ord FROM cache_entries ce
+			JOIN unnest($2::text[]) WITH ORDINALITY p(prefix, ord)
+			  ON starts_with(ce.key, p.prefix) AND btrim(p.prefix) <> ''
+			WHERE ce.project_id = $1 AND ce.scope = ANY($3)
+		) t ORDER BY ord, created_at DESC LIMIT 1`, projectID, prefixes, scopes))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return CacheEntry{}, ErrNotFound
 	}
-	return CacheEntry{}, ErrNotFound
+	return e, err
 }
 
 // SaveCacheEntry records a saved archive. Caches are immutable: an existing

@@ -564,6 +564,18 @@ func (s *Server) uploadStepSummary(c *gin.Context) {
 // maskerForJob collects every secret value that could appear in this job's
 // logs — project/org secrets plus the job's environment-scoped secrets.
 func (s *Server) maskerForJob(c *gin.Context, job store.Job) *secrets.Masker {
+	if v, ok := s.maskers.Load(job.ID); ok {
+		if e := v.(maskerCacheEntry); time.Now().Before(e.exp) {
+			return e.m
+		}
+		s.maskers.Delete(job.ID)
+	}
+	m := s.buildJobMasker(c, job)
+	s.maskers.Store(job.ID, maskerCacheEntry{m: m, exp: time.Now().Add(time.Minute)})
+	return m
+}
+
+func (s *Server) buildJobMasker(c *gin.Context, job store.Job) *secrets.Masker {
 	run, err := s.Store.Run(c.Request.Context(), job.RunID)
 	if err != nil {
 		return secrets.NewMasker(nil)
@@ -680,6 +692,7 @@ func (s *Server) finishJob(c *gin.Context) {
 		return
 	}
 	// Job errors surface in the dashboard and status payloads; mask like logs.
+	defer s.maskers.Delete(job.ID)
 	req.Error = s.maskerForJob(c, job).Mask(req.Error)
 	// Failed-step kinds feed both the transient-requeue check and the
 	// job's rolled-up classification — fetch once.
@@ -868,12 +881,7 @@ func (s *Server) cancelCheck(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
-	current, err := s.Store.Job(c.Request.Context(), job.ID)
-	if err != nil {
-		s.internalError(c, err)
-		return
-	}
-	cancelled := current.Status == "cancelled" || runStatus == "cancelled" ||
+	cancelled := job.Status == "cancelled" || runStatus == "cancelled" ||
 		(runStatus == "completed" && conclusion == "cancelled")
 	c.JSON(http.StatusOK, gin.H{"cancelled": cancelled})
 }

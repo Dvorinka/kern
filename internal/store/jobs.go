@@ -360,11 +360,17 @@ func (s *Store) SetStepSummary(ctx context.Context, jobID uuid.UUID, number int,
 }
 
 // AppendStepLog records a log chunk size and reference. Chunks themselves live in blob storage.
+// A pg_notify wakes live log followers so they do not have to poll (#374).
 func (s *Store) AppendStepLog(ctx context.Context, jobID uuid.UUID, number int, ref string, size int) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE steps SET log_ref = $3, log_bytes = log_bytes + $4
 		WHERE job_id = $1 AND number = $2`, jobID, number, ref, size)
-	return err
+	if err != nil {
+		return err
+	}
+	_, _ = s.pool.Exec(ctx, `SELECT pg_notify('kern_step_log', $1)`,
+		fmt.Sprintf("%s:%d", jobID, number))
+	return nil
 }
 
 func (s *Store) StepLogRef(ctx context.Context, jobID uuid.UUID, number int) (string, int64, error) {

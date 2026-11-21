@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -236,3 +237,81 @@ func (s *Server) finishNotify(ctx context.Context, d store.NotifyDelivery, cause
 
 // notifyHTTPClient is the send path's client; a var so tests can stub it.
 var notifyHTTPClient = &http.Client{Timeout: 10 * time.Second}
+
+// LISTEN/NOTIFY fan-out for live followers. One dedicated connection LISTENs
+// on kern_step_log; subscribers get a coalesced wake per step instead of
+// polling the store every few hundred milliseconds (#374). Delivery is
+// best-effort — subscribers keep a slow fallback tick, so a dead listener
+// degrades to polling rather than stalling.
+
+const stepLogChannel = "kern_step_log"
+
+// logBus fans notifications out to in-process subscribers keyed by
+// "jobID:number".
+type logBus struct {
+	mu   sync.Mutex
+	subs map[string]map[chan struct{}]struct{}
+}
+
+func newLogBus() *logBus {
+	return &logBus{subs: map[string]map[chan struct{}]struct{}{}}
+}
+
+func (b *logBus) subscribe(key string) (<-chan struct{}, func()) {
+	ch := make(chan struct{}, 1)
+	b.mu.Lock()
+	if b.subs[key] == nil {
+		b.subs[key] = map[chan struct{}]struct{}{}
+	}
+	b.subs[key][ch] = struct{}{}
+	b.mu.Unlock()
+	return ch, func() {
+		b.mu.Lock()
+		delete(b.subs[key], ch)
+		if len(b.subs[key]) == 0 {
+			delete(b.subs, key)
+		}
+		b.mu.Unlock()
+	}
+}
+
+func (b *logBus) publish(key string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for ch := range b.subs[key] {
+		select {
+		case ch <- struct{}{}:
+		default: // coalesce: one pending wake is enough
+		}
+	}
+}
+
+// listenStepLog holds a LISTEN connection and republishes payloads. Runs for
+// the server's lifetime; reconnects after 5s on any failure.
+func (s *Server) listenStepLog() {
+	for {
+		if err := s.listenStepLogOnce(); err != nil {
+			s.Log.Warn("step log listener dropped; retrying", zap.Error(err))
+		}
+		time.Sleep(5 * time.Second)
+	}
+}
+
+func (s *Server) listenStepLogOnce() error {
+	ctx := context.Background()
+	conn, err := s.Store.Pool().Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+	if _, err := conn.Exec(ctx, "LISTEN "+stepLogChannel); err != nil {
+		return err
+	}
+	for {
+		n, err := conn.Conn().WaitForNotification(ctx)
+		if err != nil {
+			return err
+		}
+		s.stepLogBus.publish(n.Payload)
+	}
+}
