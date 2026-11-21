@@ -56,6 +56,9 @@ type Server struct {
 	// processed off-request so GitHub's 10s ack deadline cannot cancel a
 	// delivery mid-flight (#374); the sweeper reclaims anything dropped.
 	webhookQueue chan webhookTask
+
+	// stepLogBus fans kern_step_log notifications out to SSE followers (#374).
+	stepLogBus *logBus
 }
 
 type webhookTask struct {
@@ -89,12 +92,14 @@ func New(cfg *config.Config, st *store.Store, orch *orchestrator.Orchestrator, b
 		ghApps: make(map[uuid.UUID]*github.App), ghRepoApp: make(map[string]uuid.UUID),
 		metrics: newKernMetrics(), ghCache: newGHCacheState(),
 		webhookQueue: make(chan webhookTask, 128),
+		stepLogBus:   newLogBus(),
 	}
 	s.wireCommitStatus()
 	s.Engine = s.buildRouter()
 	s.sweepGHCacheUploads()
 	go s.webhookWorker()
 	go s.sweepStaleWebhooks()
+	go s.listenStepLog()
 	return s
 }
 

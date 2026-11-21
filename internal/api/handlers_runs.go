@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -463,6 +464,10 @@ func (s *Server) stepLogStream(c *gin.Context) {
 		return true
 	}
 
+	// LISTEN/NOTIFY wakes the loop on each appended chunk; the 30s fallback
+	// covers notification loss and step status changes (#374).
+	wake, unsubscribe := s.stepLogBus.subscribe(fmt.Sprintf("%s:%d", step.JobID, step.Number))
+	defer unsubscribe()
 	deadline := time.Now().Add(2 * time.Hour)
 	for {
 		if step.LogRef != "" {
@@ -496,7 +501,8 @@ func (s *Server) stepLogStream(c *gin.Context) {
 		select {
 		case <-c.Request.Context().Done():
 			return
-		case <-time.After(400 * time.Millisecond):
+		case <-wake:
+		case <-time.After(30 * time.Second):
 		}
 	}
 }
