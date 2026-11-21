@@ -605,7 +605,7 @@ func (s *Server) stepLogStream(c *gin.Context) {
 // blob storage, and a runner identity map for jobs that claimed one.
 func (s *Server) runDiagnose(c *gin.Context) {
 	user, _ := currentUser(c)
-	id, ok := s.runIDParam(c)
+	id, ok := s.runIDParam(c, user.OrgID)
 	if !ok {
 		return
 	}
