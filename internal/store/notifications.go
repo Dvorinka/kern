@@ -144,14 +144,15 @@ func (s *Store) RecentFailedRuns(ctx context.Context, orgID uuid.UUID, since tim
 
 // WebhookFailures lists deliveries that errored inside the trailing window —
 // the push that never became a run.
-func (s *Store) WebhookFailures(ctx context.Context, since time.Duration, limit int) ([]Notification, error) {
+func (s *Store) WebhookFailures(ctx context.Context, orgID uuid.UUID, since time.Duration, limit int) ([]Notification, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT d.id, d.event, d.error, d.received_at
 		FROM webhook_deliveries d
-		WHERE d.status = 'failed'
-		  AND d.received_at >= now() - $1::interval
+		WHERE d.org_id = $1
+		  AND d.status = 'failed'
+		  AND d.received_at >= now() - $2::interval
 		ORDER BY d.received_at DESC
-		LIMIT $2`, fmt.Sprintf("%d seconds", int64(since.Seconds())), limit)
+		LIMIT $3`, orgID, fmt.Sprintf("%d seconds", int64(since.Seconds())), limit)
 	if err != nil {
 		return nil, fmt.Errorf("webhook failures: %w", err)
 	}
@@ -176,13 +177,14 @@ func (s *Store) WebhookFailures(ctx context.Context, since time.Duration, limit 
 
 // WebhookFailureSummary counts failed deliveries in the window and keeps the
 // most recent error — the "push never became a run" signal for the overview.
-func (s *Store) WebhookFailureSummary(ctx context.Context, since time.Duration) (count int64, lastError string, err error) {
+func (s *Store) WebhookFailureSummary(ctx context.Context, orgID uuid.UUID, since time.Duration) (count int64, lastError string, err error) {
 	err = s.pool.QueryRow(ctx, `
 		SELECT count(*), coalesce(max(error) FILTER (WHERE error <> ''), '')
 		FROM webhook_deliveries d
-		WHERE d.status = 'failed'
-		  AND d.received_at >= now() - $1::interval`,
-		fmt.Sprintf("%d seconds", int64(since.Seconds()))).Scan(&count, &lastError)
+		WHERE d.org_id = $1
+		  AND d.status = 'failed'
+		  AND d.received_at >= now() - $2::interval`,
+		orgID, fmt.Sprintf("%d seconds", int64(since.Seconds()))).Scan(&count, &lastError)
 	return count, lastError, err
 }
 

@@ -233,7 +233,7 @@ const runSelectCols = `
 	r.id, r.project_id, r.workflow_id, r.workflow_version_id, r.run_number, r.event,
 	r.ref, r.sha, r.commit_message, r.actor, r.status, r.conclusion, r.trust_level,
 	r.source, r.concurrency_group, r.started_at, r.completed_at, r.created_at, r.cleared_at,
-	w.name, w.path, p.slug, p.name,
+	w.name, w.path, p.slug, p.name, p.org_id,
 	COALESCE((SELECT j.classification FROM jobs j
 	 WHERE j.run_id = r.id AND j.classification <> ''
 	 ORDER BY j.queued_at, j.key LIMIT 1), '')`
@@ -250,7 +250,7 @@ func scanRun(row pgx.Row) (Run, error) {
 		&r.Event, &r.Ref, &r.SHA, &r.CommitMessage, &r.Actor, &r.Status, &r.Conclusion,
 		&r.TrustLevel, &r.Source, &r.ConcurrencyGroup, &r.StartedAt, &r.CompletedAt, &r.CreatedAt,
 		&r.ClearedAt, &r.WorkflowName, &r.WorkflowPath, &r.ProjectSlug, &r.ProjectName,
-		&r.Classification)
+		&r.OrgID, &r.Classification)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Run{}, ErrNotFound
 	}
@@ -263,11 +263,14 @@ func (s *Store) Run(ctx context.Context, id uuid.UUID) (Run, error) {
 
 // RunPrefix resolves an unambiguous run-id prefix — the short ids the CLI
 // and UI print. Returns up to 8 candidates newest-first so callers can
-// detect ambiguity; callers must treat len != 1 as unresolved.
-func (s *Store) RunPrefix(ctx context.Context, prefix string) ([]Run, error) {
+// detect ambiguity; callers must treat len != 1 as unresolved. orgID
+// scopes the candidates to one tenant; uuid.Nil resolves across orgs (the
+// unauthenticated public-run route relies on that).
+func (s *Store) RunPrefix(ctx context.Context, orgID uuid.UUID, prefix string) ([]Run, error) {
 	rows, err := s.pool.Query(ctx, runSelect+`
 		WHERE r.id::text LIKE $1 || '%'
-		ORDER BY r.created_at DESC LIMIT 8`, prefix)
+		  AND ($2::uuid IS NULL OR p.org_id = $2)
+		ORDER BY r.created_at DESC LIMIT 8`, prefix, nullableUUID(orgID))
 	if err != nil {
 		return nil, err
 	}
@@ -311,6 +314,9 @@ func (s *Store) RunsForSHA(ctx context.Context, repo, sha string) ([]Run, error)
 
 type RunFilter struct {
 	ProjectID *uuid.UUID
+	// OrgID scopes the list to one tenant; uuid.Nil lists across orgs
+	// (internal callers only — user-facing paths always set it).
+	OrgID uuid.UUID
 	// Status accepts a comma-separated list (e.g. "queued,in_progress").
 	Status         string
 	Conclusion     string
@@ -351,9 +357,11 @@ func (s *Store) Runs(ctx context.Context, f RunFilter) ([]Run, int, error) {
 		  AND ($11::timestamptz IS NULL OR r.created_at < $11)
 		  AND ($12 = '' OR EXISTS (
 		    SELECT 1 FROM jobs jc WHERE jc.run_id = r.id AND jc.classification = $12))
+		  AND ($13::uuid IS NULL OR p.org_id = $13)
 		ORDER BY r.created_at DESC
 		LIMIT $5 OFFSET $6`, f.ProjectID, statuses, f.Conclusion, f.IncludeCleared, limit, offset,
-		f.Ref, f.PR, f.Workflow, nilTime(f.Since), nilTime(f.Until), f.Classification)
+		f.Ref, f.PR, f.Workflow, nilTime(f.Since), nilTime(f.Until), f.Classification,
+		nullableUUID(f.OrgID))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -376,9 +384,11 @@ func (s *Store) Runs(ctx context.Context, f RunFilter) ([]Run, int, error) {
 		  AND ($5::timestamptz IS NULL OR r.created_at >= $5)
 		  AND ($6::timestamptz IS NULL OR r.created_at < $6)
 		  AND ($7 = '' OR EXISTS (
-		    SELECT 1 FROM jobs jc WHERE jc.run_id = r.id AND jc.classification = $7))`,
+		    SELECT 1 FROM jobs jc WHERE jc.run_id = r.id AND jc.classification = $7))
+		  AND ($8::uuid IS NULL OR EXISTS (
+		    SELECT 1 FROM projects po WHERE po.id = r.project_id AND po.org_id = $8))`,
 		f.ProjectID, statuses, f.Conclusion, f.IncludeCleared,
-		nilTime(f.Since), nilTime(f.Until), f.Classification).Scan(&total); err != nil {
+		nilTime(f.Since), nilTime(f.Until), f.Classification, nullableUUID(f.OrgID)).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	return out, total, rows.Err()
@@ -397,7 +407,7 @@ func nilTime(t time.Time) *time.Time {
 // conclusion filters but honouring project scope and the cleared flag.
 // success/completed/median_seconds let the UI compute health stats over the
 // whole history instead of the page it happened to load.
-func (s *Store) RunCounts(ctx context.Context, projectID *uuid.UUID, includeCleared bool) (map[string]int, error) {
+func (s *Store) RunCounts(ctx context.Context, orgID uuid.UUID, projectID *uuid.UUID, includeCleared bool) (map[string]int, error) {
 	var all, running, failed, cancelled, completed, success, median int
 	err := s.pool.QueryRow(ctx, `
 		SELECT count(*),
@@ -409,9 +419,11 @@ func (s *Store) RunCounts(ctx context.Context, projectID *uuid.UUID, includeClea
 		       COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM r.completed_at - r.started_at))
 		                FILTER (WHERE r.status = 'completed' AND r.started_at IS NOT NULL AND r.completed_at IS NOT NULL), 0)::int
 		FROM workflow_runs r
-		WHERE ($1::uuid IS NULL OR r.project_id = $1)
-		  AND ($2::bool OR r.cleared_at IS NULL)`,
-		projectID, includeCleared).Scan(&all, &running, &failed, &cancelled, &completed, &success, &median)
+		JOIN projects p ON p.id = r.project_id
+		WHERE p.org_id = $1
+		  AND ($2::uuid IS NULL OR r.project_id = $2)
+		  AND ($3::bool OR r.cleared_at IS NULL)`,
+		orgID, projectID, includeCleared).Scan(&all, &running, &failed, &cancelled, &completed, &success, &median)
 	if err != nil {
 		return nil, err
 	}
@@ -912,7 +924,7 @@ type DayCount struct {
 
 // RunDayCounts aggregates runs per day per project over the last `days`
 // days. Cleared runs stay counted — they are history, just hidden.
-func (s *Store) RunDayCounts(ctx context.Context, projectID *uuid.UUID, days int) ([]DayCount, error) {
+func (s *Store) RunDayCounts(ctx context.Context, orgID uuid.UUID, projectID *uuid.UUID, days int) ([]DayCount, error) {
 	if days <= 0 || days > 400 {
 		days = 30
 	}
@@ -923,10 +935,11 @@ func (s *Store) RunDayCounts(ctx context.Context, projectID *uuid.UUID, days int
 		       count(*) FILTER (WHERE r.conclusion = 'cancelled' OR r.status = 'cancelled'),
 		       count(*) FILTER (WHERE r.status IN ('queued', 'in_progress', 'awaiting_approval'))
 		FROM workflow_runs r JOIN projects p ON p.id = r.project_id
-		WHERE ($1::uuid IS NULL OR r.project_id = $1)
-		  AND r.created_at >= now() - make_interval(days => $2)
+		WHERE p.org_id = $1
+		  AND ($2::uuid IS NULL OR r.project_id = $2)
+		  AND r.created_at >= now() - make_interval(days => $3)
 		GROUP BY 1, 2
-		ORDER BY 1`, projectID, days)
+		ORDER BY 1`, orgID, projectID, days)
 	if err != nil {
 		return nil, err
 	}
@@ -960,7 +973,7 @@ type QueuedJob struct {
 
 // QueuedJobs returns jobs waiting for a runner, oldest first — the order
 // claims would serve them modulo labels and priority.
-func (s *Store) QueuedJobs(ctx context.Context, limit int) ([]QueuedJob, error) {
+func (s *Store) QueuedJobs(ctx context.Context, orgID uuid.UUID, limit int) ([]QueuedJob, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
@@ -970,9 +983,9 @@ func (s *Store) QueuedJobs(ctx context.Context, limit int) ([]QueuedJob, error) 
 		FROM jobs j
 		JOIN workflow_runs r ON r.id = j.run_id
 		JOIN projects p ON p.id = r.project_id
-		WHERE j.status IN ('queued', 'waiting', 'waiting_approval')
+		WHERE p.org_id = $2 AND j.status IN ('queued', 'waiting', 'waiting_approval')
 		ORDER BY j.priority DESC, j.queued_at
-		LIMIT $1`, limit)
+		LIMIT $1`, limit, orgID)
 	if err != nil {
 		return nil, err
 	}
