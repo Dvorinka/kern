@@ -998,19 +998,24 @@ paths:
   /mcp:
     post:
       tags: [instance]
-      summary: MCP JSON-RPC endpoint (same auth/scopes as HTTP)
+      summary: MCP JSON-RPC endpoint (same auth/scopes as HTTP); initialize returns a Mcp-Session-Id header
       responses:
         "200": { description: JSON-RPC response }
+        "404": { description: Unknown or expired Mcp-Session-Id }
     get:
       tags: [instance]
-      summary: MCP SSE stream — not supported (stateless transport)
+      summary: MCP streamable-HTTP session stream — SSE channel for server->client notifications (requires Mcp-Session-Id)
       responses:
-        "405": { description: Stateless MCP transport accepts POST only }
+        "200": { description: text/event-stream; progress notifications }
+        "400": { description: Missing Mcp-Session-Id }
+        "404": { description: Unknown or expired session }
     delete:
       tags: [instance]
-      summary: MCP session close — not supported (stateless transport)
+      summary: MCP session close (requires Mcp-Session-Id)
       responses:
-        "405": { description: Stateless MCP transport accepts POST only }
+        "200": { description: Session terminated }
+        "400": { description: Missing Mcp-Session-Id }
+        "404": { description: Unknown or expired session }
 
   /runners/register:
     post:
