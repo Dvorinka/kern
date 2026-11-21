@@ -90,10 +90,32 @@ func (e *executor) startServices(ctx context.Context) error {
 		e.serviceLogPump(streamCtx)
 	}()
 	net := e.serviceNet()
+	// Phase the boot (#372): registry logins stay sequential — docker
+	// login rewrites the daemon's config.json — while the image pulls
+	// run concurrently; starts keep their order because the port-lock
+	// retry path sweeps shared state.
 	for _, svc := range e.claim.Job.Services {
-		if err := e.pullService(ctx, svc); err != nil {
+		if err := e.loginService(ctx, svc); err != nil {
 			return fmt.Errorf("service %s: %w", svc.Name, err)
 		}
+	}
+	var pullWG sync.WaitGroup
+	pullErrs := make(chan error, len(e.claim.Job.Services))
+	for _, svc := range e.claim.Job.Services {
+		pullWG.Add(1)
+		go func(svc ClaimService) {
+			defer pullWG.Done()
+			if err := e.pullService(ctx, svc); err != nil {
+				pullErrs <- fmt.Errorf("service %s: %w", svc.Name, err)
+			}
+		}(svc)
+	}
+	pullWG.Wait()
+	close(pullErrs)
+	for err := range pullErrs {
+		return err
+	}
+	for _, svc := range e.claim.Job.Services {
 		if err := e.startService(ctx, net, svc); err != nil {
 			if isPortBindErr(err) && e.sweepOrphans != nil {
 				// The port lock only serializes kern jobs on this runner;
@@ -120,11 +142,21 @@ func (e *executor) startServices(ctx context.Context) error {
 	return nil
 }
 
-func (e *executor) pullService(ctx context.Context, svc ClaimService) error {
+func (e *executor) loginService(ctx context.Context, svc ClaimService) error {
 	if svc.Credentials != nil && svc.Credentials.Username != "" {
 		if err := e.registryLogin(ctx, svc.Image, svc.Credentials.Username, svc.Credentials.Password); err != nil {
 			return fmt.Errorf("registry login: %w", err)
 		}
+	}
+	return nil
+}
+
+func (e *executor) pullService(ctx context.Context, svc ClaimService) error {
+	// Digest-pinned service images are immutable — skip the pull when a
+	// local copy exists (#372), same policy as the job image.
+	if strings.Contains(svc.Image, "@sha256:") && e.imageExists(ctx, svc.Image) {
+		recordImageUse(e.cfg.WorkRoot, svc.Image)
+		return nil
 	}
 	if err := e.docker(ctx, "pull", "-q", svc.Image); err != nil {
 		return err
