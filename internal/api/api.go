@@ -47,7 +47,6 @@ type Server struct {
 	ghRepoApp map[string]uuid.UUID      // repo -> github_apps.id (probe cache)
 	geoSelfMu sync.Mutex                // serializes the control-plane self-lookup
 	metrics   *kernMetrics
-	ghCache   *ghCacheState
 	// maskers caches each running job's log masker — building one costs 4-6
 	// queries plus AES-GCM per secret, and log chunks arrive every second
 	// (#374). Entries expire in 60s and are evicted on job finish.
@@ -97,7 +96,7 @@ func New(cfg *config.Config, st *store.Store, orch *orchestrator.Orchestrator, b
 		GH:     &github.Resolver{App: app, PAT: github.New(cfg.GitHub.APIBaseURL, cfg.GitHub.StatusToken)},
 		Geo:    geoip.New(cfg.GeoIPURL),
 		ghApps: make(map[uuid.UUID]*github.App), ghRepoApp: make(map[string]uuid.UUID),
-		metrics: newKernMetrics(), ghCache: newGHCacheState(),
+		metrics: newKernMetrics(), 
 		webhookQueue: make(chan webhookTask, 128),
 		stepLogBus:   newLogBus(),
 	}

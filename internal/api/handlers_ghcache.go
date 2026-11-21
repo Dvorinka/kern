@@ -15,6 +15,7 @@ package api
 // back a short-lived HMAC-signed URL on the public /cache-dl route instead.
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -24,13 +25,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
+
+	"context"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -38,38 +37,6 @@ import (
 
 	"github.com/dvorinka/kern/internal/store"
 )
-
-// ghUpload is one in-flight reserve→upload→commit cycle. Chunks land via
-// WriteAt so parallel PATCHes need no ordering; the temp file becomes a
-// blob only at commit.
-type ghUpload struct {
-	id      int64
-	jobID   uuid.UUID
-	key     string
-	version string
-	scope   string
-	path    string
-	file    *os.File
-	created time.Time
-	mu      sync.Mutex // serializes PATCH+commit against concurrent chunks (#369)
-}
-
-// ghCacheState tracks pending uploads for the chunked GHA-protocol
-// endpoints (external actions/cache clients). Single-process by design:
-// kern runners use the native /cache/:key paths, which are fully
-// stateless on S3 backends via presigned PUTs — this chunked surface is
-// the only node-local remainder, and a restart just orphans temp files
-// the startup sweep reclaims. Multi-replica API deployments should pin
-// runner traffic to the leader or move external clients to presign.
-type ghCacheState struct {
-	mu      sync.Mutex
-	seq     atomic.Int64
-	uploads map[int64]*ghUpload
-}
-
-func newGHCacheState() *ghCacheState {
-	return &ghCacheState{uploads: map[int64]*ghUpload{}}
-}
 
 // cacheJobToken mints the job-scoped credential handed to steps as
 // ACTIONS_RUNTIME_TOKEN: an HS256 JWT bound to the job. It must be a JWT —
@@ -349,26 +316,16 @@ func (s *Server) ghCacheReserve(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
-	dir, err := os.MkdirTemp("", "kern-ghcache-*")
+	// Session + chunks live in Postgres/blob storage so any replica can
+	// serve PATCH and commit — no node-local temp file (#369 HA).
+	blobRef := fmt.Sprintf("cache/%s/%s/%s-%s.tar.gz", run.ProjectID,
+		scope, url.PathEscape(req.Key), uuid.NewString())
+	id, err := s.Store.CreateGHUpload(c.Request.Context(), job.ID,
+		req.Key, req.Version, scope, blobRef)
 	if err != nil {
 		s.internalError(c, err)
 		return
 	}
-	path := filepath.Join(dir, "archive.tar.gz")
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		_ = os.RemoveAll(dir)
-		s.internalError(c, err)
-		return
-	}
-	id := s.ghCache.seq.Add(1)
-	s.ghCache.mu.Lock()
-	s.ghCache.uploads[id] = &ghUpload{
-		id: id, jobID: job.ID, key: req.Key,
-		version: req.Version, scope: scope, path: path, file: f,
-		created: time.Now(),
-	}
-	s.ghCache.mu.Unlock()
 	c.JSON(http.StatusOK, gin.H{"cacheId": id})
 }
 
@@ -387,8 +344,6 @@ func (s *Server) ghCacheUpload(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_range", "Content-Range must be 'bytes start-end/*'")
 		return
 	}
-	// Bound the range before touching the file: an unchecked WriteAt at a
-	// huge offset grows a sparse file on disk (#369).
 	limit := s.Cfg.CacheMaxBytes
 	if limit <= 0 {
 		limit = 4 << 30
@@ -398,16 +353,24 @@ func (s *Server) ghCacheUpload(c *gin.Context) {
 			"cache archive exceeds KERN_CACHE_MAX_BYTES")
 		return
 	}
-	// Serialize with other chunks and commit; stream instead of buffering
-	// the patch in heap (#369).
-	up.mu.Lock()
-	defer up.mu.Unlock()
-	w := io.NewOffsetWriter(up.file, start)
-	if _, err := io.CopyN(w, c.Request.Body, end-start+1); err != nil {
-		if errors.Is(err, io.EOF) { // body shorter than the declared range
-			fail(c, http.StatusBadRequest, "invalid_range", "chunk size does not match Content-Range")
-			return
-		}
+	// Each chunk is its own immutable blob object keyed by offset: PATCHes
+	// are safe on any replica, resent chunks overwrite idempotently, and
+	// commit concatenates in offset order (#369).
+	data, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, 256<<20))
+	if err != nil {
+		fail(c, http.StatusRequestEntityTooLarge, "chunk_too_large", "chunk exceeds 256MB")
+		return
+	}
+	if int64(len(data)) != end-start+1 {
+		fail(c, http.StatusBadRequest, "invalid_range", "chunk size does not match Content-Range")
+		return
+	}
+	chunkRef := fmt.Sprintf("gh-incoming/%d/%d", up.ID, start)
+	if _, _, err := s.Blobs.Put(chunkRef, bytes.NewReader(data)); err != nil {
+		s.internalError(c, err)
+		return
+	}
+	if err := s.Store.InsertGHChunk(c.Request.Context(), up.ID, start, end, chunkRef); err != nil {
 		s.internalError(c, err)
 		return
 	}
@@ -422,93 +385,136 @@ func (s *Server) ghCacheCommit(c *gin.Context) {
 	if !ok {
 		return
 	}
-	up := s.ghUploadFor(c, job.ID)
-	if up == nil {
-		return
-	}
 	var req struct {
 		Size int64 `json:"size"`
 	}
 	_ = c.ShouldBindJSON(&req)
-	up.mu.Lock()
-	defer up.mu.Unlock()
-	_ = up.file.Sync()
-	fi, err := up.file.Stat()
+	// The DELETE is the claim: exactly one commit wins on any replica.
+	id, perr := strconv.ParseInt(c.Param("cacheID"), 10, 64)
+	if perr != nil {
+		fail(c, http.StatusBadRequest, "invalid_id", "cache id must be numeric")
+		return
+	}
+	up, found, err := s.Store.DeleteGHUpload(c.Request.Context(), id)
 	if err != nil {
-		s.failUpload(up)
 		s.internalError(c, err)
 		return
 	}
-	size := fi.Size()
-	if req.Size > 0 && req.Size != size {
-		s.failUpload(up)
+	if !found || up.JobID != job.ID {
+		fail(c, http.StatusNotFound, "not_found", "cache reservation not found")
+		return
+	}
+	chunks, err := s.Store.GHChunks(c.Request.Context(), up.ID)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	cleanup := func() { s.dropUploadChunks(up.ID, chunks) }
+	// Contiguity + declared-size check: chunks must tile 0..size with no
+	// gaps or overlaps, in stored offset order.
+	var expect int64
+	var total int64
+	for _, ch := range chunks {
+		if ch.Start != expect {
+			cleanup()
+			fail(c, http.StatusBadRequest, "incomplete_upload",
+				fmt.Sprintf("missing chunk at offset %d", expect))
+			return
+		}
+		expect = ch.Stop + 1
+		total += ch.Stop - ch.Start + 1
+	}
+	if req.Size > 0 && req.Size != total {
+		cleanup()
 		fail(c, http.StatusBadRequest, "size_mismatch",
 			"declared size does not match uploaded bytes")
 		return
 	}
-	max := s.Cfg.CacheMaxBytes
-	if max > 0 && size > max {
-		s.failUpload(up)
+	if max := s.Cfg.CacheMaxBytes; max > 0 && total > max {
+		cleanup()
 		fail(c, http.StatusRequestEntityTooLarge, "cache_too_large",
 			"cache archive exceeds KERN_CACHE_MAX_BYTES")
 		return
 	}
-	if _, err := up.file.Seek(0, io.SeekStart); err != nil {
-		s.failUpload(up)
-		s.internalError(c, err)
-		return
+	// Concatenate chunk objects straight into the final blob — the API
+	// streams each part through once, never materializing the archive.
+	readers := make([]io.Reader, 0, len(chunks))
+	var closers []io.Closer
+	for _, ch := range chunks {
+		rc, _, oerr := s.Blobs.Open(ch.BlobRef)
+		if oerr != nil || rc == nil {
+			for _, cl := range closers {
+				cl.Close()
+			}
+			cleanup()
+			fail(c, http.StatusBadRequest, "missing_chunk", "uploaded chunk is gone")
+			return
+		}
+		readers = append(readers, rc)
+		closers = append(closers, rc)
 	}
-	// Same blobRef layout as cacheSave so listCache/deleteCache/stale sweeps
-	// treat protocol and native entries identically.
-	blobRef := "cache/" + run.ProjectID.String() + "/" + url.PathEscape(up.key) + ".tar.gz"
-	written, _, err := s.Blobs.Put(blobRef, up.file)
-	s.failUpload(up)
+	written, _, err := s.Blobs.Put(up.BlobRef, io.MultiReader(readers...))
+	for _, cl := range closers {
+		cl.Close()
+	}
 	if err != nil {
+		cleanup()
 		s.internalError(c, err)
 		return
 	}
 	if _, err := s.Store.SaveCacheEntry(c.Request.Context(), run.ProjectID,
-		up.key, up.version, up.scope, blobRef, written); err != nil {
-		if !errors.Is(err, store.ErrExists) {
-			s.internalError(c, err)
+		up.Key, up.Version, up.Scope, up.BlobRef, written); err != nil {
+		if errors.Is(err, store.ErrExists) {
+			// A sibling won the key race — our blob is redundant.
+			_ = s.Blobs.Delete(up.BlobRef)
+			c.Status(http.StatusOK)
+			cleanup()
 			return
 		}
-		// A sibling job won the key race; our blob is redundant.
-		if derr := s.Blobs.Delete(blobRef); derr != nil {
-			s.Log.Error("delete duplicate cache blob", zap.String("ref", blobRef), zap.Error(derr))
-		}
+		cleanup()
+		s.internalError(c, err)
+		return
 	}
+	cleanup()
 	if s.metrics != nil {
 		s.metrics.observeCache("save")
 	}
 	c.Status(http.StatusOK)
 }
 
+// dropUploadChunks removes a session's chunk rows and blob objects after a
+// commit, failure, or sweep. Row deletion cascades the chunk rows; the
+// objects need explicit removal.
+func (s *Server) dropUploadChunks(uploadID int64, chunks []store.GHChunk) {
+	for _, ch := range chunks {
+		if err := s.Blobs.Delete(ch.BlobRef); err != nil {
+			s.Log.Error("delete ghcache chunk", zap.String("ref", ch.BlobRef), zap.Error(err))
+		}
+	}
+	_ = uploadID // rows already cascade-deleted with the session
+}
+
 // ghUploadFor resolves the pending upload and binds it to the calling job so
-// one runner cannot commit another job's reservation.
-func (s *Server) ghUploadFor(c *gin.Context, jobID uuid.UUID) *ghUpload {
+// one runner cannot write another job's reservation.
+func (s *Server) ghUploadFor(c *gin.Context, jobID uuid.UUID) *store.GHUpload {
 	id, err := strconv.ParseInt(c.Param("cacheID"), 10, 64)
 	if err != nil {
 		fail(c, http.StatusBadRequest, "invalid_id", "cache id must be numeric")
 		return nil
 	}
-	s.ghCache.mu.Lock()
-	up := s.ghCache.uploads[id]
-	s.ghCache.mu.Unlock()
-	if up == nil || up.jobID != jobID {
+	up, err := s.Store.GHUpload(c.Request.Context(), id)
+	if err != nil || up.JobID != jobID {
 		fail(c, http.StatusNotFound, "not_found", "cache reservation not found")
 		return nil
 	}
-	return up
+	return &up
 }
 
-// failUpload discards a pending upload: temp dir, map entry, open handle.
-func (s *Server) failUpload(up *ghUpload) {
-	s.ghCache.mu.Lock()
-	delete(s.ghCache.uploads, up.id)
-	s.ghCache.mu.Unlock()
-	_ = up.file.Close()
-	_ = os.RemoveAll(filepath.Dir(up.path))
+// failUpload discards a reservation and its uploaded chunks.
+func (s *Server) failUpload(ctx context.Context, up store.GHUpload) {
+	chunks, _ := s.Store.GHChunks(ctx, up.ID)
+	s.dropUploadChunks(up.ID, chunks)
+	_, _, _ = s.Store.DeleteGHUpload(ctx, up.ID)
 }
 
 // parseContentRange reads "bytes start-end/*" (a concrete total is accepted
@@ -542,23 +548,14 @@ func (s *Server) ghCacheDownload(c *gin.Context) {
 // entries for uploads reserved over an hour ago, plus temp dirs orphaned by a
 // crash. Runs at startup and on the 10-minute background ticker (#369).
 func (s *Server) sweepGHCacheUploads() {
-	s.ghCache.mu.Lock()
-	var stale []*ghUpload
-	for id, up := range s.ghCache.uploads {
-		if time.Since(up.created) > time.Hour {
-			delete(s.ghCache.uploads, id)
-			stale = append(stale, up)
-		}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	stale, err := s.Store.StaleGHUploads(ctx, time.Now().Add(-time.Hour))
+	if err != nil {
+		s.Log.Error("sweep ghcache uploads", zap.Error(err))
+		return
 	}
-	s.ghCache.mu.Unlock()
 	for _, up := range stale {
-		_ = up.file.Close()
-		_ = os.RemoveAll(filepath.Dir(up.path))
-	}
-	matches, _ := filepath.Glob(filepath.Join(os.TempDir(), "kern-ghcache-*"))
-	for _, dir := range matches {
-		if fi, err := os.Stat(dir); err == nil && time.Since(fi.ModTime()) > time.Hour {
-			_ = os.RemoveAll(dir)
-		}
+		s.failUpload(ctx, up)
 	}
 }

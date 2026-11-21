@@ -27,7 +27,6 @@ import (
 func testGHCacheServer() *Server {
 	return &Server{
 		Cfg:     &config.Config{SessionSecret: "test-session-secret-0123456789abcdef"},
-		ghCache: newGHCacheState(),
 	}
 }
 
