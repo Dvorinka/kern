@@ -121,12 +121,17 @@ func (e *executor) startServices(ctx context.Context) error {
 }
 
 func (e *executor) pullService(ctx context.Context, svc ClaimService) error {
+	var pullArgs []string
 	if svc.Credentials != nil && svc.Credentials.Username != "" {
-		if err := e.registryLogin(ctx, svc.Image, svc.Credentials.Username, svc.Credentials.Password); err != nil {
+		cfgDir, cleanup, err := e.registryLogin(ctx, svc.Image, svc.Credentials.Username, svc.Credentials.Password)
+		if err != nil {
 			return fmt.Errorf("registry login: %w", err)
 		}
+		defer cleanup()
+		pullArgs = append(pullArgs, "--config", cfgDir)
 	}
-	if err := e.docker(ctx, "pull", "-q", svc.Image); err != nil {
+	pullArgs = append(pullArgs, "pull", "-q", svc.Image)
+	if err := e.docker(ctx, pullArgs...); err != nil {
 		return err
 	}
 	recordImageUse(e.cfg.WorkRoot, svc.Image)
@@ -134,15 +139,14 @@ func (e *executor) pullService(ctx context.Context, svc ClaimService) error {
 }
 
 // registryLogin authenticates docker against the registry embedded in image
-// for one pull. The credential lives only in a throwaway --config dir that
-// is deleted on return — it never touches the runner user's docker config,
-// so a hostile workflow cannot exfiltrate it from a later job's image.
-func (e *executor) registryLogin(ctx context.Context, image, user, pass string) error {
+// for one pull. The credential lives only in a throwaway --config dir whose
+// cleanup func is invoked by the caller after docker pull completes — it never
+// touches the runner user's docker config.
+func (e *executor) registryLogin(ctx context.Context, image, user, pass string) (string, func(), error) {
 	dir, err := os.MkdirTemp("", "kern-regcred-")
 	if err != nil {
-		return err
+		return "", nil, err
 	}
-	defer os.RemoveAll(dir)
 	args := []string{"--config", dir, "login"}
 	if reg := registryHost(image); reg != "" {
 		args = append(args, reg)
@@ -151,9 +155,10 @@ func (e *executor) registryLogin(ctx context.Context, image, user, pass string) 
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Stdin = strings.NewReader(pass)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("docker login: %s", tailStr(string(out), 200))
+		_ = os.RemoveAll(dir)
+		return "", nil, fmt.Errorf("docker login: %s", tailStr(string(out), 200))
 	}
-	return nil
+	return dir, func() { _ = os.RemoveAll(dir) }, nil
 }
 
 // registryHost extracts the registry authority from an image reference:
