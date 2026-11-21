@@ -170,9 +170,15 @@ func (s *Server) mcpHandle(c *gin.Context, req rpcRequest) *rpcResponse {
 	case "tools/list":
 		resp = rpcOK(req.ID, map[string]any{"tools": mcpTools()})
 	case "resources/list":
-		resp = rpcOK(req.ID, map[string]any{"resources": []any{}})
+		return s.mcpResources(c, req)
+	case "resources/templates/list":
+		return s.mcpResourceTemplates(c, req)
+	case "resources/read":
+		return s.mcpResourceRead(c, req)
 	case "prompts/list":
-		resp = rpcOK(req.ID, map[string]any{"prompts": []any{}})
+		resp = rpcOK(req.ID, map[string]any{"prompts": mcpPrompts()})
+	case "prompts/get":
+		return s.mcpPromptGet(c, req)
 	case "tools/call":
 		return s.mcpCall(c, req)
 	default:
