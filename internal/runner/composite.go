@@ -903,10 +903,11 @@ func envString(v any) string {
 	}
 }
 
-// drainFile reads and removes a file-command target in the cmd dir.
+// drainFile reads and truncates a file-command target in the cmd dir so
+// subsequent actions still find the file present.
 func (e *executor) drainFile(name string) (map[string]string, error) {
 	p := filepath.Join(e.cmdDir(), name)
-	defer os.Remove(p)
+	defer func() { _ = os.Truncate(p, 0) }()
 	data, err := os.ReadFile(p)
 	if err != nil {
 		return nil, err
