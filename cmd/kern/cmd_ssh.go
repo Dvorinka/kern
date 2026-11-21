@@ -24,14 +24,9 @@ func (c *cli) cmdSSH(ctx context.Context, args []string) error {
 	if err := c.requireAuth(); err != nil {
 		return err
 	}
-	opts, pos := parseFlags(args, "job", "c")
-	if len(pos) == 0 {
-		return fmt.Errorf("usage: kern ssh <job-id|run-id> [--job KEY] [-c CMD]")
-	}
-	target, jobKey := pos[0], opts["job"]
-	cmd := opts["c"]
-	if cmd == "" && len(pos) > 1 {
-		cmd = strings.Join(pos[1:], " ")
+	target, jobKey, cmd, err := parseSSHArgs(args)
+	if err != nil {
+		return err
 	}
 	id, err := uuid.Parse(target)
 	if err != nil {
@@ -58,6 +53,52 @@ func (c *cli) cmdSSH(ctx context.Context, args []string) error {
 		}
 	}
 	return c.streamExec(ctx, execID, cmd == "")
+}
+
+// parseSSHArgs parses `kern ssh <job-id|run-id> [--job KEY] [-c CMD] [-- CMD...]`.
+// Handled directly instead of parseFlags so single-dash `-c` works as documented
+// and `--` preserves remote flags verbatim.
+func parseSSHArgs(args []string) (target, jobKey, cmd string, err error) {
+	var pos []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			pos = append(pos, args[i+1:]...)
+			break
+		}
+		switch {
+		case a == "-c" || a == "--c":
+			if i+1 >= len(args) {
+				return "", "", "", fmt.Errorf("%s requires a command", a)
+			}
+			i++
+			cmd = args[i]
+		case strings.HasPrefix(a, "-c="):
+			cmd = strings.TrimPrefix(a, "-c=")
+		case strings.HasPrefix(a, "--c="):
+			cmd = strings.TrimPrefix(a, "--c=")
+		case a == "--job":
+			if i+1 >= len(args) {
+				return "", "", "", fmt.Errorf("--job requires a value")
+			}
+			i++
+			jobKey = args[i]
+		case strings.HasPrefix(a, "--job="):
+			jobKey = strings.TrimPrefix(a, "--job=")
+		case strings.HasPrefix(a, "--"):
+			return "", "", "", fmt.Errorf("unknown flag %s", a)
+		default:
+			pos = append(pos, a)
+		}
+	}
+	if len(pos) == 0 {
+		return "", "", "", fmt.Errorf("usage: kern ssh <job-id|run-id> [--job KEY] [-c CMD]")
+	}
+	target = pos[0]
+	if cmd == "" && len(pos) > 1 {
+		cmd = strings.Join(pos[1:], " ")
+	}
+	return target, jobKey, cmd, nil
 }
 
 // openExec requests a session on a job and returns its exec ID.
@@ -131,13 +172,17 @@ func (c *cli) streamExec(ctx context.Context, execID string, interactive bool) e
 		}
 		q := url.Values{"after": {fmt.Sprint(off)}}
 		if err := c.api().get(ctx, "/exec/"+execID, q, &out); err != nil {
+			if ctx.Err() != nil {
+				c.cancelExec(execID)
+				return exitCodeError{code: 130}
+			}
 			return err
 		}
 		if out.Data != "" {
 			chunk, _ := base64.StdEncoding.DecodeString(out.Data)
 			os.Stdout.Write(chunk)
+			off += int64(len(chunk))
 		}
-		off = out.Size
 		switch out.Exec.State {
 		case "done", "failed", "cancelled":
 			// The stdin pump is left for process exit — a TTY reader would
@@ -147,32 +192,35 @@ func (c *cli) streamExec(ctx context.Context, execID string, interactive bool) e
 				fmt.Fprintln(os.Stderr, out.Exec.Error)
 			}
 			if out.Exec.ExitCode != nil && *out.Exec.ExitCode != 0 {
-				os.Exit(*out.Exec.ExitCode)
+				return exitCodeError{code: *out.Exec.ExitCode}
 			}
 			if out.Exec.State == "failed" {
-				os.Exit(1)
+				return exitCodeError{code: 1}
 			}
 			return nil
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			c.cancelExec(execID)
+			return exitCodeError{code: 130}
 		case <-time.After(400 * time.Millisecond):
 		}
 	}
 }
 
-// pumpSSHStdin forwards local stdin to the session blob. Raw mode when the
-// terminal is interactive so keys arrive without line buffering.
+// cancelExec tells the control plane to cancel the session so the runner kills
+// the remote docker exec instead of orphaning it after local Ctrl-C.
+func (c *cli) cancelExec(execID string) {
+	cctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = c.api().del(cctx, "/exec/"+execID)
+}
+
+// pumpSSHStdin forwards local stdin to the session blob in canonical line mode.
+// runExec uses `docker exec -i` without a PTY, so enabling raw mode here would
+// break Enter translation, local echo, and SIGINT.
 func (c *cli) pumpSSHStdin(ctx context.Context, execID string, done chan<- struct{}) {
 	defer close(done)
-	fd := int(os.Stdin.Fd())
-	if term.IsTerminal(fd) {
-		old, err := term.MakeRaw(fd)
-		if err == nil {
-			defer term.Restore(fd, old)
-		}
-	}
 	rd := bufio.NewReaderSize(os.Stdin, 4096)
 	buf := make([]byte, 4096)
 	for {

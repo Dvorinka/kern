@@ -40,8 +40,11 @@ func TestDependencyStatus(t *testing.T) {
 		{"continue-on-error failure stays success", []string{"build"}, map[string][]store.Job{
 			"build": {build("completed", "failure", true)},
 		}, "success", true},
-		{"cancelled need is a failure for dependents", []string{"build"}, map[string][]store.Job{
+		{"cancelled need propagates as cancelled", []string{"build"}, map[string][]store.Job{
 			"build": {build("cancelled", "cancelled", false)},
+		}, "cancelled", true},
+		{"failure beats a cancelled sibling", []string{"build"}, map[string][]store.Job{
+			"build": {build("cancelled", "cancelled", false), build("completed", "failure", false)},
 		}, "failure", true},
 		{"skipped", []string{"build"}, map[string][]store.Job{
 			"build": {build("skipped", "skipped", false)},
@@ -86,13 +89,16 @@ func TestNeedsMap(t *testing.T) {
 	}
 }
 
-func TestNeedsMapLastConclusionWins(t *testing.T) {
+func TestNeedsMapWorstCaseWins(t *testing.T) {
+	// Matrix members aggregate worst-case, matching GitHub Actions: one
+	// failing member makes needs.<id>.result report failure regardless of
+	// ordering.
 	byKey := map[string][]store.Job{
 		"build": {doneJob("failure", false, ""), doneJob("success", false, "")},
 	}
 	build := NeedsMap(byKey)["build"].(map[string]any)
-	if build["result"] != "success" {
-		t.Fatalf("result = %v, want the last non-empty conclusion", build["result"])
+	if build["result"] != "failure" {
+		t.Fatalf("result = %v, want failure", build["result"])
 	}
 }
 

@@ -37,7 +37,7 @@ func (o *Orchestrator) MintScheduledRuns(ctx context.Context, now time.Time) {
 			if next.After(now) {
 				continue
 			}
-			if exists, err := o.Store.HasScheduledRun(ctx, it.VersionID, next); err != nil || exists {
+			if exists, err := o.Store.HasScheduledRun(ctx, it.VersionID, next, expr); err != nil || exists {
 				if err != nil {
 					o.Log.Error("schedule dedupe check", zap.Error(err))
 				}
@@ -58,6 +58,7 @@ func (o *Orchestrator) MintScheduledRuns(ctx context.Context, now time.Time) {
 					"repo_full_name": p.RepoFullName,
 					"local_path":     p.LocalPath,
 					"default_branch": p.DefaultBranch,
+					"schedule_cron":  expr,
 				},
 			})
 			if err != nil {

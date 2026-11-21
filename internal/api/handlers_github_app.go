@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -214,12 +215,22 @@ func (s *Server) appForRow(row store.GitHubApp) (*github.App, error) {
 	return app, nil
 }
 
+// webhookSecret is one accepted webhook signing secret plus the org it
+// belongs to. The env-configured secret has no org (uuid.Nil) — deliveries
+// it verifies are bound later, when the payload's repo resolves to a
+// project.
+type webhookSecret struct {
+	value string
+	orgID uuid.UUID
+}
+
 // webhookSecrets collects every secret a GitHub delivery might be signed with:
-// the env secret plus each registered app's webhook secret.
-func (s *Server) webhookSecrets(ctx context.Context) []string {
-	var out []string
+// the env secret plus each registered app's webhook secret, tagged with the
+// app's owning org so deliveries can be tenant-scoped (#368).
+func (s *Server) webhookSecrets(ctx context.Context) []webhookSecret {
+	var out []webhookSecret
 	if s.Cfg.GitHub.WebhookSecret != "" {
-		out = append(out, s.Cfg.GitHub.WebhookSecret)
+		out = append(out, webhookSecret{value: s.Cfg.GitHub.WebhookSecret})
 	}
 	rows, err := s.Store.AllGitHubApps(ctx)
 	if err != nil {
@@ -227,8 +238,38 @@ func (s *Server) webhookSecrets(ctx context.Context) []string {
 	}
 	for _, r := range rows {
 		if sec, err := s.Cipher.Decrypt(r.SecretCiphertext, r.SecretNonce); err == nil && len(sec) > 0 {
-			out = append(out, sec)
+			out = append(out, webhookSecret{value: sec, orgID: r.OrgID})
 		}
 	}
 	return out
+}
+
+// deliveryOrg resolves which org a verified delivery belongs to: the org of
+// the project bound to the payload's repository when exactly one org owns
+// it, else the org of the app whose secret verified the signature.
+func (s *Server) deliveryOrg(ctx context.Context, body []byte, matchedOrg *uuid.UUID) (uuid.UUID, bool) {
+	var p struct {
+		Repository struct {
+			FullName string `json:"full_name"`
+		} `json:"repository"`
+	}
+	if json.Unmarshal(body, &p) != nil || p.Repository.FullName == "" {
+		return uuid.Nil, false
+	}
+	projects, err := s.Store.ProjectsByRepoFullName(ctx, p.Repository.FullName)
+	if err != nil || len(projects) == 0 {
+		return uuid.Nil, false
+	}
+	org := projects[0].OrgID
+	for _, pr := range projects[1:] {
+		if pr.OrgID != org {
+			// The repo name maps to projects in multiple orgs — ambiguous,
+			// fall back to the verifying credential's org.
+			if matchedOrg != nil {
+				return *matchedOrg, true
+			}
+			return uuid.Nil, false
+		}
+	}
+	return org, true
 }

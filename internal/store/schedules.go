@@ -62,13 +62,15 @@ func (s *Store) ScheduledWorkflows(ctx context.Context) ([]ScheduledWorkflow, er
 }
 
 // HasScheduledRun reports whether a schedule run already exists for this version
-// minted at or after the given cron instant — the dedupe guard.
-func (s *Store) HasScheduledRun(ctx context.Context, versionID uuid.UUID, instant time.Time) (bool, error) {
+// and cron expression minted at or after the given cron instant — the dedupe guard.
+func (s *Store) HasScheduledRun(ctx context.Context, versionID uuid.UUID, instant time.Time, cronExpr string) (bool, error) {
 	var exists bool
 	err := s.pool.QueryRow(ctx, `
 		SELECT EXISTS(
 			SELECT 1 FROM workflow_runs
-			WHERE workflow_version_id = $1 AND event = 'schedule' AND created_at >= $2)`,
-		versionID, instant).Scan(&exists)
+			WHERE workflow_version_id = $1 AND event = 'schedule'
+			  AND created_at >= $2
+			  AND ($3 = '' OR coalesce(source->>'schedule_cron', '') = $3))`,
+		versionID, instant, cronExpr).Scan(&exists)
 	return exists, err
 }

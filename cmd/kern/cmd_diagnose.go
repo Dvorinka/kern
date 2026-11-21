@@ -167,7 +167,8 @@ func printDiagnose(b diagnoseBundle, tail int64) {
 				}
 			}
 			if st.LogTail != "" {
-				fmt.Printf("   --- log tail (last %s of %s) ---\n", humanBytes(tail), humanBytes(st.LogSize))
+				shown := min(tail, st.LogSize)
+				fmt.Printf("   --- log tail (last %s of %s) ---\n", humanBytes(shown), humanBytes(st.LogSize))
 				fmt.Print(st.LogTail)
 				if !strings.HasSuffix(st.LogTail, "\n") {
 					fmt.Println()

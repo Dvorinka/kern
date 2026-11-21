@@ -31,7 +31,8 @@ func TestSubCommandsCoverDispatchGroups(t *testing.T) {
 	// Every dispatch group that accepts a subcommand must appear in the table,
 	// otherwise completion silently offers nothing for it.
 	for _, group := range []string{"runs", "projects", "token", "config", "secrets", "vars",
-		"artifacts", "cache", "environments", "deployments", "settings", "runners", "hooks"} {
+		"artifacts", "cache", "environments", "deployments", "settings", "runners", "hooks",
+		"ssh", "testbox", "optimize"} {
 		if _, ok := subCommands[group]; !ok {
 			t.Fatalf("subCommands missing group %q", group)
 		}

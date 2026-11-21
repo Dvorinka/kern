@@ -215,7 +215,7 @@ func TestGHCacheReserveUploadCommitCycle(t *testing.T) {
 		t.Fatalf("commit: %d %s", w.Code, w.Body)
 	}
 
-	entry, err := st.CacheLookup(ctx, p.ID, "it-key", nil, []string{"trusted"})
+	entry, err := st.CacheLookup(ctx, p.ID, "it-key", "", nil, []string{"trusted"})
 	if err != nil {
 		t.Fatalf("lookup: %v", err)
 	}

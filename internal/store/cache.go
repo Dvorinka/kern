@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -41,33 +40,36 @@ func scanCacheEntry(row pgx.Row) (CacheEntry, error) {
 
 // CacheLookup resolves a cache key the way GitHub does: an exact match wins;
 // otherwise each restore prefix is tried in order against the newest entry.
-func (s *Store) CacheLookup(ctx context.Context, projectID uuid.UUID, key string, prefixes, scopes []string) (CacheEntry, error) {
+// Version encodes paths+compression in @actions/cache — a version-mismatched
+// restore would hand a zstd caller a gzip archive (#369). "" matches all.
+func (s *Store) CacheLookup(ctx context.Context, projectID uuid.UUID, key, version string, prefixes, scopes []string) (CacheEntry, error) {
 	e, err := scanCacheEntry(s.pool.QueryRow(ctx,
 		`SELECT `+cacheCols+` FROM cache_entries
 		 WHERE project_id = $1 AND key = $2 AND scope = ANY($3)
-		 ORDER BY created_at DESC LIMIT 1`, projectID, key, scopes))
+		   AND ($4 = '' OR version = $4)
+		 ORDER BY created_at DESC LIMIT 1`, projectID, key, scopes, version))
 	if err == nil {
 		return e, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return CacheEntry{}, err
 	}
-	for _, p := range prefixes {
-		if strings.TrimSpace(p) == "" {
-			continue
-		}
-		e, err = scanCacheEntry(s.pool.QueryRow(ctx,
-			`SELECT `+cacheCols+` FROM cache_entries
-			 WHERE project_id = $1 AND starts_with(key, $2) AND scope = ANY($3)
-			 ORDER BY created_at DESC LIMIT 1`, projectID, p, scopes))
-		if err == nil {
-			return e, nil
-		}
-		if !errors.Is(err, pgx.ErrNoRows) {
-			return CacheEntry{}, err
-		}
+	// One query for all restore prefixes: the lowest ordinal prefix with a hit
+	// wins, newest entry within it — identical to the prior per-prefix loop
+	// but without the per-prefix round trip (#374). The version filter matches
+	// the exact lookup above so a gzip archive never serves a zstd caller.
+	e, err = scanCacheEntry(s.pool.QueryRow(ctx,
+		`SELECT `+cacheCols+` FROM (
+			SELECT ce.*, p.ord FROM cache_entries ce
+			JOIN unnest($2::text[]) WITH ORDINALITY p(prefix, ord)
+			  ON starts_with(ce.key, p.prefix) AND btrim(p.prefix) <> ''
+			WHERE ce.project_id = $1 AND ce.scope = ANY($3)
+			  AND ($4 = '' OR ce.version = $4)
+		) t ORDER BY ord, created_at DESC LIMIT 1`, projectID, prefixes, scopes, version))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return CacheEntry{}, ErrNotFound
 	}
-	return CacheEntry{}, ErrNotFound
+	return e, err
 }
 
 // SaveCacheEntry records a saved archive. Caches are immutable: an existing

@@ -56,7 +56,7 @@ Environment only:
   KERN_RUNNER_DISK_CRITICAL_FREE_PCT  escalate reclaim under critical pressure (default 5, 0=off)
   KERN_RUNNER_DISK_CRITICAL_FLOOR_BYTES  absolute floor that also marks critical (default 2GiB, 0=off)
   KERN_RUNNER_MEM_MIN_FREE_BYTES  pause claims while host MemAvailable below floor (default 1GiB, 0=off)
-  KERN_RUNNER_CACHE_MAX_BYTES    cap the persistent _cache tree, evicting oldest first (default 8GiB, 0=off)
+  KERN_RUNNER_CACHE_MAX_BYTES    cap the persistent _cache tree, evicting oldest first (default 20GiB, 0=off)
   KERN_ACTIONS_GIT_BASE     git base URL for remote actions (default: the run's
                             repo host, or https://github.com)
   KERN_ACTIONS_PRESEED      comma-separated owner/repo@ref actions warmed into
@@ -290,7 +290,9 @@ func runPortForward(args []string) int {
 			to = strings.TrimPrefix(args[i], "--to=")
 		}
 	}
-	if err := runner.RunPortForward(listen, to); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := runner.RunPortForward(ctx, listen, to); err != nil {
 		fmt.Fprintln(os.Stderr, "kern-runner port-forward:", err)
 		return 1
 	}
@@ -397,7 +399,10 @@ func agentConfig(o options) runner.Config {
 	if v := os.Getenv("KERN_RUNNER_CACHE_MAX_BYTES"); v != "" {
 		cfg.CacheMaxBytes, _ = strconv.ParseInt(v, 10, 64)
 	} else {
-		cfg.CacheMaxBytes = 8 << 30
+		// 20 GiB floor (#372): the cache now also carries Go/pip/uv/yarn/
+		// rustup toolchains — 8 GiB evicted warm entries almost as fast
+		// as jobs refilled them.
+		cfg.CacheMaxBytes = 20 << 30
 	}
 	return cfg
 }

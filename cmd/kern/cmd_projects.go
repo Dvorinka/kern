@@ -314,7 +314,7 @@ func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 		}
 		opts, pos := parseFlagsEx(norm, []string{"follow"}, "job", "step", "follow", "out", "search", "project", "limit")
 		if opts["search"] != "" {
-			return c.searchLogs(ctx, opts["search"], first(pos...), opts["project"], opts["limit"])
+			return c.searchLogs(ctx, opts["search"], first(pos...), first(opts["project"], c.project), opts["limit"])
 		}
 		id, err := strarg(pos, 0, "run id")
 		if err != nil {
@@ -408,13 +408,22 @@ func (c *cli) waitRun(ctx context.Context, id, intervalStr, timeoutStr string) e
 		if r.Status == "completed" || r.Status == "failed" || r.Status == "cancelled" {
 			if c.json {
 				printJSON(out)
-				return nil
-			}
-			fmt.Printf("run %s #%d — %s %s (%s)\n", shortID(r.ID), r.RunNumber, r.Status, r.Conclusion, r.Event)
-			for _, j := range out.Jobs {
-				if j.Conclusion == "failure" || j.Conclusion == "cancelled" {
-					fmt.Printf("  %s: %s\n", j.Name, j.Conclusion)
+			} else {
+				fmt.Printf("run %s #%d — %s %s (%s)\n", shortID(r.ID), r.RunNumber, r.Status, r.Conclusion, r.Event)
+				for _, j := range out.Jobs {
+					if j.Conclusion == "failure" || j.Conclusion == "cancelled" {
+						fmt.Printf("  %s: %s\n", j.Name, j.Conclusion)
+					}
 				}
+			}
+			// CI gating depends on the exit code: a concluded-but-failed run
+			// must not look like success to scripts and agents.
+			switch r.Conclusion {
+			case "failure", "cancelled", "timed_out", "action_required", "startup_failure":
+				return fmt.Errorf("run %s concluded %s", shortID(r.ID), r.Conclusion)
+			}
+			if r.Status != "completed" {
+				return fmt.Errorf("run %s %s", shortID(r.ID), r.Status)
 			}
 			return nil
 		}
@@ -530,20 +539,45 @@ type logTarget struct {
 // terminal. Sequential per-step streaming keeps ordering readable. With --out
 // each step lands in <dir>/run-<id>/<job>/<step>.log plus a run.json summary.
 func (c *cli) runLogs(ctx context.Context, runID, jobFilter, stepFilter, follow, outDir string) error {
-	var out runDetail
-	if err := c.api().get(ctx, "/runs/"+runID, nil, &out); err != nil {
-		return err
-	}
-	var targets []logTarget
-	for _, j := range out.Jobs {
-		if jobFilter != "" && j.Key != jobFilter && j.JobKey != jobFilter && j.Name != jobFilter {
-			continue
+	collect := func() (runDetail, []logTarget, error) {
+		var out runDetail
+		if err := c.api().get(ctx, "/runs/"+runID, nil, &out); err != nil {
+			return out, nil, err
 		}
-		for _, st := range j.Steps {
-			if stepFilter != "" && fmt.Sprintf("%d", st.Number) != stepFilter {
+		var targets []logTarget
+		for _, j := range out.Jobs {
+			if jobFilter != "" && j.Key != jobFilter && j.JobKey != jobFilter && j.Name != jobFilter {
 				continue
 			}
-			targets = append(targets, logTarget{job: first(j.JobKey, j.Key, j.Name), st: st})
+			for _, st := range j.Steps {
+				if stepFilter != "" && fmt.Sprintf("%d", st.Number) != stepFilter {
+					continue
+				}
+				targets = append(targets, logTarget{job: first(j.JobKey, j.Key, j.Name), st: st})
+			}
+		}
+		return out, targets, nil
+	}
+	var out runDetail
+	var targets []logTarget
+	for {
+		var err error
+		out, targets, err = collect()
+		if err != nil {
+			return err
+		}
+		// A freshly dispatched run may not have materialized steps yet;
+		// --follow waits for them instead of failing with "no steps matched".
+		if len(targets) > 0 || follow == "" ||
+			(out.Run.Status != "queued" && out.Run.Status != "running" && out.Run.Status != "pending") {
+			break
+		}
+		timer := time.NewTimer(800 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
 		}
 	}
 	if len(targets) == 0 {
@@ -590,12 +624,27 @@ func (c *cli) runLogs(ctx context.Context, runID, jobFilter, stepFilter, follow,
 			} else {
 				fmt.Print(chunk.Text)
 			}
+			prev := offset
 			offset = chunk.NextOffset
 			terminal := chunk.Status != "running" && chunk.Status != "queued"
-			if follow == "" || (terminal && offset >= chunk.Size) {
+			// Drain every buffered chunk — the API caps each response, so a
+			// single fetch silently truncates logs past the cap.
+			if offset <= prev || (offset >= chunk.Size && (follow == "" || terminal)) {
 				break
 			}
-			time.Sleep(800 * time.Millisecond)
+			if follow == "" || (terminal && offset < chunk.Size) {
+				continue // still draining the snapshot — no need to wait
+			}
+			timer := time.NewTimer(800 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				if f != nil {
+					f.Close()
+				}
+				return ctx.Err()
+			case <-timer.C:
+			}
 		}
 		if f != nil {
 			f.Close()
