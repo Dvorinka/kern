@@ -23,6 +23,10 @@ func (c *cli) cmdOptimize(args []string) error {
 	if len(paths) == 0 {
 		return fmt.Errorf("no workflows found under %s/.github/workflows", dir)
 	}
+	// Merge flag/env/config credentials; offline lint still works when no
+	// server is configured — the fleet fetch below tolerates its error.
+	_ = c.resolve()
+	root := repoRootFor(dir)
 
 	// fleet label inventory — a runs-on label no runner carries means the
 	// job can never be claimed.
@@ -58,7 +62,7 @@ func (c *cli) cmdOptimize(args []string) error {
 		if err != nil {
 			continue
 		}
-		cc := workflows.Compiler{Resolve: makeResolver(dir)}
+		cc := workflows.Compiler{Resolve: makeResolver(root)}
 		res, err := workflows.Compile(string(content), cc)
 		if err != nil || res.Plan == nil {
 			continue
@@ -106,12 +110,24 @@ func (c *cli) cmdOptimize(args []string) error {
 		}
 	}
 
+	sevOrder := map[string]int{"high": 0, "med": 1, "low": 2}
+	sort.SliceStable(out, func(i, k int) bool { return sevOrder[out[i].sev] < sevOrder[out[k].sev] })
+	if c.json {
+		type jsonSuggestion struct {
+			Severity string `json:"severity"`
+			Text     string `json:"text"`
+		}
+		items := make([]jsonSuggestion, 0, len(out))
+		for _, s := range out {
+			items = append(items, jsonSuggestion{Severity: s.sev, Text: s.text})
+		}
+		printJSON(map[string]any{"suggestions": items})
+		return nil
+	}
 	if len(out) == 0 {
 		fmt.Println("no suggestions — the workflows already match the fleet well")
 		return nil
 	}
-	sevOrder := map[string]int{"high": 0, "med": 1, "low": 2}
-	sort.SliceStable(out, func(i, k int) bool { return sevOrder[out[i].sev] < sevOrder[out[k].sev] })
 	for _, s := range out {
 		fmt.Printf("[%s] %s\n", s.sev, s.text)
 	}

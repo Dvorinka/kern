@@ -35,13 +35,18 @@ func (s *Server) listRunners(c *gin.Context) {
 		s.Log.Warn("egress totals lookup failed", zap.Error(err))
 		egress = map[uuid.UUID]int64{}
 	}
+	runnerIDs := make([]uuid.UUID, len(runners))
+	for i := range runners {
+		runnerIDs[i] = runners[i].ID
+	}
+	jobsByRunner, err := s.Store.RunnerActiveJobsBatch(c.Request.Context(), runnerIDs)
+	if err != nil {
+		s.Log.Warn("active jobs lookup failed", zap.Error(err))
+		jobsByRunner = map[uuid.UUID][]store.Job{}
+	}
 	out := make([]runnerView, 0, len(runners))
 	for _, r := range runners {
-		jobs, err := s.Store.RunnerActiveJobs(c.Request.Context(), r.ID)
-		if err != nil {
-			s.Log.Warn("active jobs lookup failed", zap.String("runner", r.Name), zap.Error(err))
-		}
-		out = append(out, runnerView{Runner: r, ActiveJobs: len(jobs), Egress24hBytes: egress[r.ID]})
+		out = append(out, runnerView{Runner: r, ActiveJobs: len(jobsByRunner[r.ID]), Egress24hBytes: egress[r.ID]})
 	}
 	c.JSON(http.StatusOK, gin.H{"runners": out})
 }

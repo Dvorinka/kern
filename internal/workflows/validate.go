@@ -15,19 +15,40 @@ func validateExpressionsIn(d *diagnostics, wf *Workflow) {
 			continue
 		}
 		base := "jobs." + id
+		checkString(d, base+".name", job.Name)
 		checkString(d, base+".if", job.If)
+		checkString(d, base+".concurrency.group", job.Concurrency.Group)
+		checkString(d, base+".concurrency.cancel-in-progress", job.Concurrency.CancelExpr)
+		checkString(d, base+".continue-on-error", job.ContinueOnErrorExpr)
+		checkString(d, base+".timeout-minutes", job.TimeoutExpr)
+		for _, r := range job.RunsOn {
+			checkString(d, base+".runs-on", r)
+		}
 		checkMap(d, base+".env", job.Env)
+		checkMap(d, base+".with", job.With)
+		for k, v := range job.Outputs {
+			checkString(d, base+".outputs."+k, v)
+		}
+		if job.Strategy != nil {
+			checkString(d, base+".strategy.fail-fast", job.Strategy.FailFastExpr)
+		}
 		for i, s := range job.Steps {
 			stepBase := base + ".steps[" + strconv.Itoa(i) + "]"
 			checkString(d, stepBase+".if", s.If)
 			checkString(d, stepBase+".run", s.Run)
 			checkString(d, stepBase+".name", s.Name)
+			checkString(d, stepBase+".shell", s.Shell)
+			checkString(d, stepBase+".working-directory", s.WorkingDirectory)
+			checkString(d, stepBase+".continue-on-error", s.ContinueOnErrorExpr)
+			checkString(d, stepBase+".timeout-minutes", s.TimeoutExpr)
 			checkMap(d, stepBase+".env", s.Env)
+			checkMap(d, stepBase+".with", s.With)
 		}
 	}
 	checkMap(d, "env", wf.Env)
 	checkString(d, "run-name", wf.RunName)
 	checkString(d, "concurrency.group", wf.Concurrency.Group)
+	checkString(d, "concurrency.cancel-in-progress", wf.Concurrency.CancelExpr)
 }
 
 func checkMap(d *diagnostics, path string, m map[string]any) {

@@ -13,10 +13,10 @@ import (
 var topLevelCommands = []string{
 	"install", "status", "login", "logout", "whoami",
 	"token", "config", "projects", "migrate",
-	"runs", "logs", "diagnose", "doctor", "exec",
+	"runs", "logs", "diagnose", "doctor", "exec", "ssh", "testbox",
 	"settings", "runners", "artifacts", "cache",
 	"secrets", "vars", "environments", "deployments",
-	"split", "lint", "hooks", "completion", "version",
+	"split", "optimize", "lint", "hooks", "completion", "version",
 }
 
 // subCommands maps a top-level command to its subcommand tree (one level —
@@ -39,6 +39,8 @@ var subCommands = map[string][]string{
 	"completion":   {"bash", "zsh", "fish"},
 	"migrate":      {},
 	"exec":         {},
+	"ssh":          {},
+	"testbox":      {},
 	"diagnose":     {},
 	"doctor":       {},
 	"status":       {},
@@ -47,6 +49,7 @@ var subCommands = map[string][]string{
 	"whoami":       {},
 	"install":      {},
 	"split":        {},
+	"optimize":     {},
 	"lint":         {},
 	"version":      {},
 }

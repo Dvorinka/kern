@@ -56,7 +56,7 @@ func labelKey(labels map[string]string) string {
 		if i > 0 {
 			b.WriteByte(',')
 		}
-		fmt.Fprintf(&b, `%s=%q`, k, labels[k])
+		fmt.Fprintf(&b, `%s="%s"`, k, escLabel(labels[k]))
 	}
 	b.WriteByte('}')
 	return b.String()
@@ -155,6 +155,13 @@ func (r *Registry) Exposition() string {
 		fmt.Fprintf(&b, "%s_sum%s %g\n%s_count%s %d\n", name, suffix, h.sum, name, suffix, h.count)
 	}
 	return b.String()
+}
+
+// escLabel escapes a label value for the 0.0.4 text format. %q is wrong here:
+// it emits Go escapes like \x0b that Prometheus cannot parse.
+func escLabel(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`)
+	return r.Replace(s)
 }
 
 func metricName(key string) string {

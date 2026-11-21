@@ -1,12 +1,15 @@
 package runner
 
 import (
+	"bytes"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // logSink counts appendLog POSTs and captures the merged byte stream.
@@ -89,5 +92,76 @@ func TestLogPumpSizeFlush(t *testing.T) {
 		}
 	default:
 		t.Fatal("no log body captured")
+	}
+}
+
+func TestLogPumpChunkingAndRetry(t *testing.T) {
+	var calls atomic.Int32
+	var received [][]byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := calls.Add(1)
+		body, _ := io.ReadAll(r.Body)
+		if n == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		received = append(received, body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := newClient(srv.URL, "")
+	p := newLogPump(c, "job-1", 1, nil, nil)
+	big := bytes.Repeat([]byte("a"), logMaxChunkBytes+100)
+	p.write(big)
+	p.close()
+
+	if len(received) < 2 {
+		t.Fatalf("expected >= 2 chunks for >512KiB write, got %d", len(received))
+	}
+	var total int
+	for _, ch := range received {
+		if len(ch) > logMaxChunkBytes {
+			t.Fatalf("chunk exceeded %d bytes: %d", logMaxChunkBytes, len(ch))
+		}
+		total += len(ch)
+	}
+	if total != len(big) {
+		t.Fatalf("total received = %d, want %d (retry dropped data)", total, len(big))
+	}
+}
+
+func TestStreamIntoLargeLineNoNewline(t *testing.T) {
+	sink := &logSink{t: t, data: make(chan []byte, 16)}
+	srv := httptest.NewServer(sink.handler())
+	defer srv.Close()
+
+	c := newClient(srv.URL, "")
+	p := newLogPump(c, "job-1", 1, nil, nil)
+	payload := strings.Repeat("z", 200<<10)
+	streamInto(strings.NewReader(payload), p)
+	p.close()
+
+	var got bytes.Buffer
+	for len(sink.data) > 0 {
+		got.Write(<-sink.data)
+	}
+	if got.Len() != len(payload) {
+		t.Fatalf("streamInto got %d bytes, want %d", got.Len(), len(payload))
+	}
+}
+
+func TestTrimServiceLogCapUTF8Safe(t *testing.T) {
+	line := "service:db | žluťoučký kůň úpěl ďábelské ódy\n"
+	buf := []byte(strings.Repeat(line, 20))
+	trimmed := trimServiceLogCap(buf, 200)
+	if !utf8.Valid(trimmed) {
+		t.Fatalf("trimmed output is not valid UTF-8")
+	}
+	if !strings.HasPrefix(string(trimmed), "service:log | ... truncated ...\n") {
+		t.Fatalf("missing truncation marker: %q", string(trimmed[:40]))
+	}
+	if len(trimmed) > 200 {
+		t.Fatalf("trimmed length %d > 200", len(trimmed))
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -50,7 +51,10 @@ func (s *Server) searchLogs(c *gin.Context) {
 		return
 	}
 	limit := parseInt(c.DefaultQuery("limit", ""), logSearchDefaultHit)
-	if limit <= 0 || limit > logSearchMaxHits {
+	if limit <= 0 {
+		limit = logSearchDefaultHit
+	}
+	if limit > logSearchMaxHits {
 		limit = logSearchMaxHits
 	}
 	var runID uuid.UUID
@@ -59,7 +63,7 @@ func (s *Server) searchLogs(c *gin.Context) {
 			runID = id
 		} else {
 			// CLI users pass the short printed id; accept an unambiguous prefix.
-			cands, cerr := s.Store.RunPrefix(c.Request.Context(), v)
+			cands, cerr := s.Store.RunPrefix(c.Request.Context(), user.OrgID, v)
 			if cerr != nil || len(cands) != 1 {
 				fail(c, http.StatusBadRequest, "invalid_run", "run must be a uuid or unambiguous prefix")
 				return
@@ -101,7 +105,13 @@ func (s *Server) searchLogs(c *gin.Context) {
 			}
 			text := sc.Text()
 			if len(text) > logSearchTextMax {
-				text = text[:logSearchTextMax] + "…"
+				// Cut on a rune boundary — a raw byte slice can split a
+				// multi-byte UTF-8 sequence and emit invalid text.
+				cut := logSearchTextMax
+				for cut > 0 && !utf8.RuneStart(text[cut]) {
+					cut--
+				}
+				text = text[:cut] + "…"
 			}
 			hits = append(hits, logSearchHit{
 				RunID: st.RunID.String(), RunNumber: st.RunNumber,
@@ -113,6 +123,11 @@ func (s *Server) searchLogs(c *gin.Context) {
 			if len(hits) >= limit {
 				break
 			}
+		}
+		if sc.Err() != nil {
+			// A line over the scanner buffer (or a blob read error) must not
+			// silently look like a clean scan.
+			truncated = true
 		}
 		_ = rc.Close()
 		if scanned >= logSearchMaxBytes {

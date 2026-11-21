@@ -27,8 +27,15 @@ func SizeWorkers(hostCPUs, concurrency int, jobCPUs string) (workers int, cpus s
 		return workers, jobCPUs
 	}
 	share := hostCPUs / workers
-	if share < 1 {
-		share = 1
+	// --cpus is a burst limit, not a reservation — a strict equal share
+	// (1 core per job on an 8-worker host) starves parallel compilers
+	// while leaving the kernel idle (#372). Floor each job at 2 cores;
+	// oversubscription is safe because the scheduler arbitrates bursts.
+	if share < 2 {
+		share = 2
+	}
+	if share > hostCPUs {
+		share = hostCPUs
 	}
 	return workers, strconv.Itoa(share)
 }

@@ -131,9 +131,8 @@ func (s *Server) listArtifacts(c *gin.Context) {
 	user, _ := currentUser(c)
 	var runID *uuid.UUID
 	if v := c.Query("run_id"); v != "" {
-		id, err := uuid.Parse(v)
-		if err != nil {
-			fail(c, http.StatusBadRequest, "invalid_run_id", "run_id must be a uuid")
+		id, ok := s.resolveRunID(c, v, user.OrgID)
+		if !ok {
 			return
 		}
 		runID = &id
@@ -156,9 +155,8 @@ func (s *Server) listArtifacts(c *gin.Context) {
 
 func (s *Server) deleteArtifact(c *gin.Context) {
 	user, _ := currentUser(c)
-	id, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		fail(c, http.StatusBadRequest, "invalid_id", "artifact id must be a uuid")
+	id, ok := s.artifactIDParam(c)
+	if !ok {
 		return
 	}
 	ref, err := s.Store.DeleteArtifact(c.Request.Context(), user.OrgID, id)
@@ -174,12 +172,12 @@ func (s *Server) deleteArtifact(c *gin.Context) {
 }
 
 func (s *Server) getArtifact(c *gin.Context) {
-	id, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		fail(c, http.StatusBadRequest, "invalid_id", "artifact id must be a uuid")
+	user, _ := currentUser(c)
+	id, ok := s.artifactIDParam(c)
+	if !ok {
 		return
 	}
-	a, err := s.Store.Artifact(c.Request.Context(), id)
+	a, err := s.Store.Artifact(c.Request.Context(), user.OrgID, id)
 	if err != nil {
 		s.internalError(c, err)
 		return

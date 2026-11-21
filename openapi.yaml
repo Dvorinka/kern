@@ -603,6 +603,11 @@ paths:
                 type: object
                 properties:
                   runners: { type: array, items: { $ref: "#/components/schemas/Runner" } }
+    post:
+      tags: [runners]
+      summary: Mint a JIT ephemeral runner registration (admin)
+      responses:
+        "201": { description: JIT runner created }
   /enroll-tokens:
     post:
       tags: [runners]
@@ -1145,6 +1150,166 @@ paths:
           application/octet-stream: { schema: { type: string, format: binary } }
       responses:
         "200": { description: Stored }
+  /logs/search:
+    get:
+      tags: [runs]
+      summary: Search step logs across recent runs
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string } }
+        - { name: project, in: query, schema: { type: string } }
+        - { name: run_id, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer } }
+      responses:
+        "200": { description: Matching log lines }
+  /runs/day-counts:
+    get:
+      tags: [runs]
+      summary: Daily run counts for activity heatmap
+      responses:
+        "200": { description: Daily run counts }
+  /runs/clear-cancelled:
+    post:
+      tags: [runs]
+      summary: Delete cancelled runs
+      responses:
+        "200": { description: Cleared count }
+  /jobs:
+    get:
+      tags: [runs]
+      summary: List queued and active jobs
+      responses:
+        "200": { description: Jobs list }
+  /runners/{id}/auto-update:
+    post:
+      tags: [runners]
+      summary: Toggle runner auto-update (admin)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Updated }
+  /vars:
+    get:
+      tags: [secrets]
+      summary: List project configuration variables
+      parameters:
+        - { name: project, in: query, schema: { type: string } }
+      responses:
+        "200": { description: Variables list }
+  /vars/{name}:
+    put:
+      tags: [secrets]
+      summary: Create or update a configuration variable (admin)
+      parameters: [{ name: name, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: Saved }
+    delete:
+      tags: [secrets]
+      summary: Delete a configuration variable (admin)
+      parameters: [{ name: name, in: path, required: true, schema: { type: string } }]
+      responses:
+        "204": { description: Deleted }
+  /jobs/{id}/exec:
+    post:
+      tags: [runs]
+      summary: Queue a live-exec session on a running job (admin)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "201": { description: Exec session created }
+  /exec/{id}:
+    get:
+      tags: [runs]
+      summary: Poll live-exec session state and output
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: after, in: query, schema: { type: integer, format: int64 } }
+      responses:
+        "200": { description: Exec state and output chunk }
+    delete:
+      tags: [runs]
+      summary: Cancel a live-exec session (admin)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Cancelled }
+  /exec/{id}/stdin:
+    post:
+      tags: [runs]
+      summary: Append stdin bytes or close stdin on a live-exec session (admin)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Ack }
+  /runners/exec/{execID}/start:
+    post:
+      tags: [runner-protocol]
+      summary: Mark live-exec session running
+      parameters: [{ name: execID, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Started }
+  /runners/exec/{execID}/output:
+    post:
+      tags: [runner-protocol]
+      summary: Append live-exec output chunk
+      parameters: [{ name: execID, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Ack }
+  /runners/exec/{execID}/stdin:
+    get:
+      tags: [runner-protocol]
+      summary: Poll live-exec stdin bytes and cancel state
+      parameters: [{ name: execID, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Stdin chunk }
+  /runners/exec/{execID}/finish:
+    post:
+      tags: [runner-protocol]
+      summary: Report live-exec exit state
+      parameters: [{ name: execID, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Finished }
+  /runners/jobs/{jobID}/ghcache/_apis/artifactcache/cache:
+    get:
+      tags: [runner-protocol]
+      summary: GitHub Actions cache v1 lookup
+      parameters: [{ name: jobID, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Cache hit }
+        "204": { description: Cache miss }
+  /runners/jobs/{jobID}/ghcache/_apis/artifactcache/caches:
+    get:
+      tags: [runner-protocol]
+      summary: GitHub Actions cache v1 list
+      parameters: [{ name: jobID, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Cache entries }
+    post:
+      tags: [runner-protocol]
+      summary: GitHub Actions cache v1 reserve upload
+      parameters: [{ name: jobID, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "201": { description: Reserved }
+  /runners/jobs/{jobID}/ghcache/_apis/artifactcache/caches/{cacheID}:
+    patch:
+      tags: [runner-protocol]
+      summary: GitHub Actions cache v1 upload chunk
+      parameters:
+        - { name: jobID, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: cacheID, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Chunk stored }
+    post:
+      tags: [runner-protocol]
+      summary: GitHub Actions cache v1 commit upload
+      parameters:
+        - { name: jobID, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: cacheID, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Committed }
+  /cache-dl/{token}:
+    get:
+      tags: [runner-protocol]
+      security: []
+      summary: Signed cache archive download for @actions/cache
+      parameters: [{ name: token, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: Archive }
 
 components:
   securitySchemes:
@@ -1307,7 +1472,7 @@ components:
         name: { type: string }
         status: { type: string }
         labels: { type: array, items: { type: string } }
-        last_seen_at: { type: string, format: date-time, nullable: true }
+        last_heartbeat_at: { type: string, format: date-time, nullable: true }
         draining: { type: boolean }
         icon: { type: string }
         created_at: { type: string, format: date-time }

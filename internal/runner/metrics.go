@@ -43,6 +43,9 @@ type heartbeatMetrics struct {
 	// Deregister asks the control plane to delete this runner's row — the
 	// ephemeral-runner exit path, refused server-side while jobs are in flight.
 	Deregister bool `json:"deregister,omitempty"`
+	// Concurrency reports configured worker slots every heartbeat so the
+	// claim query can schedule on free slots (#372).
+	Concurrency int `json:"concurrency,omitempty"`
 }
 
 // hostSampler derives utilization from OS counters. CPU is a delta
@@ -181,12 +184,16 @@ func (e *executor) startMetricsSampler(ctx context.Context) {
 		}
 	}
 	sample()
+	e.stopped.Add(1)
 	go func() {
+		defer e.stopped.Done()
 		t := time.NewTicker(15 * time.Second)
 		defer t.Stop()
 		for {
 			select {
 			case <-ctx.Done():
+				return
+			case <-e.stop:
 				return
 			case <-t.C:
 				sample()
