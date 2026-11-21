@@ -5,6 +5,95 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-11-22
+
+### Security
+- Enforced `org_id` tenant isolation across the store layer and every
+  API/MCP handler. Foreign resources resolve to not-found (no existence
+  oracles), run/cache/artifact/job prefix lookup is org-scoped, and grant
+  scoping applies before ambiguity decisions (#368).
+- Fork and pull-request trust boundaries: fork/PR runs are untrusted by
+  default — interactive exec is denied, fork cache writes are isolated
+  per pull request, and untrusted runs can never reach the privileged
+  service-registry path (#368).
+- Secrets, masking, grants and RBAC: masked token display everywhere
+  (including `kern auth` output), grant-scoped tokens can no longer learn
+  about out-of-grant projects, and path-safety checks block traversal in
+  artifact/cache/job/run prefixes (#368).
+
+### Added
+- Streamable-HTTP MCP transport with real sessions: `initialize` mints a
+  `Mcp-Session-Id`, `GET /mcp` serves the session SSE channel, `DELETE`
+  closes it, and `kern_wait_run` emits `notifications/progress` for
+  clients that pass `_meta.progressToken`. Stateless POST remains valid
+  (#377).
+- MCP tool expansion: `kern_diagnose_run`, `kern_search_logs`,
+  `kern_wait_run`, `kern_sync_project`, `kern_list_artifacts`, plus ops
+  surface — `kern_doctor`, `kern_predict_run`, `kern_optimize_project`,
+  `kern_mint_agent_token`, remediation/deployment approvals and
+  `kern_exec_job` sandboxed exec on trusted live jobs (#377).
+- MCP resources and prompts for agent-native CI workflows (#377).
+- `kern optimize --profile <run>`: queue-vs-exec waterfall, longest
+  `needs`-DAG critical path, and `--flamegraph` speedscope JSON.
+  `kern top` ships a dependency-free fleet dashboard. `kern upgrade`
+  verifies sha256 against the release checksum asset. `kern init`
+  bootstraps projects (#376).
+- `kern testbox --with-needs` executes the transitive `needs:` DAG in
+  dependency order; `-i`/`--interactive` on `kern diagnose` opens an
+  alternate-screen pager. `kern runs watch` multiplexes run/job/step/log
+  SSE (#376).
+- `GET /runs/:id/diagnose` single-bundle endpoint feeding `kern
+  diagnose`, `kern optimize --profile`, MCP diagnosis and web UI
+  (#376).
+- Web UI: job/step deep links (`?job=&step=`), `#L<n>` log anchors with
+  group collapse and incremental `LogView`, gantt queue-wait and
+  critical-path segments, bulk runner drain/undrain/delete, Command-K
+  quick actions, copy-AI-diagnosis, URL-synced filters (#378).
+- Runner protocol additions: `GET /runs/:id/stream` multiplexed SSE,
+  runner-side `/cache/:key/prepare|commit` presigned upload pair,
+  `cache/restore?direct=1` signed-download handoff, LISTEN/NOTIFY live
+  log wakeups, opt-in OpenTelemetry, `/metrics` Prometheus exposition
+  (#374, #369).
+
+### Changed
+- Scheduling is slot-aware: runners report concurrency, the fleet
+  scheduler yields to free slots, longest-pole-first ordering, DAG
+  advancement to fixpoint per call, and matrix sibling fail-fast
+  cancellation preserved (#372).
+- Runner speed: warm toolchain caches, bare-mirror checkouts via
+  `git worktree`, persistent BuildKit builder for privileged jobs,
+  parallel service image pulls, digest-pinned image skip, passwd probe
+  memoization (#372).
+- Cache archives default to zstd (klauspost/compress) with magic-sniffed
+  restore — gzip blobs and mixed fleets keep working;
+  `KERN_CACHE_CODEC=gzip` opts back (#369).
+- ghcache chunked uploads are now HA-safe: sessions live in Postgres and
+  chunks land as immutable per-offset blob objects, so any API replica
+  serves any PATCH and commit claims the row atomically (#369).
+
+### Fixed
+- Security: fork cache-scope poisoning, unmasked tokens, grant/RBAC
+  bypasses, secret path traversal (#368).
+- Workflow engine: orchestrator run/job races, condition-gating holes,
+  GHA expression semantics, matrix, reusable-workflow secrets, cron
+  `dow=7`, YAML decoding edge cases (#371).
+- Runner reliability: live-exec deadlock/truncation, port-forward
+  half-close, service registry credentials, zombie containers,
+  cancellation/watchdog races, log-loss ordering and chunking (#370).
+- Healing: disk/memory GC bugs, reactive mid-run remediation,
+  rolling self-update, flaky quarantine, service health recovery
+  (#373).
+- Performance: hot-path indexes, N+1 collapse, per-request decrypt
+  storm, sync webhooks, invalid Prometheus races, hot polling (#374).
+- CLI: global flag stripping, 60s timeout kills, log truncation,
+  testbox host-container reaping, short-ID traps, `--json`/NDJSON,
+  completions and OpenAPI/SKILL parity (#375).
+- Web: broken rerun/undrain controls, log truncation, SSE freeze, the
+  150-request detail fan-out (replaced by `GET /runs/jobs` batch),
+  Command-K semantics, placeholder and legend correctness (#378).
+- Cache: cross-scope poisoning, fork host-cache RCE, blob OOMs, mutex
+  stalls, symlink preservation, unique blob refs (#369).
+
 ## [0.17.0] - 2026-11-21
 
 ### Added
