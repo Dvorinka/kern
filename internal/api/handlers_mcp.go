@@ -278,9 +278,9 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			out = runs
 		}
 	case "kern_get_run":
-		id, perr := uuid.Parse(mcpArgStringOr(params, "run_id"))
+		id, perr := s.mcpResolveRunID(c, mcpArgStringOr(params, "run_id"))
 		if perr != nil {
-			err = fmt.Errorf("run_id must be a UUID")
+			err = perr
 			break
 		}
 		var run store.Run
@@ -303,9 +303,9 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			out = map[string]any{"run": run, "jobs": views}
 		}
 	case "kern_step_log":
-		jobID, perr := uuid.Parse(mcpArgStringOr(params, "job_id"))
+		jobID, perr := s.mcpResolveJobID(ctx, user.OrgID, mcpArgStringOr(params, "job_id"))
 		if perr != nil {
-			err = fmt.Errorf("job_id must be a UUID")
+			err = perr
 			break
 		}
 		n := mcpArgInt(params, "step", 0)
@@ -459,9 +459,9 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			err = fmt.Errorf("token requires the write scope")
 			break
 		}
-		id, perr := uuid.Parse(mcpArgStringOr(params, "run_id"))
+		id, perr := s.mcpResolveRunID(c, mcpArgStringOr(params, "run_id"))
 		if perr != nil {
-			err = fmt.Errorf("run_id must be a UUID")
+			err = perr
 			break
 		}
 		orig, rerr := s.Store.Run(ctx, id)
@@ -570,9 +570,9 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			err = fmt.Errorf("token requires the %s scope", need)
 			break
 		}
-		id, perr := uuid.Parse(mcpArgStringOr(params, "run_id"))
+		id, perr := s.mcpResolveRunID(c, mcpArgStringOr(params, "run_id"))
 		if perr != nil {
-			err = fmt.Errorf("run_id must be a UUID")
+			err = perr
 			break
 		}
 		// Tenant check before any mutation: a foreign run id must look
@@ -686,5 +686,56 @@ func (s *Server) mcpResolveWorkflow(ctx context.Context, projectID uuid.UUID, wa
 		return matches[0], nil
 	default:
 		return store.Workflow{}, fmt.Errorf("workflow %q is ambiguous", want)
+	}
+}
+
+func (s *Server) mcpResolveRunID(c *gin.Context, raw string) (uuid.UUID, error) {
+	exact, prefix, ok := store.ParseIDPrefix(raw)
+	if !ok {
+		return uuid.Nil, fmt.Errorf("run_id must be a UUID or a 4+ char hex prefix")
+	}
+	if prefix == "" {
+		return exact, nil
+	}
+	user, _ := currentUser(c)
+	cands, err := s.Store.RunPrefix(c.Request.Context(), user.OrgID, prefix)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if projects := tokenProjects(c); len(projects) > 0 {
+		cands, err = s.runsInGrant(c, cands, projects)
+		if err != nil {
+			return uuid.Nil, err
+		}
+	}
+	switch len(cands) {
+	case 0:
+		return uuid.Nil, fmt.Errorf("run %q not found", raw)
+	case 1:
+		return cands[0].ID, nil
+	default:
+		return uuid.Nil, fmt.Errorf("run_id prefix %q is ambiguous (%d matches) — pass more characters", raw, len(cands))
+	}
+}
+
+func (s *Server) mcpResolveJobID(ctx context.Context, orgID uuid.UUID, raw string) (uuid.UUID, error) {
+	exact, prefix, ok := store.ParseIDPrefix(raw)
+	if !ok {
+		return uuid.Nil, fmt.Errorf("job_id must be a UUID or a 4+ char hex prefix")
+	}
+	if prefix == "" {
+		return exact, nil
+	}
+	cands, err := s.Store.JobPrefix(ctx, orgID, prefix)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	switch len(cands) {
+	case 0:
+		return uuid.Nil, fmt.Errorf("job %q not found", raw)
+	case 1:
+		return cands[0], nil
+	default:
+		return uuid.Nil, fmt.Errorf("job_id prefix %q is ambiguous (%d matches) — pass more characters", raw, len(cands))
 	}
 }

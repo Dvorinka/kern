@@ -15,6 +15,11 @@ func printJSON(v any) {
 	_ = enc.Encode(v)
 }
 
+// printNDJSON writes a single compact JSON line for streaming / --watch modes.
+func printNDJSON(v any) {
+	_ = json.NewEncoder(os.Stdout).Encode(v)
+}
+
 // table renders aligned columns via tabwriter.
 func table(headers []string, rows [][]string) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)

@@ -272,10 +272,11 @@ func (s *Store) Run(ctx context.Context, id uuid.UUID) (Run, error) {
 // scopes the candidates to one tenant; uuid.Nil resolves across orgs (the
 // unauthenticated public-run route relies on that).
 func (s *Store) RunPrefix(ctx context.Context, orgID uuid.UUID, prefix string) ([]Run, error) {
+	clean := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(prefix)), "-", "")
 	rows, err := s.pool.Query(ctx, runSelect+`
-		WHERE r.id::text LIKE $1 || '%'
+		WHERE replace(r.id::text, '-', '') LIKE $1 || '%'
 		  AND ($2::uuid IS NULL OR p.org_id = $2)
-		ORDER BY r.created_at DESC LIMIT 8`, prefix, nullableUUID(orgID))
+		ORDER BY r.created_at DESC LIMIT 8`, clean, nullableUUID(orgID))
 	if err != nil {
 		return nil, err
 	}

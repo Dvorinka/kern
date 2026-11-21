@@ -5,14 +5,18 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dvorinka/kern/internal/version"
 )
 
+var versionSkewOnce sync.Once
+
 // warnVersionSkew flags CLI/server drift on major.minor: an old binary
 // against a newer /api/v1 fails confusingly (404s, ignored fields), so say
-// so on stderr. Patch drift and dev builds stay quiet.
+// so on stderr. Patch drift and dev builds stay quiet. Emitted at most once
+// per process so --watch doesn't spam stderr every 3s.
 func warnVersionSkew(server string) {
 	core := func(v string) string {
 		v = strings.TrimPrefix(strings.TrimSpace(v), "v")
@@ -29,8 +33,10 @@ func warnVersionSkew(server string) {
 	if client == "" || client == "dev" || srv == "" || srv == "dev" || client == srv {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "kern: warning: CLI v%s vs server v%s — some commands may not work; upgrade the CLI\n",
-		version.Version, server)
+	versionSkewOnce.Do(func() {
+		fmt.Fprintf(os.Stderr, "kern: warning: CLI v%s vs server v%s — some commands may not work; upgrade the CLI\n",
+			version.Version, server)
+	})
 }
 
 // cmdStatus prints the control-plane dashboard: api meta, queue depth, and
@@ -49,7 +55,7 @@ func (c *cli) cmdStatus(ctx context.Context, args []string) error {
 		return err
 	}
 	for {
-		if err := c.printStatus(ctx); err != nil {
+		if err := c.printStatus(ctx, watch); err != nil {
 			return err
 		}
 		if !watch {
@@ -63,7 +69,7 @@ func (c *cli) cmdStatus(ctx context.Context, args []string) error {
 	}
 }
 
-func (c *cli) printStatus(ctx context.Context) error {
+func (c *cli) printStatus(ctx context.Context, ndjson bool) error {
 	var meta struct {
 		Name    string `json:"name"`
 		Version string `json:"version"`
@@ -113,7 +119,7 @@ func (c *cli) printStatus(ctx context.Context) error {
 		}
 	}
 	if c.json {
-		printJSON(map[string]any{
+		payload := map[string]any{
 			"server": c.server, "version": meta.Version, "env": meta.Env,
 			"runs_active": o.RunsActive, "jobs_queued": o.JobsQueued,
 			"jobs_running": o.JobsRunning, "runners_online": online,
@@ -121,7 +127,12 @@ func (c *cli) printStatus(ctx context.Context) error {
 			"runners_draining": draining, "runners_offline": offline,
 			"runners_total": o.RunnersTotal, "last_heartbeat": lastBeat,
 			"last_run": o.LastRunAt,
-		})
+		}
+		if ndjson {
+			printNDJSON(payload)
+		} else {
+			printJSON(payload)
+		}
 		return nil
 	}
 	fmt.Printf("%s %s · %s · %s\n", meta.Name, meta.Version, meta.Env, c.server)

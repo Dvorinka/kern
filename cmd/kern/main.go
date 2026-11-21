@@ -86,6 +86,7 @@ Environments:
 
 Advisory:
   split --pattern GLOB --shards N [--root DIR]   suggest strategy.split and file buckets
+  optimize [dir|file]          audit workflows for speed, caching, and runner fit
   lint [dir ...]               offline compile of .github/workflows — will KERN run it?
   hooks install [--dry-run] [--force]             pre-push hook that runs kern lint
   completion <bash|zsh|fish>  print a shell completion script
@@ -290,7 +291,9 @@ func dispatch(c *cli, args []string) int {
 	var err error
 	switch name {
 	case "version", "--version", "-v":
-		fmt.Println("kern " + version.Version)
+		c.orJSON(map[string]any{"version": version.Version}, func() {
+			fmt.Println("kern " + version.Version)
+		})
 	case "install":
 		err = c.cmdInstall(ctx, rest)
 	case "status":

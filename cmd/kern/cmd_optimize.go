@@ -106,12 +106,24 @@ func (c *cli) cmdOptimize(args []string) error {
 		}
 	}
 
+	sevOrder := map[string]int{"high": 0, "med": 1, "low": 2}
+	sort.SliceStable(out, func(i, k int) bool { return sevOrder[out[i].sev] < sevOrder[out[k].sev] })
+	if c.json {
+		type jsonSuggestion struct {
+			Severity string `json:"severity"`
+			Text     string `json:"text"`
+		}
+		items := make([]jsonSuggestion, 0, len(out))
+		for _, s := range out {
+			items = append(items, jsonSuggestion{Severity: s.sev, Text: s.text})
+		}
+		printJSON(map[string]any{"suggestions": items})
+		return nil
+	}
 	if len(out) == 0 {
 		fmt.Println("no suggestions — the workflows already match the fleet well")
 		return nil
 	}
-	sevOrder := map[string]int{"high": 0, "med": 1, "low": 2}
-	sort.SliceStable(out, func(i, k int) bool { return sevOrder[out[i].sev] < sevOrder[out[k].sev] })
 	for _, s := range out {
 		fmt.Printf("[%s] %s\n", s.sev, s.text)
 	}

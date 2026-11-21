@@ -19,9 +19,9 @@ Start every investigation with `kern doctor` — it probes `/healthz`, `/readyz`
 |---|---|
 | Fleet health | `kern doctor`, `kern status [--watch]` |
 | Run triage | `kern diagnose <run-id>` (statuses + failing step log tail), `kern runs list`, `kern runs show <id>`, `kern runs wait <id>` |
-| Re-run | `kern runs rerun <run-id>`; `--failed` requeues only failed jobs, `--job <name>` targets one job. **Prefer the full run UUID** — short-id resolution is a recent addition; if a short id is rejected, use the UUID from `kern runs list` |
-| Runner lifecycle | `kern runners list` (status, labels, load, disk, **version**), `kern runners drain|undrain <id>`, `kern runners self-update <id>`, `kern runners wake`, `kern runners install`, `kern runners enroll` |
-| Logs | `kern logs -f`, `kern runs logs <id>` |
+| Re-run | `kern runs rerun <run-id>`; `--failed` requeues only failed jobs, `--job <name>` targets one job. Short-ID prefixes (4+ hex chars) work across runs, jobs, artifacts, cache, and MCP tools |
+| Runner lifecycle | `kern runners list` (status, labels, load, disk, **version**), `kern runners drain\|undrain <id\|name>`, `kern runners self-update <id\|name> <on\|off>`, `kern runners wake <id\|name>`, `kern runners install`, `kern runners enroll` |
+| Logs | `kern logs <run-id> -f`, `kern runs logs <run-id>` |
 | Manual run | `kern runs trigger` |
 | DB (compose deploy) | `docker exec <deployments>-postgres-1 psql -U kern -d kern` — table is `workflow_runs`, not `runs` |
 
