@@ -188,7 +188,10 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 						AND COALESCE(o.cpu_percent, 100) < COALESCE(me_f.cpu_percent, 100) - $3)
 				  )
 			  )
-			ORDER BY j.priority DESC, j.queued_at
+			-- Longest-pole first within equal priority (#372): jobs whose
+			-- steps historically take longest claim earliest, shrinking the
+			-- run's makespan tail; zero-estimate jobs keep FIFO order.
+			ORDER BY j.priority DESC, j.est_seconds DESC, j.queued_at
 			FOR UPDATE OF j SKIP LOCKED
 			LIMIT 1
 		), claimed AS (
