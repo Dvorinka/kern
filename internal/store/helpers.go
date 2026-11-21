@@ -12,13 +12,21 @@ func (s *Store) ProjectByID(ctx context.Context, id uuid.UUID) (Project, error) 
 	return scanProject(s.pool.QueryRow(ctx, `SELECT `+projectColumns+` FROM projects WHERE id = $1`, id))
 }
 
-// ActiveRunIDs lists runs that still have work to advance.
+// ActiveRunIDs lists in_progress runs that have advanceable work (excluding
+// runs parked solely on waiting_approval jobs so long-lived approval queues
+// cannot starve active runs).
 func (s *Store) ActiveRunIDs(ctx context.Context, limit int) ([]uuid.UUID, error) {
-	limit, _ = page(limit, 0)
+	if limit <= 0 {
+		limit = 500
+	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT id FROM workflow_runs
-		WHERE status = 'in_progress'
-		ORDER BY created_at
+		SELECT r.id FROM workflow_runs r
+		WHERE r.status = 'in_progress'
+		  AND (
+			NOT EXISTS (SELECT 1 FROM jobs j WHERE j.run_id = r.id)
+			OR EXISTS (SELECT 1 FROM jobs j WHERE j.run_id = r.id AND j.status <> 'waiting_approval')
+		  )
+		ORDER BY r.created_at
 		LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
@@ -57,22 +65,58 @@ func (s *Store) StepByID(ctx context.Context, id uuid.UUID) (Step, uuid.UUID, uu
 	return st, runID, st.JobID, nil
 }
 
-// CancelSiblings cancels pending jobs that share a job_key (matrix fail-fast).
+// CancelSiblings cancels pending and in-progress jobs that share a job_key
+// (matrix fail-fast), releasing their leases, cancelling open steps, and
+// failing only deployments whose jobs were actually cancelled.
 func (s *Store) CancelSiblings(ctx context.Context, runID uuid.UUID, jobKey string, exceptJobID uuid.UUID) (int64, error) {
-	tag, err := s.pool.Exec(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `
 		UPDATE jobs SET status = 'cancelled', conclusion = 'cancelled', completed_at = now(),
-			error = 'cancelled by fail-fast'
-		WHERE run_id = $1 AND job_key = $2 AND id <> $3 AND status IN ('queued', 'waiting', 'waiting_approval')`,
+			runner_id = NULL, lease_expires_at = NULL, error = 'cancelled by fail-fast'
+		WHERE run_id = $1 AND job_key = $2 AND id <> $3
+		  AND status IN ('queued', 'waiting', 'waiting_approval', 'in_progress')
+		RETURNING id`,
 		runID, jobKey, exceptJobID)
 	if err != nil {
 		return 0, err
 	}
-	if _, err := s.pool.Exec(ctx, `
-		UPDATE deployments d SET status = 'failure', completed_at = now()
-		FROM jobs j
-		WHERE j.run_id = $1 AND j.job_key = $2 AND j.id <> $3 AND d.job_id = j.id
-		  AND d.status IN ('queued', 'in_progress')`, runID, jobKey, exceptJobID); err != nil {
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
 		return 0, err
 	}
-	return tag.RowsAffected(), nil
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE steps SET status = 'cancelled', conclusion = 'cancelled', completed_at = now()
+		WHERE job_id = ANY($1) AND status IN ('queued', 'running')`, ids); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE job_leases SET released_at = now()
+		WHERE released_at IS NULL AND job_id = ANY($1)`, ids); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE deployments SET status = 'failure', completed_at = now()
+		WHERE job_id = ANY($1) AND status IN ('queued', 'in_progress')`, ids); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return int64(len(ids)), nil
 }

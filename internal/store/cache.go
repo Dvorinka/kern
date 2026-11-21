@@ -41,11 +41,14 @@ func scanCacheEntry(row pgx.Row) (CacheEntry, error) {
 
 // CacheLookup resolves a cache key the way GitHub does: an exact match wins;
 // otherwise each restore prefix is tried in order against the newest entry.
-func (s *Store) CacheLookup(ctx context.Context, projectID uuid.UUID, key string, prefixes, scopes []string) (CacheEntry, error) {
+// Version encodes paths+compression in @actions/cache — a version-mismatched
+// restore would hand a zstd caller a gzip archive (#369). "" matches all.
+func (s *Store) CacheLookup(ctx context.Context, projectID uuid.UUID, key, version string, prefixes, scopes []string) (CacheEntry, error) {
 	e, err := scanCacheEntry(s.pool.QueryRow(ctx,
 		`SELECT `+cacheCols+` FROM cache_entries
 		 WHERE project_id = $1 AND key = $2 AND scope = ANY($3)
-		 ORDER BY created_at DESC LIMIT 1`, projectID, key, scopes))
+		   AND ($4 = '' OR version = $4)
+		 ORDER BY created_at DESC LIMIT 1`, projectID, key, scopes, version))
 	if err == nil {
 		return e, nil
 	}
@@ -59,7 +62,8 @@ func (s *Store) CacheLookup(ctx context.Context, projectID uuid.UUID, key string
 		e, err = scanCacheEntry(s.pool.QueryRow(ctx,
 			`SELECT `+cacheCols+` FROM cache_entries
 			 WHERE project_id = $1 AND starts_with(key, $2) AND scope = ANY($3)
-			 ORDER BY created_at DESC LIMIT 1`, projectID, p, scopes))
+			   AND ($4 = '' OR version = $4)
+			 ORDER BY created_at DESC LIMIT 1`, projectID, p, scopes, version))
 		if err == nil {
 			return e, nil
 		}

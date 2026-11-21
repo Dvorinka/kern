@@ -65,6 +65,7 @@ type Orchestrator struct {
 
 	leaderMu sync.Mutex
 	leader   *store.LeaderSession // held while this replica leads ticks
+	runLocks sync.Map             // map[uuid.UUID]*sync.Mutex serializing AdvanceRun per run
 }
 
 // LeaderLockKey is the Postgres advisory-lock key serializing scheduler
@@ -146,7 +147,18 @@ func (o *Orchestrator) StartRun(ctx context.Context, p store.CreateRunParams) (s
 		return store.Run{}, fmt.Errorf("workflow version is invalid")
 	}
 
-	triggerCtx := triggerContext(&p)
+	// Project vars join both triggerContext (concurrency groups) and the
+	// runs-on resolution context so `${{ vars.* }}` resolves at seed time.
+	varRows, err := o.Store.VarsForProject(ctx, p.ProjectID)
+	if err != nil {
+		return store.Run{}, err
+	}
+	varsCtx := make(map[string]any, len(varRows))
+	for _, v := range varRows {
+		varsCtx[v.Name] = v.Value
+	}
+
+	triggerCtx := triggerContext(&p, res.Name, varsCtx)
 	if p.ConcurrencyGroup == "" && res.Plan.Concurrency != "" {
 		group, err := expressions.Interpolate(res.Plan.Concurrency, triggerCtx)
 		if err != nil {
@@ -156,16 +168,6 @@ func (o *Orchestrator) StartRun(ctx context.Context, p store.CreateRunParams) (s
 	}
 
 	p.CancelInProgress = res.Plan.CancelInProgress
-	// Project vars join the runs-on resolution context so
-	// `runs-on: ${{ vars.LABEL }}` works at seed time.
-	varRows, err := o.Store.VarsForProject(ctx, p.ProjectID)
-	if err != nil {
-		return store.Run{}, err
-	}
-	varsCtx := make(map[string]any, len(varRows))
-	for _, v := range varRows {
-		varsCtx[v.Name] = v.Value
-	}
 	seeds := make([]store.JobSeed, 0, len(res.Plan.Jobs))
 	for _, jp := range res.Plan.Jobs {
 		// Dispatch inputs merge over plan (workflow_call) inputs and take part
@@ -251,8 +253,14 @@ func (o *Orchestrator) Tick(ctx context.Context) {
 	tickStart := time.Now()
 	defer func() { telemetry.ObserveSchedulerTick(time.Since(tickStart).Seconds()) }()
 
-	if _, err := o.Store.PromoteQueuedRuns(ctx); err != nil {
+	if _, cancelledIDs, err := o.Store.PromoteQueuedRunsDetail(ctx); err != nil {
 		o.Log.Error("promote queued runs", zap.Error(err))
+	} else {
+		for _, id := range cancelledIDs {
+			if run, rerr := o.Store.Run(ctx, id); rerr == nil {
+				o.reportStatus(ctx, run, "cancelled")
+			}
+		}
 	}
 	if n, err := o.Store.ReleaseDueDeployments(ctx); err != nil {
 		o.Log.Error("release due deployments", zap.Error(err))
@@ -345,7 +353,7 @@ func (o *Orchestrator) Tick(ctx context.Context) {
 			}
 		}
 	}
-	ids, err := o.Store.ActiveRunIDs(ctx, 200)
+	ids, err := o.Store.ActiveRunIDs(ctx, 1000)
 	if err != nil {
 		o.Log.Error("list active runs", zap.Error(err))
 		return
@@ -392,6 +400,11 @@ func (o *Orchestrator) currentLeader(ctx context.Context) *store.LeaderSession {
 
 // AdvanceRun gates queued jobs on their dependencies and evaluates conditions.
 func (o *Orchestrator) AdvanceRun(ctx context.Context, runID uuid.UUID) error {
+	muAny, _ := o.runLocks.LoadOrStore(runID, &sync.Mutex{})
+	mu := muAny.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+
 	run, err := o.Store.Run(ctx, runID)
 	if err != nil {
 		return err
@@ -463,9 +476,13 @@ func (o *Orchestrator) AdvanceRun(ctx context.Context, runID uuid.UUID) error {
 				t := time.Now().Add(time.Duration(env.WaitMinutes) * time.Minute)
 				waitUntil = &t
 			}
-			if _, err := o.Store.CreateDeployment(ctx, run.ProjectID, env.ID, run.ID, job.ID,
-				run.Ref, run.SHA, job.EnvironmentURL, waitUntil); err != nil {
-				return err
+			if _, derr := o.Store.DeploymentForJob(ctx, job.ID); errors.Is(derr, store.ErrNotFound) {
+				if _, err := o.Store.CreateDeployment(ctx, run.ProjectID, env.ID, run.ID, job.ID,
+					run.Ref, run.SHA, job.EnvironmentURL, waitUntil); err != nil {
+					return err
+				}
+			} else if derr != nil {
+				return derr
 			}
 			if env.Protected && !store.BranchAllowed(env.BranchPolicy, env.BranchPatterns, run.Ref) {
 				reason := fmt.Sprintf("branch %s is not allowed to deploy to %s", store.RefBranch(run.Ref), env.Name)
@@ -503,36 +520,47 @@ func (o *Orchestrator) AdvanceRun(ctx context.Context, runID uuid.UUID) error {
 		}
 	}
 
-	if err := o.Store.FinishRunIfDone(ctx, runID); err != nil {
+	finished, err := o.Store.FinishRunIfDone(ctx, runID)
+	if err != nil {
 		return err
 	}
-	// The run may have just reached a terminal state in this call; report the
-	// commit status once, on the transition.
-	if updated, err := o.Store.Run(ctx, runID); err == nil && updated.Status == "completed" {
-		o.reportStatus(ctx, updated, conclusionState(updated.Conclusion))
+	// Report the terminal commit status strictly on the single call that
+	// flipped workflow_runs.status from in_progress -> completed.
+	if finished {
+		if updated, err := o.Store.Run(ctx, runID); err == nil && updated.Status == "completed" {
+			o.reportStatus(ctx, updated, conclusionState(updated.Conclusion))
+		}
+		o.runLocks.Delete(runID)
 	}
 	return nil
 }
 
 // NeedsMap builds the needs.* expression context (result + outputs) from run
-// jobs grouped by job_key. Matrix members of the same key are merged; the last
-// non-empty conclusion wins, matching JobContext's aggregation.
+// jobs grouped by job_key. Matrix members aggregate by worst-case severity
+// (failure > cancelled > skipped > success) so [failure, success] reports
+// "failure", matching GitHub Actions.
 func NeedsMap(byJobKey map[string][]store.Job) map[string]any {
 	needs := map[string]any{}
 	for key, jobs := range byJobKey {
 		if len(jobs) == 0 {
 			continue
 		}
-		result := "success"
+		var hasFail, hasCancel, hasSuccess, hasSkip bool
 		outputs := map[string]any{}
 		for _, j := range jobs {
-			if j.Conclusion != "" {
-				result = j.Conclusion
-				// needs.<id>.result reports the post-continue-on-error
-				// conclusion, like GitHub's job result.
-				if j.Conclusion == "failure" && j.ContinueOnError {
-					result = "success"
-				}
+			c := j.Conclusion
+			if c == "failure" && j.ContinueOnError {
+				c = "success"
+			}
+			switch c {
+			case "failure":
+				hasFail = true
+			case "cancelled":
+				hasCancel = true
+			case "success":
+				hasSuccess = true
+			case "skipped":
+				hasSkip = true
 			}
 			var out map[string]any
 			if len(j.Outputs) > 0 && string(j.Outputs) != "{}" {
@@ -541,6 +569,15 @@ func NeedsMap(byJobKey map[string][]store.Job) map[string]any {
 					outputs[k] = v
 				}
 			}
+		}
+		result := "success"
+		switch {
+		case hasFail:
+			result = "failure"
+		case hasCancel:
+			result = "cancelled"
+		case !hasSuccess && hasSkip:
+			result = "skipped"
 		}
 		needs[key] = map[string]any{"result": result, "outputs": outputs}
 	}
@@ -568,7 +605,9 @@ func dependencyStatus(needs []string, byJobKey map[string][]store.Job) (string, 
 					status = "failure"
 				}
 			case "cancelled":
-				status = "failure"
+				if status != "failure" {
+					status = "cancelled"
+				}
 			case "skipped":
 				if status == "success" {
 					status = "skipped"
@@ -678,9 +717,8 @@ func needsWithAliases(jobKey string, needs map[string]any) map[string]any {
 				break
 			}
 			alias = alias[len(seg)+1:]
-			if _, exists := out[alias]; !exists {
-				out[alias] = v
-			}
+			// Local callee job id shadows any colliding caller-scope job id.
+			out[alias] = v
 		}
 	}
 	return out
@@ -772,13 +810,40 @@ func githubContext(run store.Run, project store.Project, job store.Job) map[stri
 	return ctx
 }
 
-func triggerContext(p *store.CreateRunParams) map[string]any {
+func triggerContext(p *store.CreateRunParams, workflowName string, vars map[string]any) map[string]any {
+	refName := strings.TrimPrefix(p.Ref, "refs/heads/")
+	refName = strings.TrimPrefix(refName, "refs/tags/")
+	gh := map[string]any{
+		"workflow":   workflowName,
+		"event_name": p.Event,
+		"ref":        p.Ref,
+		"ref_name":   refName,
+		"sha":        p.SHA,
+		"actor":      p.Actor,
+	}
+	if p.Source != nil {
+		if hr, ok := p.Source["head_ref"].(string); ok && hr != "" {
+			gh["head_ref"] = hr
+		}
+		if hs, ok := p.Source["head_sha"].(string); ok && hs != "" {
+			gh["head_sha"] = hs
+		}
+		repoFull, _ := p.Source["repo_full_name"].(string)
+		repoURL, _ := p.Source["repo_url"].(string)
+		defBranch, _ := p.Source["default_branch"].(string)
+		gh["event"] = workflows.EventPayload(p.Event, p.Ref, p.SHA, p.Actor,
+			p.CommitMessage, repoFull, repoURL, defBranch, p.Source)
+	}
+	inputs := map[string]any{}
+	for k, v := range p.Inputs {
+		inputs[k] = v
+	}
+	if vars == nil {
+		vars = map[string]any{}
+	}
 	return map[string]any{
-		"github": map[string]any{
-			"event_name": p.Event,
-			"ref":        p.Ref,
-			"sha":        p.SHA,
-			"actor":      p.Actor,
-		},
+		"github": gh,
+		"inputs": inputs,
+		"vars":   vars,
 	}
 }

@@ -97,7 +97,7 @@ func (a *Agent) runExec(ctx context.Context, log *zap.Logger, offer execOffer, c
 			}
 		}
 	}()
-	go a.pumpExecStdin(execCtx, offer.ID, stdin)
+	go a.pumpExecStdin(execCtx, execCancel, offer.ID, stdin)
 
 	err = cmd.Wait()
 	execCancel()
@@ -127,12 +127,13 @@ func (a *Agent) finishExec(execID string, code *int, errText string) {
 	}
 }
 
-// pumpExecStdin feeds the session's stdin blob into the docker exec pipe.
+// pumpExecStdin feeds the session's stdin blob into the docker exec pipe and
+// cancels the exec process when the control plane marks the session cancelled.
 // Advances offset by len(data) (never total blob size) so >64 KiB bursts do
 // not drop bytes, and tolerates transient HTTP hiccups before bailing.
 // ponytail: half-second poll, no PTY framing — a line-mode shell; upgrade
 // to TTY framing when interactive exec needs full-screen programs.
-func (a *Agent) pumpExecStdin(ctx context.Context, execID string, stdin io.WriteCloser) {
+func (a *Agent) pumpExecStdin(ctx context.Context, cancel context.CancelFunc, execID string, stdin io.WriteCloser) {
 	defer stdin.Close()
 	t := time.NewTicker(500 * time.Millisecond)
 	defer t.Stop()
@@ -144,7 +145,7 @@ func (a *Agent) pumpExecStdin(ctx context.Context, execID string, stdin io.Write
 			return
 		case <-t.C:
 		}
-		data, _, closed, err := a.c.execStdin(ctx, execID, off)
+		data, _, closed, cancelled, err := a.c.execStdin(ctx, execID, off)
 		if err != nil {
 			consecErrs++
 			if consecErrs >= 5 || ctx.Err() != nil {
@@ -153,6 +154,10 @@ func (a *Agent) pumpExecStdin(ctx context.Context, execID string, stdin io.Write
 			continue
 		}
 		consecErrs = 0
+		if cancelled {
+			cancel()
+			return
+		}
 		if len(data) > 0 {
 			if _, err := stdin.Write(data); err != nil {
 				return

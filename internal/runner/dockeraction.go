@@ -241,6 +241,9 @@ func (e *executor) dockerActionRun(ctx context.Context, step StepSpec, image, en
 	e.mu.Lock()
 	e.killFn = cancel
 	e.mu.Unlock()
+	if e.cancelled.Load() {
+		return "cancelled", 1
+	}
 	cmd := exec.CommandContext(stepCtx, "docker", dargs...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -272,6 +275,9 @@ func (e *executor) dockerActionRun(ctx context.Context, step StepSpec, image, en
 	}
 	e.harvestEnv()
 	e.lastTail = pump.tailCopy()
+	if e.diskQuotaExceeded.Load() {
+		return "failure", exitValue(cmd)
+	}
 	if e.cancelled.Load() || stepCtx.Err() == context.Canceled && waitErr != nil {
 		return "cancelled", exitValue(cmd)
 	}

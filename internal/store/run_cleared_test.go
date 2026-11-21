@@ -92,7 +92,8 @@ func TestRunFiltersAndCounts(t *testing.T) {
 	}
 	_ = queued
 
-	counts, err := s.RunCounts(ctx, &pid, false)
+	org, _ := s.FirstOrg(ctx)
+	counts, err := s.RunCounts(ctx, org.ID, &pid, false)
 	if err != nil {
 		t.Fatalf("counts: %v", err)
 	}

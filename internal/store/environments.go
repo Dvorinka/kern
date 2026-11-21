@@ -317,7 +317,7 @@ func reviewerAllowed(reviewers []string, userID uuid.UUID, role string) bool {
 
 // ApproveDeployment records the user's approval. The job is released only
 // when the approval count is met and the wait, if any, has elapsed.
-func (s *Store) ApproveDeployment(ctx context.Context, jobID, userID uuid.UUID, email, role string) (Deployment, bool, error) {
+func (s *Store) ApproveDeployment(ctx context.Context, orgID, jobID, userID uuid.UUID, email, role string) (Deployment, bool, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return Deployment{}, false, err
@@ -334,9 +334,11 @@ func (s *Store) ApproveDeployment(ctx context.Context, jobID, userID uuid.UUID, 
 		FROM deployments d
 		JOIN environments e ON e.id = d.environment_id
 		JOIN jobs j ON j.id = d.job_id
-		WHERE d.job_id = $1 AND d.status = 'queued' AND j.status = 'waiting_approval'
+		JOIN workflow_runs r ON r.id = j.run_id
+		JOIN projects p ON p.id = r.project_id
+		WHERE d.job_id = $1 AND p.org_id = $2 AND d.status = 'queued' AND j.status = 'waiting_approval'
 		ORDER BY d.created_at DESC LIMIT 1
-		FOR UPDATE OF d`, jobID).Scan(&depID, &approvals, &required, &reviewers, &waitUntil)
+		FOR UPDATE OF d`, jobID, orgID).Scan(&depID, &approvals, &required, &reviewers, &waitUntil)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Deployment{}, false, fmt.Errorf("no pending deployment approval for this job")
 	}
@@ -380,7 +382,7 @@ func (s *Store) ApproveDeployment(ctx context.Context, jobID, userID uuid.UUID, 
 
 // RejectDeployment refuses the job's pending deployment. The same reviewer
 // rule as approval applies.
-func (s *Store) RejectDeployment(ctx context.Context, jobID, userID uuid.UUID, role string) (Deployment, error) {
+func (s *Store) RejectDeployment(ctx context.Context, orgID, jobID, userID uuid.UUID, role string) (Deployment, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return Deployment{}, err
@@ -393,8 +395,10 @@ func (s *Store) RejectDeployment(ctx context.Context, jobID, userID uuid.UUID, r
 		SELECT d.id, e.reviewers FROM deployments d
 		JOIN environments e ON e.id = d.environment_id
 		JOIN jobs j ON j.id = d.job_id
-		WHERE d.job_id = $1 AND d.status = 'queued' AND j.status = 'waiting_approval'
-		ORDER BY d.created_at DESC LIMIT 1`, jobID).Scan(&depID, &reviewers)
+		JOIN workflow_runs r ON r.id = j.run_id
+		JOIN projects p ON p.id = r.project_id
+		WHERE d.job_id = $1 AND p.org_id = $2 AND d.status = 'queued' AND j.status = 'waiting_approval'
+		ORDER BY d.created_at DESC LIMIT 1`, jobID, orgID).Scan(&depID, &reviewers)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Deployment{}, fmt.Errorf("no pending deployment approval for this job")
 	}

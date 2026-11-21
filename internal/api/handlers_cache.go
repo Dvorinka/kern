@@ -1,7 +1,9 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -21,16 +23,27 @@ var cacheKeyRe = regexp.MustCompile(`^[^,]{1,512}$`)
 // cacheScope maps run trust onto the cache namespace. Pull-request runs read
 // trusted entries (base-branch caches) but save into their own scope so an
 // untrusted ref cannot poison the shared cache.
-func cacheScope(tl string) string {
-	if tl == "pull_request" || tl == "fork" {
-		return "pull_request"
+func cacheScope(run store.Run) string {
+	if run.TrustLevel != "pull_request" && run.TrustLevel != "fork" {
+		return "trusted"
 	}
-	return "trusted"
+	// All PRs used to share one "pull_request" scope — PR-A could poison
+	// PR-B's keys. Scope writes per PR; the bare scope remains for runs
+	// that carry no pr_number (#369).
+	var src struct {
+		PRNumber any `json:"pr_number"`
+	}
+	if err := json.Unmarshal(run.Source, &src); err == nil {
+		if pr := fmt.Sprint(src.PRNumber); pr != "" && pr != "<nil>" {
+			return "pull_request:" + pr
+		}
+	}
+	return "pull_request"
 }
 
-func cacheReadScopes(tl string) []string {
-	if tl == "pull_request" || tl == "fork" {
-		return []string{"pull_request", "trusted"}
+func cacheReadScopes(run store.Run) []string {
+	if run.TrustLevel == "pull_request" || run.TrustLevel == "fork" {
+		return []string{cacheScope(run), "trusted"}
 	}
 	return []string{"trusted"}
 }
@@ -58,7 +71,7 @@ func (s *Server) cacheRestore(c *gin.Context) {
 	if rk := c.Query("restore_keys"); rk != "" {
 		prefixes = strings.Split(rk, ",")
 	}
-	entry, err := s.Store.CacheLookup(c.Request.Context(), run.ProjectID, key, prefixes, cacheReadScopes(run.TrustLevel))
+	entry, err := s.Store.CacheLookup(c.Request.Context(), run.ProjectID, key, "", prefixes, cacheReadScopes(run))
 	if errors.Is(err, store.ErrNotFound) {
 		if s.metrics != nil {
 			s.metrics.observeCache("miss")
@@ -164,26 +177,35 @@ func (s *Server) cacheSave(c *gin.Context) {
 			"cache archive exceeds KERN_CACHE_MAX_BYTES")
 		return
 	}
-	blobRef := "cache/" + run.ProjectID.String() + "/" + url.PathEscape(key) + ".tar.gz"
+	// Unique ref per save attempt: a deterministic key-derived path let a fork
+	// save overwrite a trusted branch's live blob in place, and a losing
+	// concurrent save then deleted the winner's blob on ErrExists (#369).
+	blobRef := fmt.Sprintf("cache/%s/%s/%s-%s.tar.gz", run.ProjectID,
+		cacheScope(run), url.PathEscape(key), uuid.NewString())
 	size, _, err := s.Blobs.Put(blobRef, io.LimitReader(c.Request.Body, 4<<30))
 	if err != nil {
 		s.internalError(c, err)
 		return
 	}
-	if max > 0 && size > max {
+	dropBlob := func() {
 		if derr := s.Blobs.Delete(blobRef); derr != nil {
-			s.Log.Error("delete oversized cache blob", zap.String("ref", blobRef), zap.Error(derr))
+			s.Log.Error("delete cache blob", zap.String("ref", blobRef), zap.Error(derr))
 		}
+	}
+	if max > 0 && size > max {
+		dropBlob()
 		fail(c, http.StatusRequestEntityTooLarge, "cache_too_large",
 			"cache archive exceeds KERN_CACHE_MAX_BYTES")
 		return
 	}
-	_, err = s.Store.SaveCacheEntry(c.Request.Context(), run.ProjectID, key, "", cacheScope(run.TrustLevel), blobRef, size)
+	_, err = s.Store.SaveCacheEntry(c.Request.Context(), run.ProjectID, key, "", cacheScope(run), blobRef, size)
 	if errors.Is(err, store.ErrExists) {
+		dropBlob()
 		fail(c, http.StatusConflict, "cache_exists", "a cache with this key already exists")
 		return
 	}
 	if err != nil {
+		dropBlob()
 		s.internalError(c, err)
 		return
 	}

@@ -40,7 +40,7 @@ func TestUnmatchedQueuedJobs(t *testing.T) {
 	mkJob([]string{"self-hosted", "linux", "ubuntu-latest"}, "trusted")
 
 	// No runners at all: both starve.
-	un, err := s.UnmatchedQueuedJobs(ctx)
+	un, err := s.UnmatchedQueuedJobs(ctx, org.ID)
 	if err != nil {
 		t.Fatalf("unmatched: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestUnmatchedQueuedJobs(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("runner: %v", err)
 	}
-	un, err = s.UnmatchedQueuedJobs(ctx)
+	un, err = s.UnmatchedQueuedJobs(ctx, org.ID)
 	if err != nil {
 		t.Fatalf("unmatched: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestUnmatchedQueuedJobsPaused(t *testing.T) {
 		t.Fatalf("queue job: %v", err)
 	}
 
-	un, err := s.UnmatchedQueuedJobs(ctx)
+	un, err := s.UnmatchedQueuedJobs(ctx, org.ID)
 	if err != nil {
 		t.Fatalf("unmatched: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestUnmatchedQueuedJobsPaused(t *testing.T) {
 	if _, err := s.pool.Exec(ctx, `UPDATE runners SET claims_paused = '' WHERE id = $1`, r.ID); err != nil {
 		t.Fatalf("unpause: %v", err)
 	}
-	un, err = s.UnmatchedQueuedJobs(ctx)
+	un, err = s.UnmatchedQueuedJobs(ctx, org.ID)
 	if err != nil {
 		t.Fatalf("unmatched: %v", err)
 	}
