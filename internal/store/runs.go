@@ -265,9 +265,10 @@ func (s *Store) Run(ctx context.Context, id uuid.UUID) (Run, error) {
 // and UI print. Returns up to 8 candidates newest-first so callers can
 // detect ambiguity; callers must treat len != 1 as unresolved.
 func (s *Store) RunPrefix(ctx context.Context, prefix string) ([]Run, error) {
+	clean := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(prefix)), "-", "")
 	rows, err := s.pool.Query(ctx, runSelect+`
-		WHERE r.id::text LIKE $1 || '%'
-		ORDER BY r.created_at DESC LIMIT 8`, prefix)
+		WHERE replace(r.id::text, '-', '') LIKE $1 || '%'
+		ORDER BY r.created_at DESC LIMIT 8`, clean)
 	if err != nil {
 		return nil, err
 	}

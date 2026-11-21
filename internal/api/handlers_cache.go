@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/dvorinka/kern/internal/store"
@@ -120,9 +119,8 @@ func (s *Server) listCache(c *gin.Context) {
 // automatic retention lands.
 func (s *Server) deleteCache(c *gin.Context) {
 	user, _ := currentUser(c)
-	id, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		fail(c, http.StatusBadRequest, "invalid_id", "cache id must be a uuid")
+	id, ok := s.cacheIDParam(c)
+	if !ok {
 		return
 	}
 	blobRef, err := s.Store.DeleteCacheEntry(c.Request.Context(), user.OrgID, id)
