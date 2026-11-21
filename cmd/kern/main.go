@@ -184,7 +184,7 @@ pull_request runs by number; --workflow matches name or path.
 		return `kern ssh <job-id|run-id> [--job KEY] [-c CMD] — live shell into a running job's container
 `
 	case "testbox":
-		return `kern testbox [workflow] [--job KEY] [--dir DIR] [--env-file F] — run a job locally in the docker executor
+		return `kern testbox [workflow] [--job KEY] [--dir DIR] [--env-file F] [--with-needs] — run a job locally in the docker executor; --with-needs runs the transitive needs: DAG in dependency order first
 `
 	case "doctor":
 		return `kern doctor — check CLI config, auth and control-plane reachability

@@ -52,7 +52,7 @@ func (c *cli) cmdTestbox(ctx context.Context, args []string) error {
 		rest = append(rest, a)
 	}
 	opts, pos := parseFlagsEx(rest,
-		[]string{"keep", "dry-run", "privileged"},
+		[]string{"keep", "dry-run", "privileged", "with-needs"},
 		"job", "dir", "env-file", "step", "from-step", "matrix",
 		"memory", "cpus", "ref", "event")
 	dir, err := filepath.Abs(first(opts["dir"], "."))
@@ -118,81 +118,21 @@ func (c *cli) cmdTestbox(ctx context.Context, args []string) error {
 		}
 		secrets[k] = v
 	}
-	// --keep pins a stable work root so the toolchain caches under _cache
-	// (gomodcache, pnpm, cargo…) survive between iterations — the warm loop
-	// that makes testbox sub-second on dependency-heavy steps (#376).
-	var workRoot string
-	if opts["keep"] == "true" {
-		h := sha256.Sum256([]byte(dir + "|" + job.Key))
-		home, _ := os.UserHomeDir()
-		workRoot = filepath.Join(home, ".cache", "kern", "testbox",
-			hex.EncodeToString(h[:6]))
-		if err := os.MkdirAll(workRoot, 0o755); err != nil {
-			return err
-		}
-		fmt.Fprintf(os.Stderr, "testbox: keeping work root %s (toolchain caches persist)\n", workRoot)
-	} else {
-		workRoot, err = os.MkdirTemp("", "kern-testbox-")
+	order := []workflows.JobPlan{job}
+	if opts["with-needs"] == "true" {
+		var err error
+		order, err = testboxDAG(res.Plan.Jobs, job)
 		if err != nil {
 			return err
 		}
-		defer os.RemoveAll(workRoot)
-	}
-	artifactsDir := filepath.Join(dir, ".kern-testbox", "artifacts")
-
-	claim := testboxClaim(res, job, dir, opts)
-	// Step-range selection: --step runs only step N; --from-step skips the
-	// prefix (a fresh workspace, so setup steps may still be needed — pair
-	// with --keep when iterating) (#376).
-	if n := atoi(opts["step"]); n > 0 {
-		var one []runner.StepSpec
-		for _, s := range claim.Steps {
-			if s.Number == n {
-				one = append(one, s)
-			}
+		if len(order) > 1 {
+			fmt.Fprintf(os.Stderr, "testbox: DAG order %s\n", dagNames(order))
 		}
-		if len(one) == 0 {
-			return fmt.Errorf("job has no step %d", n)
+	}
+	for _, j := range order {
+		if err := execTestboxJob(ctx, res, j, dir, opts, bundle, secrets, vars); err != nil {
+			return err
 		}
-		claim.Steps = one
-	} else if n := atoi(opts["from-step"]); n > 0 {
-		var tail []runner.StepSpec
-		for _, s := range claim.Steps {
-			if s.Number >= n {
-				tail = append(tail, s)
-			}
-		}
-		if len(tail) == 0 {
-			return fmt.Errorf("job has no step >= %d", n)
-		}
-		claim.Steps = tail
-	}
-	if opts["ref"] != "" {
-		claim.Run.Ref = opts["ref"]
-	}
-	if opts["event"] != "" {
-		claim.Run.Event = opts["event"]
-	}
-	if claim.Job.Env == nil {
-		claim.Job.Env = map[string]string{}
-	}
-	if opts["memory"] != "" {
-		claim.Job.Env["KERN_JOB_MEMORY"] = opts["memory"]
-	}
-	if opts["cpus"] != "" {
-		claim.Job.Env["KERN_JOB_CPUS"] = opts["cpus"]
-	}
-	logger, _ := zap.NewDevelopment()
-	status, err := runner.RunLocalJob(ctx, runner.Config{
-		WorkRoot: workRoot,
-		Executor: "docker",
-	}, claim, secrets, vars, logger, os.Stdout, artifactsDir, bundle)
-	if err != nil {
-		return err
-	}
-	fmt.Fprintf(os.Stderr, "testbox: job %s → %s\n", job.Key, status)
-	if status != "success" {
-		return exitCodeError{code: 1}
 	}
 	return nil
 }
@@ -387,4 +327,135 @@ func loadEnvFile(path string, into map[string]string) error {
 		into[k] = v
 	}
 	return nil
+}
+
+// execTestboxJob runs one job of a testbox plan — the execution half of
+// the entrypoint, factored out so --with-needs can drive a DAG.
+func execTestboxJob(ctx context.Context, res workflows.Result, job workflows.JobPlan, dir string, opts map[string]string, bundle string, secrets, vars map[string]string) error {
+	var err error
+	// --keep pins a stable work root so the toolchain caches under _cache
+	// (gomodcache, pnpm, cargo…) survive between iterations — the warm loop
+	// that makes testbox sub-second on dependency-heavy steps (#376).
+	var workRoot string
+	if opts["keep"] == "true" {
+		h := sha256.Sum256([]byte(dir + "|" + job.Key))
+		home, _ := os.UserHomeDir()
+		workRoot = filepath.Join(home, ".cache", "kern", "testbox",
+			hex.EncodeToString(h[:6]))
+		if err := os.MkdirAll(workRoot, 0o755); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "testbox: keeping work root %s (toolchain caches persist)\n", workRoot)
+	} else {
+		workRoot, err = os.MkdirTemp("", "kern-testbox-")
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(workRoot)
+	}
+	artifactsDir := filepath.Join(dir, ".kern-testbox", "artifacts")
+
+	claim := testboxClaim(res, job, dir, opts)
+	// Step-range selection: --step runs only step N; --from-step skips the
+	// prefix (a fresh workspace, so setup steps may still be needed — pair
+	// with --keep when iterating) (#376).
+	if n := atoi(opts["step"]); n > 0 {
+		var one []runner.StepSpec
+		for _, s := range claim.Steps {
+			if s.Number == n {
+				one = append(one, s)
+			}
+		}
+		if len(one) == 0 {
+			return fmt.Errorf("job has no step %d", n)
+		}
+		claim.Steps = one
+	} else if n := atoi(opts["from-step"]); n > 0 {
+		var tail []runner.StepSpec
+		for _, s := range claim.Steps {
+			if s.Number >= n {
+				tail = append(tail, s)
+			}
+		}
+		if len(tail) == 0 {
+			return fmt.Errorf("job has no step >= %d", n)
+		}
+		claim.Steps = tail
+	}
+	if opts["ref"] != "" {
+		claim.Run.Ref = opts["ref"]
+	}
+	if opts["event"] != "" {
+		claim.Run.Event = opts["event"]
+	}
+	if claim.Job.Env == nil {
+		claim.Job.Env = map[string]string{}
+	}
+	if opts["memory"] != "" {
+		claim.Job.Env["KERN_JOB_MEMORY"] = opts["memory"]
+	}
+	if opts["cpus"] != "" {
+		claim.Job.Env["KERN_JOB_CPUS"] = opts["cpus"]
+	}
+	logger, _ := zap.NewDevelopment()
+	status, err := runner.RunLocalJob(ctx, runner.Config{
+		WorkRoot: workRoot,
+		Executor: "docker",
+	}, claim, secrets, vars, logger, os.Stdout, artifactsDir, bundle)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "testbox: job %s → %s\n", job.Key, status)
+	if status != "success" {
+		return exitCodeError{code: 1}
+	}
+	return nil
+}
+
+// testboxDAG orders the transitive needs closure of target so every job
+// runs after its dependencies — Kahn-lite DFS over JobPlan.Needs (#376).
+// Returns the ordered slice ending with the target job itself.
+func testboxDAG(jobs []workflows.JobPlan, target workflows.JobPlan) ([]workflows.JobPlan, error) {
+	byKey := make(map[string]workflows.JobPlan, len(jobs))
+	for _, j := range jobs {
+		byKey[j.Key] = j
+	}
+	var order []workflows.JobPlan
+	done := map[string]bool{}
+	stack := map[string]bool{} // cycle guard — compiler rejects these, belt+braces
+	var visit func(key string) error
+	visit = func(key string) error {
+		if done[key] {
+			return nil
+		}
+		if stack[key] {
+			return fmt.Errorf("needs: cycle through job %q", key)
+		}
+		j, ok := byKey[key]
+		if !ok {
+			return fmt.Errorf("job %q needs %q which is not in the plan", target.Key, key)
+		}
+		stack[key] = true
+		for _, dep := range j.Needs {
+			if err := visit(dep); err != nil {
+				return err
+			}
+		}
+		delete(stack, key)
+		done[key] = true
+		order = append(order, j)
+		return nil
+	}
+	if err := visit(target.Key); err != nil {
+		return nil, err
+	}
+	return order, nil
+}
+
+func dagNames(order []workflows.JobPlan) string {
+	keys := make([]string, len(order))
+	for i, j := range order {
+		keys[i] = j.Key
+	}
+	return strings.Join(keys, " → ")
 }
