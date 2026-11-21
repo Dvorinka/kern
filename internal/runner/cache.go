@@ -59,6 +59,8 @@ func (e *executor) cacheRestoreStep(step StepSpec, combined bool) (string, int) 
 		e.logStep(step, "KERN: extract cache: "+err.Error())
 		return "failure", 1
 	}
+	// Extraction ran as the runner user; steps run as execUID (#369).
+	chownTree(ws, e.execUID())
 	e.setStepOutput("cache-hit", strconv.FormatBool(matched == key))
 	if matched == key {
 		e.logStep(step, "Cache restored from key: "+matched)
@@ -173,7 +175,7 @@ func tarPaths(ws string, relPaths []string, out string) (int, error) {
 			continue
 		}
 		_ = filepath.WalkDir(full, func(path string, d fs.DirEntry, err error) error {
-			if err == nil && d.Type().IsRegular() {
+			if err == nil && (d.Type().IsRegular() || d.Type()&fs.ModeSymlink != 0) {
 				entries = append(entries, artifactEntry{file: path, root: ws})
 			}
 			return nil
