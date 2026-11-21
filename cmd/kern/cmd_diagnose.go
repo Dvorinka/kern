@@ -7,7 +7,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"bytes"
 	"fmt"
+	"io"
+	"os"
 	"net/url"
 	"strings"
 	"time"
@@ -35,7 +38,7 @@ type diagnoseBundle struct {
 }
 
 func (c *cli) cmdDiagnose(ctx context.Context, args []string) error {
-	opts, pos := parseFlags(args, "tail", "job")
+	opts, pos := parseFlagsEx(args, []string{"i", "interactive"}, "tail", "job")
 	if err := c.requireAuth(); err != nil {
 		return err
 	}
@@ -87,7 +90,12 @@ func (c *cli) cmdDiagnose(ctx context.Context, args []string) error {
 		printJSON(bundle)
 		return nil
 	}
-	printDiagnose(bundle, tail)
+	if opts["i"] == "true" || opts["interactive"] == "true" {
+		var buf bytes.Buffer
+		writeDiagnose(&buf, bundle, tail)
+		return runDiagnosePager(strings.Split(strings.TrimRight(buf.String(), "\n"), "\n"))
+	}
+	writeDiagnose(os.Stdout, bundle, tail)
 	return nil
 }
 
@@ -102,14 +110,15 @@ func needsLogTail(st step) bool {
 	return len(st.Diagnosis) > 0 && string(st.Diagnosis) != "null"
 }
 
-func printDiagnose(b diagnoseBundle, tail int64) {
+func writeDiagnose(w io.Writer, b diagnoseBundle, tail int64) {
+	f := func(format string, a ...any) { fmt.Fprintf(w, format, a...) }
 	r := b.Run
-	fmt.Printf("kern diagnose — run %s (#%d) %s %s/%s\n", shortID(r.ID), r.RunNumber,
+	f("kern diagnose — run %s (#%d) %s %s/%s\n", shortID(r.ID), r.RunNumber,
 		r.WorkflowName, r.Status, r.Conclusion)
-	fmt.Printf("server:   %s   at: %s\n", b.Server, b.At)
-	fmt.Printf("project:  %s   event: %s   ref: %s   sha: %s\n",
+	f("server:   %s   at: %s\n", b.Server, b.At)
+	f("project:  %s   event: %s   ref: %s   sha: %s\n",
 		r.ProjectSlug, r.Event, r.Ref, short(r.SHA, 12))
-	fmt.Printf("actor:    %s   trust: %s   created: %s\n",
+	f("actor:    %s   trust: %s   created: %s\n",
 		r.Actor, r.TrustLevel, r.CreatedAt.Format(time.RFC3339))
 	for _, dj := range b.Jobs {
 		j := dj.Job
@@ -125,9 +134,9 @@ func printDiagnose(b diagnoseBundle, tail int64) {
 		if j.Attempt > 1 {
 			line += fmt.Sprintf("  attempt %d", j.Attempt)
 		}
-		fmt.Println(line)
+		f("%s\n", line)
 		if j.Error != "" {
-			fmt.Printf("   error: %s\n", j.Error)
+			f("   error: %s\n", j.Error)
 		}
 		for _, st := range dj.Steps {
 			sconcl := st.Conclusion
@@ -152,7 +161,7 @@ func printDiagnose(b diagnoseBundle, tail int64) {
 			if st.LogBytes > 0 {
 				extra += " log=" + humanBytes(st.LogBytes)
 			}
-			fmt.Printf("   %s step %-3d %-32s %s%s\n", mark, st.Number, st.Name, sconcl, extra)
+			f("   %s step %-3d %-32s %s%s\n", mark, st.Number, st.Name, sconcl, extra)
 			if len(st.Diagnosis) > 0 {
 				var d struct {
 					Kind       string `json:"kind"`
@@ -160,18 +169,18 @@ func printDiagnose(b diagnoseBundle, tail int64) {
 					Suggestion string `json:"suggestion"`
 				}
 				if json.Unmarshal(st.Diagnosis, &d) == nil && d.Kind != "" {
-					fmt.Printf("       diagnosis: %s — %s\n", d.Kind, d.Summary)
+					f("       diagnosis: %s — %s\n", d.Kind, d.Summary)
 					if d.Suggestion != "" {
-						fmt.Printf("       fix:        %s\n", d.Suggestion)
+						f("       fix:        %s\n", d.Suggestion)
 					}
 				}
 			}
 			if st.LogTail != "" {
 				shown := min(tail, st.LogSize)
-				fmt.Printf("   --- log tail (last %s of %s) ---\n", humanBytes(shown), humanBytes(st.LogSize))
-				fmt.Print(st.LogTail)
+				f("   --- log tail (last %s of %s) ---\n", humanBytes(shown), humanBytes(st.LogSize))
+				f("%s", st.LogTail)
 				if !strings.HasSuffix(st.LogTail, "\n") {
-					fmt.Println()
+					f("\n")
 				}
 			}
 		}
