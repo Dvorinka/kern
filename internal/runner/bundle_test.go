@@ -126,3 +126,25 @@ func TestUntarGzSkipsEscapingSymlink(t *testing.T) {
 		t.Fatal("in-workspace symlink missing")
 	}
 }
+
+func TestUntarAutoBothCodecs(t *testing.T) {
+	root := t.TempDir()
+	src := filepath.Join(root, "src")
+	os.MkdirAll(src, 0o755)
+	os.WriteFile(filepath.Join(src, "x.txt"), []byte("data"), 0o644)
+	for _, codec := range []string{"gzip", "zstd"} {
+		out := filepath.Join(root, "a-"+codec)
+		if err := tarCompressed([]artifactEntry{{file: filepath.Join(src, "x.txt"), root: src}}, out, codec); err != nil {
+			t.Fatalf("%s pack: %v", codec, err)
+		}
+		dest := filepath.Join(root, "d-"+codec)
+		os.MkdirAll(dest, 0o755)
+		if err := untarAuto(out, dest); err != nil {
+			t.Fatalf("%s unpack: %v", codec, err)
+		}
+		b, err := os.ReadFile(filepath.Join(dest, "x.txt"))
+		if err != nil || string(b) != "data" {
+			t.Fatalf("%s roundtrip: %q %v", codec, b, err)
+		}
+	}
+}

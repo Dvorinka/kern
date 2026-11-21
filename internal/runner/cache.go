@@ -32,7 +32,7 @@ func (e *executor) cacheRestoreStep(step StepSpec, combined bool) (string, int) 
 		e.logStep(step, "KERN: actions/cache requires with.key and with.path")
 		return "failure", 1
 	}
-	tmp := filepath.Join(e.workRoot(), "cache-restore.tar.gz")
+	tmp := filepath.Join(e.workRoot(), "cache-restore.tar")
 	defer os.Remove(tmp)
 	matched, found, err := e.c.restoreCache(context.Background(), e.jobID, key,
 		withLines(step, "restore-keys"), tmp)
@@ -55,7 +55,7 @@ func (e *executor) cacheRestoreStep(step StepSpec, combined bool) (string, int) 
 		return "success", 0
 	}
 	ws := filepath.Join(e.workRoot(), "workspace")
-	if err := untarGz(tmp, ws); err != nil {
+	if err := untarAuto(tmp, ws); err != nil {
 		e.logStep(step, "KERN: extract cache: "+err.Error())
 		return "failure", 1
 	}
@@ -117,7 +117,7 @@ var (
 
 func (e *executor) saveCacheArchive(key string, paths []string) error {
 	ws := filepath.Join(e.workRoot(), "workspace")
-	tmp, err := os.CreateTemp(e.workRoot(), "cache-save-*.tar.gz")
+	tmp, err := os.CreateTemp(e.workRoot(), "cache-save-*.tar")
 	if err != nil {
 		return err
 	}
@@ -184,5 +184,16 @@ func tarPaths(ws string, relPaths []string, out string) (int, error) {
 	if len(entries) == 0 {
 		return 0, nil
 	}
-	return len(entries), tarGz(entries, out)
+	return len(entries), tarCompressed(entries, out, cacheCodec())
+}
+
+// cacheCodec picks the archive codec for new cache blobs — zstd by
+// default (GitHub's own codec; ~2x faster decompress at better ratio
+// than gzip), KERN_CACHE_CODEC=gzip opts back for cross-tool compat.
+// Restore sniffs magic bytes so old gzip blobs keep working (#369).
+func cacheCodec() string {
+	if os.Getenv("KERN_CACHE_CODEC") == "gzip" {
+		return "gzip"
+	}
+	return "zstd"
 }
