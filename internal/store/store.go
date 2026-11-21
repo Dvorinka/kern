@@ -266,6 +266,9 @@ type Runner struct {
 	// (disk,memory,overload; '' = claiming normally), reported on each
 	// heartbeat so a gated runner stops reading as merely idle.
 	ClaimsPaused    string     `json:"claims_paused"`
+	// Concurrency is the runner's worker-slot count as reported at
+	// register/heartbeat time; defaults to 1 for pre-#372 runners.
+	Concurrency     int        `json:"concurrency"`
 	Ephemeral       bool       `json:"ephemeral"`
 	LastHeartbeatAt *time.Time `json:"last_heartbeat_at"`
 	CPUPercent      *float64   `json:"cpu_percent"`
@@ -319,6 +322,10 @@ type HostMetrics struct {
 	// means "not reporting" and the column is left alone; an empty slice
 	// clears recorded drift.
 	MissingTools *[]string `json:"missing_tools"`
+	// Concurrency reports the runner's configured worker slots so the
+	// claim query can compare free slots rather than raw job counts. Nil
+	// leaves the column untouched (pre-#372 runner).
+	Concurrency *int `json:"concurrency,omitempty"`
 }
 
 type Secret struct {

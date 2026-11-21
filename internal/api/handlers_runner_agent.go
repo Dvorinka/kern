@@ -39,6 +39,7 @@ type registerRequest struct {
 	Version     string   `json:"version"`
 	Ephemeral   bool     `json:"ephemeral"`
 	Executor    string   `json:"executor"`
+	Concurrency int      `json:"concurrency"`
 }
 
 // registerRunner accepts either the shared static join token (dev escape
@@ -83,6 +84,7 @@ func (s *Server) registerRunner(c *gin.Context) {
 		return
 	}
 	runner, err := s.Store.RegisterRunner(c.Request.Context(), store.RegisterRunnerParams{
+		Concurrency: req.Concurrency,
 		OrgID: orgID, Name: req.Name, Hostname: req.Hostname, OS: req.OS, Arch: req.Arch,
 		CPUs: req.CPUs, MemoryBytes: req.MemoryBytes, DiskBytes: req.DiskBytes,
 		Labels: req.Labels, Version: req.Version, TokenHash: hash, Ephemeral: req.Ephemeral,

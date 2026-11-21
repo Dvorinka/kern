@@ -229,6 +229,7 @@ func (a *Agent) Register(ctx context.Context) error {
 		"version":      version.Version,
 		"ephemeral":    a.cfg.Ephemeral,
 		"executor":     a.executor(),
+		"concurrency":  a.cfg.Concurrency,
 	}
 	runnerID, token, err := a.c.register(ctx, req)
 	if err != nil {
@@ -501,6 +502,7 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 			sample.Deregister = a.retire.Load()
 			sample.ClaimsPaused = a.claimsPaused()
 			sample.Labels = a.labels()
+			sample.Concurrency = a.cfg.Concurrency
 			a.toolsetTicks++
 			if a.toolsetTicks >= 30 {
 				a.toolsetTicks = 0
@@ -670,6 +672,12 @@ func (a *Agent) ephemeralLoop(ctx context.Context) {
 // heartbeat reports the last decision, not a fresh probe.
 func (a *Agent) claimsPaused() string {
 	var gates []string
+	if a.updating.Load() {
+		gates = append(gates, "updating")
+	}
+	if a.retire.Load() {
+		gates = append(gates, "retire")
+	}
 	if a.overLoaded() {
 		gates = append(gates, "overload")
 	}
