@@ -31,9 +31,9 @@ type mcpResourceTemplate struct {
 }
 
 type mcpPrompt struct {
-	Name        string           `json:"name"`
-	Description string           `json:"description,omitempty"`
-	Arguments   []mcpPromptArg   `json:"arguments,omitempty"`
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	Arguments   []mcpPromptArg `json:"arguments,omitempty"`
 }
 
 type mcpPromptArg struct {
@@ -153,7 +153,7 @@ func (s *Server) mcpResourceRead(c *gin.Context, req rpcRequest) *rpcResponse {
 		if !runAllowed(id) {
 			return failRes("run outside this token's grant")
 		}
-		bundle, err := s.mcpDiagnoseRun(ctx, user, id, 8192, 5)
+		bundle, err := s.mcpDiagnoseRun(ctx, user, id, 8192, 5, 16384)
 		if err != nil {
 			return failRes(err.Error())
 		}

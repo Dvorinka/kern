@@ -416,6 +416,27 @@ type apiError struct {
 	Detail  string `json:"detail,omitempty"`
 }
 
+// statusError carries an HTTP status through ctx-based helpers shared by
+// HTTP handlers and MCP tools — the tool gets the message, the handler
+// gets the code back.
+type statusError struct {
+	status int
+	code   string
+	msg    string
+}
+
+func (e *statusError) Error() string { return e.msg }
+
+// writeErr maps a statusError back onto the wire; anything else is a 500.
+func (s *Server) writeErr(c *gin.Context, err error) {
+	var se *statusError
+	if errors.As(err, &se) {
+		fail(c, se.status, se.code, se.msg)
+		return
+	}
+	s.internalError(c, err)
+}
+
 func fail(c *gin.Context, status int, code, message string) {
 	c.AbortWithStatusJSON(status, gin.H{"error": apiError{Code: code, Message: message}})
 }

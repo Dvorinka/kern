@@ -25,6 +25,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"github.com/dvorinka/kern/internal/auth"
 	"github.com/dvorinka/kern/internal/store"
 	"github.com/dvorinka/kern/internal/version"
 	"github.com/dvorinka/kern/internal/workflows"
@@ -301,13 +302,14 @@ func mcpTools() []mcpTool {
 				p["required"] = []string{"run_id"}
 				return p
 			}()},
-		{Name: "kern_diagnose_run", Description: "Single-call failure bundle: run, jobs/steps, failed-step log tails, runner map — one round trip instead of many.",
+		{Name: "kern_diagnose_run", Description: "Single-call failure bundle: verdict, run context, jobs/steps, failed-step log tails bounded by max_bytes, runner map.",
 			Annotations: mcpAnn(true, false, true),
 			InputSchema: func() map[string]any {
 				p := props(map[string]map[string]any{
 					"run_id":    str("run UUID"),
 					"tail":      num("per-failed-step log tail bytes, default 8192"),
 					"max_steps": num("max failed steps to tail, default 5"),
+					"max_bytes": num("total log-tail byte budget across all steps, default 16384"),
 				})
 				p["required"] = []string{"run_id"}
 				return p
@@ -339,6 +341,65 @@ func mcpTools() []mcpTool {
 			InputSchema: func() map[string]any {
 				p := props(map[string]map[string]any{"run_id": str("run UUID")})
 				p["required"] = []string{"run_id"}
+				return p
+			}()},
+		{Name: "kern_sync_project", Description: "Re-discover and compile .github/workflows for a project (local dir or GitHub contents API).",
+			Annotations: mcpAnn(false, false, true),
+			InputSchema: func() map[string]any {
+				p := props(map[string]map[string]any{"project": str("project slug")})
+				p["required"] = []string{"project"}
+				return p
+			}()},
+		{Name: "kern_remediate_job", Description: "Approve a step's remediation proposal and requeue the failed job.",
+			Annotations: mcpAnn(false, false, false),
+			InputSchema: func() map[string]any {
+				p := props(map[string]map[string]any{
+					"job_id": str("job UUID"),
+					"step":   num("step number carrying the proposal"),
+				})
+				p["required"] = []string{"job_id", "step"}
+				return p
+			}()},
+		{Name: "kern_approve_deployment", Description: "Release a job waiting on an environment approval.",
+			Annotations: mcpAnn(false, false, false),
+			InputSchema: func() map[string]any {
+				p := props(map[string]map[string]any{"job_id": str("job UUID")})
+				p["required"] = []string{"job_id"}
+				return p
+			}()},
+		{Name: "kern_doctor", Description: "Deployment health: database reachability, queue depth, runner fleet, recent failure rate.",
+			Annotations: mcpAnn(true, false, true),
+			InputSchema: props(map[string]map[string]any{
+				"project": str("scope the report to one project slug"),
+			})},
+		{Name: "kern_predict_run", Description: "Estimate queue wait and duration for a run on a project from queue depth, runner capacity and run history.",
+			Annotations: mcpAnn(true, false, true),
+			InputSchema: func() map[string]any {
+				p := props(map[string]map[string]any{
+					"project":  str("project slug"),
+					"workflow": str("workflow path or name to narrow the estimate"),
+				})
+				p["required"] = []string{"project"}
+				return p
+			}()},
+		{Name: "kern_optimize_project", Description: "CI tuning suggestions for a project from its run, queue and failure stats.",
+			Annotations: mcpAnn(true, false, true),
+			InputSchema: func() map[string]any {
+				p := props(map[string]map[string]any{"project": str("project slug")})
+				p["required"] = []string{"project"}
+				return p
+			}()},
+		{Name: "kern_mint_agent_token", Description: "Mint a short-lived scoped API token for an agent session. Grants are narrowed to the caller's own.",
+			Annotations: mcpAnn(false, false, false),
+			InputSchema: func() map[string]any {
+				p := props(map[string]map[string]any{
+					"name":        str("token name, e.g. agent session id"),
+					"ttl_minutes": num("lifetime in minutes, default 60, max 1440"),
+					"projects":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "project slugs the token may touch"},
+					"labels":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "runner labels the token may dispatch to"},
+					"write":       map[string]any{"type": "boolean", "description": "grant write scope (trigger/rerun); default read-only"},
+				})
+				p["required"] = []string{"name"}
 				return p
 			}()},
 	}
@@ -837,7 +898,8 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) *rpcResponse {
 		}
 		out, err = s.mcpDiagnoseRun(ctx, user, runID,
 			mcpArgInt(call.Arguments, "tail", 8192),
-			mcpArgInt(call.Arguments, "max_steps", 5))
+			mcpArgInt(call.Arguments, "max_steps", 5),
+			mcpArgInt(call.Arguments, "max_bytes", 16384))
 	case "kern_search_logs":
 		q := strings.TrimSpace(mcpArgStringOr(call.Arguments, "q"))
 		if q == "" {
@@ -882,6 +944,50 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) *rpcResponse {
 			break
 		}
 		out, err = s.Store.Artifacts(ctx, user.OrgID, &runID, 200)
+	case "kern_sync_project":
+		p, perr := s.Store.Project(ctx, user.OrgID, mcpArgStringOr(call.Arguments, "project"))
+		if perr != nil {
+			err = perr
+			break
+		}
+		out, err = s.syncProjectData(ctx, user, p)
+	case "kern_remediate_job":
+		jobID, perr := uuid.Parse(mcpArgStringOr(call.Arguments, "job_id"))
+		step := mcpArgInt(call.Arguments, "step", 0)
+		if perr != nil || step <= 0 {
+			err = fmt.Errorf("job_id must be a UUID and step a positive number")
+			break
+		}
+		var fix []string
+		fix, err = s.Store.ApproveRemediation(ctx, jobID, step)
+		if err == nil {
+			s.Store.AuditMeta(ctx, user.OrgID, &user.ID, "remediation.approve",
+				fmt.Sprintf("job %s step %d", jobID, step), map[string]any{"fix": fix})
+			out = map[string]any{"ok": true, "requeued": true}
+		}
+	case "kern_approve_deployment":
+		jobID, perr := uuid.Parse(mcpArgStringOr(call.Arguments, "job_id"))
+		if perr != nil {
+			err = fmt.Errorf("job_id must be a UUID")
+			break
+		}
+		var dep store.Deployment
+		var released bool
+		dep, released, err = s.Store.ApproveDeployment(ctx, jobID, user.ID, user.Email, user.Role)
+		if err == nil {
+			s.Store.Audit(ctx, user.OrgID, &user.ID, "deployment.approve",
+				dep.EnvironmentName+" job "+jobID.String())
+			out = map[string]any{"deployment": dep, "released": released}
+		}
+	case "kern_doctor":
+		out, err = s.mcpDoctor(ctx, user, mcpArgStringOr(call.Arguments, "project"))
+	case "kern_predict_run":
+		out, err = s.mcpPredictRun(ctx, user, mcpArgStringOr(call.Arguments, "project"),
+			mcpArgStringOr(call.Arguments, "workflow"))
+	case "kern_optimize_project":
+		out, err = s.mcpOptimizeProject(ctx, user, mcpArgStringOr(call.Arguments, "project"))
+	case "kern_mint_agent_token":
+		out, err = s.mcpMintAgentToken(c, user, call.Arguments)
 	default:
 		r := rpcErr(req.ID, -32602, "unknown tool "+call.Name)
 		return &r
@@ -942,10 +1048,32 @@ func (s *Server) mcpToolAllowed(c *gin.Context, name string, args map[string]jso
 	switch name {
 	case "kern_list_projects":
 		// Result rows are filtered to granted slugs in the handler.
-	case "kern_list_runs", "kern_get_project", "kern_trigger_run":
+	case "kern_list_runs", "kern_get_project", "kern_trigger_run", "kern_sync_project",
+		"kern_predict_run", "kern_optimize_project":
 		if !grantHas(granted, mcpArgStringOr(args, "project")) {
 			return projectDenied
 		}
+	case "kern_doctor":
+		// Scoped tokens must scope the report to a granted project.
+		if !grantHas(granted, mcpArgStringOr(args, "project")) {
+			return projectDenied
+		}
+	case "kern_remediate_job", "kern_approve_deployment":
+		jobID, perr := uuid.Parse(mcpArgStringOr(args, "job_id"))
+		if perr != nil {
+			return fmt.Errorf("job_id must be a UUID")
+		}
+		job, jerr := s.Store.Job(ctx, jobID)
+		if jerr != nil {
+			return fmt.Errorf("job is outside this token's projects")
+		}
+		slug, ok := runProjectSlug(job.RunID)
+		if !ok || !grantHas(granted, slug) {
+			return fmt.Errorf("job is outside this token's projects")
+		}
+	case "kern_mint_agent_token":
+		// Narrowing happens in the handler — scoped tokens may only mint
+		// tokens for their own granted projects/labels.
 	case "kern_get_run", "kern_rerun_run", "kern_approve_run", "kern_cancel_run",
 		"kern_diagnose_run", "kern_wait_run", "kern_list_artifacts":
 		if !runAllowed("run_id") {
@@ -1038,12 +1166,15 @@ func (s *Server) mcpResolveWorkflow(ctx context.Context, projectID uuid.UUID, wa
 // mcpDiagnoseRun builds the single-call failure bundle kern_diagnose_run
 // returns: run state, jobs with their steps, tails of the failed steps'
 // logs, and the runner map an agent needs to triage in one round trip.
-func (s *Server) mcpDiagnoseRun(ctx context.Context, user store.User, runID uuid.UUID, tail, maxSteps int) (map[string]any, error) {
+func (s *Server) mcpDiagnoseRun(ctx context.Context, user store.User, runID uuid.UUID, tail, maxSteps, maxBytes int) (map[string]any, error) {
 	if tail <= 0 || tail > 1<<20 {
 		tail = 8192
 	}
 	if maxSteps <= 0 || maxSteps > 20 {
 		maxSteps = 5
+	}
+	if maxBytes <= 0 || maxBytes > 1<<20 {
+		maxBytes = 16384 // one tool call ≈ one context page
 	}
 	run, err := s.Store.Run(ctx, runID)
 	if err != nil {
@@ -1068,7 +1199,7 @@ func (s *Server) mcpDiagnoseRun(ctx context.Context, user store.User, runID uuid
 		names[r.ID] = r.Name
 	}
 	views := make([]jobView, 0, len(jobs))
-	tailed := 0
+	tailed, budget := 0, maxBytes
 	for _, j := range jobs {
 		steps, err := s.Store.StepsForJob(ctx, j.ID)
 		if err != nil {
@@ -1077,14 +1208,19 @@ func (s *Server) mcpDiagnoseRun(ctx context.Context, user store.User, runID uuid
 		sv := make([]stepView, 0, len(steps))
 		for _, st := range steps {
 			v := stepView{Step: st}
-			if tailed < maxSteps && st.Conclusion == "failure" && st.LogRef != "" {
+			if tailed < maxSteps && budget > 0 && st.Conclusion == "failure" && st.LogRef != "" {
+				want := tail
+				if want > budget {
+					want = budget
+				}
 				size := st.LogBytes
 				offset := int64(0)
-				if size > int64(tail) {
-					offset = size - int64(tail)
+				if size > int64(want) {
+					offset = size - int64(want)
 				}
-				if data, _, rerr := s.Blobs.ReadFrom(st.LogRef, offset, tail); rerr == nil {
+				if data, _, rerr := s.Blobs.ReadFrom(st.LogRef, offset, want); rerr == nil {
 					v.LogTail = string(data)
+					budget -= len(data)
 					tailed++
 				}
 			}
@@ -1096,7 +1232,96 @@ func (s *Server) mcpDiagnoseRun(ctx context.Context, user store.User, runID uuid
 		}
 		views = append(views, jv)
 	}
-	return map[string]any{"run": run, "jobs": views}, nil
+	return map[string]any{
+		"verdict":     mcpVerdict(jobs, run.Classification),
+		"run_context": mcpRunContext(run),
+		"run":         run,
+		"jobs":        views,
+	}, nil
+}
+
+// mcpVerdict folds job classifications into the failure bundle's headline:
+// what kind of failure this is, whether a retry is worth anything, and how
+// sure the classification is.
+func mcpVerdict(jobs []store.Job, runClass string) map[string]any {
+	kind := ""
+	failed := 0
+	for _, j := range jobs {
+		if j.Conclusion != "failure" {
+			continue
+		}
+		failed++
+		if kind == "" && j.Classification != "" {
+			kind = j.Classification
+		}
+	}
+	if kind == "" {
+		kind = runClass
+	}
+	if failed == 0 && kind == "" {
+		return map[string]any{"class": "none", "retryable": false, "confidence": "high",
+			"summary": "run did not fail"}
+	}
+	class, retryable := "code", false
+	switch {
+	case transientRetryKinds[kind]:
+		class, retryable = "flake", true
+	case map[string]bool{
+		"ghcr_token": true, "github_token_scope": true, "missing_binary": true,
+		"missing_library": true, "permission_denied": true, "unsupported_action": true,
+		"pnpm_store": true, "stale_lock": true,
+	}[kind]:
+		class = "config"
+	case kind == "script_failure", kind == "prepare", kind == "":
+		class = "code"
+	case kind == "step_timeout", kind == "timeout", kind == "infra":
+		class, retryable = "infra", true
+	}
+	confidence := "low"
+	if kind != "" {
+		confidence = "medium"
+	}
+	for _, j := range jobs {
+		if j.Conclusion == "failure" && j.Classification != "" {
+			confidence = "high"
+			break
+		}
+	}
+	return map[string]any{
+		"class":      class,
+		"retryable":  retryable,
+		"confidence": confidence,
+		"summary":    fmt.Sprintf("%d job(s) failed%s", failed, map[bool]string{true: " — " + kind, false: ""}[kind != ""]),
+	}
+}
+
+// mcpRunContext is the repository slice of the bundle: what to check out to
+// reproduce the failure.
+func mcpRunContext(run store.Run) map[string]any {
+	ctx := map[string]any{
+		"project":    run.ProjectSlug,
+		"workflow":   run.WorkflowName,
+		"ref":        run.Ref,
+		"sha":        run.SHA,
+		"event":      run.Event,
+		"actor":      run.Actor,
+		"run_number": run.RunNumber,
+	}
+	if len(run.Source) > 0 {
+		var srcAny struct {
+			PR json.RawMessage `json:"pr_number"`
+		}
+		if json.Unmarshal(run.Source, &srcAny) == nil && len(srcAny.PR) > 0 {
+			var n int
+			var s string
+			if json.Unmarshal(srcAny.PR, &n) == nil {
+				ctx["pr_number"] = n
+			} else if json.Unmarshal(srcAny.PR, &s) == nil {
+				ctx["pr_number"] = s
+			}
+		}
+	}
+	return ctx
 }
 
 // mcpWaitRun polls until the run reaches a terminal status or the timeout
@@ -1121,4 +1346,221 @@ func (s *Server) mcpWaitRun(ctx context.Context, runID uuid.UUID, timeout time.D
 		case <-time.After(2 * time.Second):
 		}
 	}
+}
+
+// mcpDoctor composes the deployment-health bundle: database reachability,
+// queue depth, runner fleet shape, and recent run stats — the first call an
+// agent makes when something looks wrong.
+func (s *Server) mcpDoctor(ctx context.Context, user store.User, project string) (map[string]any, error) {
+	out := map[string]any{}
+	dbCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	dbErr := s.Store.Pool().Ping(dbCtx)
+	cancel()
+	out["database"] = map[string]any{"reachable": dbErr == nil}
+	if dbErr != nil {
+		out["database"].(map[string]any)["error"] = "database unreachable"
+	}
+	out["uptime_seconds"] = int(time.Since(s.Started).Seconds())
+	out["version"] = version.Version
+
+	ov, err := s.Store.Overview(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out["queue"] = map[string]any{
+		"jobs_queued":      ov.JobsQueued,
+		"jobs_running":     ov.JobsRunning,
+		"avg_wait_seconds": int(ov.AvgQueueSeconds),
+		"p95_wait_seconds": int(ov.P95QueueSeconds),
+		"runs_active":      ov.RunsActive,
+		"avg_run_seconds":  int(ov.AvgRunSeconds),
+	}
+	runners, err := s.Store.Runners(ctx, user.OrgID)
+	if err != nil {
+		return nil, err
+	}
+	online, draining := 0, 0
+	for _, r := range runners {
+		if r.Status == "online" {
+			online++
+		}
+		if r.Draining {
+			draining++
+		}
+	}
+	out["runners"] = map[string]any{
+		"total": len(runners), "online": online, "draining": draining,
+	}
+	if project != "" {
+		p, err := s.Store.Project(ctx, user.OrgID, project)
+		if err != nil {
+			return nil, err
+		}
+		counts, err := s.Store.RunCounts(ctx, &p.ID, false)
+		if err != nil {
+			return nil, err
+		}
+		failed, completed := counts["failed"], counts["completed"]
+		rate := 0.0
+		if completed > 0 {
+			rate = float64(failed) / float64(completed)
+		}
+		out["project"] = map[string]any{
+			"slug":           project,
+			"runs_running":   counts["running"],
+			"runs_completed": completed,
+			"runs_failed":    failed,
+			"failure_rate":   rate,
+			"median_seconds": counts["median_seconds"],
+		}
+	}
+	return out, nil
+}
+
+// mcpPredictRun estimates queue wait + duration for the next run on a
+// project. Queue wait scales the measured average by queued-per-runner;
+// duration is the project's median run time. A honest estimate, not a
+// scheduler promise.
+func (s *Server) mcpPredictRun(ctx context.Context, user store.User, project, workflow string) (map[string]any, error) {
+	p, err := s.Store.Project(ctx, user.OrgID, project)
+	if err != nil {
+		return nil, err
+	}
+	counts, err := s.Store.RunCounts(ctx, &p.ID, false)
+	if err != nil {
+		return nil, err
+	}
+	ov, err := s.Store.Overview(ctx)
+	if err != nil {
+		return nil, err
+	}
+	runners := ov.RunnersOnline
+	if runners < 1 {
+		runners = 1
+	}
+	// Queued jobs ahead of us share the online fleet; each adds roughly
+	// the average job wait to the expected wait.
+	wait := ov.AvgQueueSeconds * (1.0 + float64(ov.JobsQueued)/float64(runners))
+	dur := counts["median_seconds"]
+	return map[string]any{
+		"project":                project,
+		"workflow":               workflow,
+		"estimated_wait_seconds": int(wait),
+		"estimated_run_seconds":  dur,
+		"jobs_queued":            ov.JobsQueued,
+		"runners_online":         ov.RunnersOnline,
+		"basis":                  "avg queue wait scaled by queued/runners; median project run duration",
+	}, nil
+}
+
+// mcpOptimizeProject turns project stats into concrete tuning suggestions —
+// the same levers a human operator would check, in order.
+func (s *Server) mcpOptimizeProject(ctx context.Context, user store.User, project string) (map[string]any, error) {
+	p, err := s.Store.Project(ctx, user.OrgID, project)
+	if err != nil {
+		return nil, err
+	}
+	counts, err := s.Store.RunCounts(ctx, &p.ID, false)
+	if err != nil {
+		return nil, err
+	}
+	ov, err := s.Store.Overview(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var suggestions []map[string]string
+	add := func(area, suggestion string) {
+		suggestions = append(suggestions, map[string]string{"area": area, "suggestion": suggestion})
+	}
+	completed := counts["completed"]
+	failed := counts["failed"]
+	if completed > 10 && float64(failed)/float64(completed) > 0.2 {
+		add("reliability", fmt.Sprintf(
+			"%.0f%% of runs fail — review the failure feed for a dominant classification before adding compute",
+			100*float64(failed)/float64(completed)))
+	}
+	if ov.AvgQueueSeconds > 60 && ov.JobsQueued > ov.RunnersOnline {
+		add("capacity", fmt.Sprintf(
+			"queue wait averages %ds with %d jobs queued against %d online runners — add runners or raise concurrency",
+			int(ov.AvgQueueSeconds), ov.JobsQueued, ov.RunnersOnline))
+	}
+	if med := counts["median_seconds"]; med > 30*60 {
+		add("duration", fmt.Sprintf(
+			"median run is %dm — split long test suites across jobs (`kern split --timings`) and cache dependency dirs",
+			med/60))
+	}
+	if len(suggestions) == 0 {
+		add("general", "no obvious bottleneck — queue wait, failure rate and median duration are all in normal range")
+	}
+	return map[string]any{
+		"project":     project,
+		"stats":       counts,
+		"suggestions": suggestions,
+	}, nil
+}
+
+// mcpMintAgentToken issues a short-lived scoped token for an agent session.
+// The grants mirror the REST createToken rules: a scoped caller can only
+// narrow its own projects/labels, never widen.
+func (s *Server) mcpMintAgentToken(c *gin.Context, user store.User, args map[string]json.RawMessage) (map[string]any, error) {
+	name := strings.TrimSpace(mcpArgStringOr(args, "name"))
+	if name == "" {
+		return nil, fmt.Errorf("name is required")
+	}
+	ttl := mcpArgInt(args, "ttl_minutes", 60)
+	if ttl <= 0 || ttl > 1440 {
+		ttl = 60
+	}
+	scopes := []string{"read"}
+	if w, _ := mcpArgBool(args, "write"); w {
+		scopes = []string{"read", "write"}
+	}
+	var projects, labels []string
+	if raw, ok := mcpArgRaw(args, "projects"); ok {
+		_ = json.Unmarshal(raw, &projects)
+	}
+	if raw, ok := mcpArgRaw(args, "labels"); ok {
+		_ = json.Unmarshal(raw, &labels)
+	}
+	var err error
+	if projects, err = cleanGrantList("project", projects, true); err != nil {
+		return nil, err
+	}
+	if labels, err = cleanGrantList("label", labels, false); err != nil {
+		return nil, err
+	}
+	// A scoped token must not mint a wider one — same check createToken runs.
+	if c.GetString(ctxAuthKind) == "api_token" {
+		if !scopeAllows(c, maxScope(scopes)) {
+			return nil, fmt.Errorf("token cannot mint a broader scope than its own")
+		}
+		if err := narrowList("project", tokenProjects(c), projects); err != nil {
+			return nil, err
+		}
+		if err := narrowList("label", tokenLabels(c), labels); err != nil {
+			return nil, err
+		}
+	}
+	expires := time.Now().Add(time.Duration(ttl) * time.Minute)
+	token, hash, err := auth.NewToken(auth.APIPrefix)
+	if err != nil {
+		return nil, err
+	}
+	rec, err := s.Store.CreateAPIToken(c.Request.Context(), user.ID, name,
+		auth.TokenPrefix(token), hash, scopes, &expires, projects, labels, 0)
+	if err != nil {
+		return nil, err
+	}
+	s.Store.AuditMeta(c.Request.Context(), user.OrgID, &user.ID, "token.create", name,
+		map[string]any{"scopes": scopes, "projects": projects, "labels": labels, "agent": true})
+	return map[string]any{
+		"token":      token,
+		"id":         rec.ID,
+		"prefix":     rec.Prefix,
+		"scopes":     scopes,
+		"projects":   projects,
+		"labels":     labels,
+		"expires_at": expires.UTC().Format(time.RFC3339),
+		"note":       "shown once — store it securely",
+	}, nil
 }
