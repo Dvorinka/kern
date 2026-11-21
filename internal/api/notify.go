@@ -5,13 +5,17 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/dvorinka/kern/internal/store"
@@ -192,7 +196,7 @@ func (s *Server) deliverNotify(ctx context.Context, d store.NotifyDelivery) {
 		event = "run.completed"
 	}
 	req.Header.Set("X-Kern-Event", event)
-	if secret := settingsValue(orgRaw, "notify_secret", ""); secret != "" {
+	if secret := s.notifySecret(d.OrgID, orgRaw); secret != "" {
 		mac := hmac.New(sha256.New, []byte(secret))
 		mac.Write(d.Payload)
 		req.Header.Set("X-Kern-Signature", "sha256="+hex.EncodeToString(mac.Sum(nil)))
@@ -234,5 +238,91 @@ func (s *Server) finishNotify(ctx context.Context, d store.NotifyDelivery, cause
 		zap.Int("attempt", n), zap.String("cause", cause))
 }
 
+// notifySecret resolves the org's webhook HMAC secret. Values written by
+// putOrgSettings are stored as "enc1:<b64ct>:<b64nonce>" AES-GCM ciphertext
+// bound to the org; legacy plaintext settings still verify (#368). An
+// undecryptable value signs nothing rather than leaking an error detail.
+func (s *Server) notifySecret(orgID uuid.UUID, raw json.RawMessage) string {
+	v := strings.TrimSpace(settingsValue(raw, "notify_secret", ""))
+	if !strings.HasPrefix(v, "enc1:") {
+		return v
+	}
+	parts := strings.SplitN(v, ":", 3)
+	if len(parts) != 3 {
+		return ""
+	}
+	ct, err1 := base64.StdEncoding.DecodeString(parts[1])
+	nonce, err2 := base64.StdEncoding.DecodeString(parts[2])
+	if err1 != nil || err2 != nil {
+		return ""
+	}
+	dec, err := s.Cipher.DecryptAAD(ct, nonce, "notify_secret|"+orgID.String())
+	if err != nil {
+		return ""
+	}
+	return dec
+}
+
+// publicNotifyIP reports whether ip is a globally routable unicast address —
+// loopback, private, link-local (incl. 169.254.169.254 metadata), multicast
+// and unspecified ranges are all rejected (#368).
+func publicNotifyIP(ip net.IP) bool {
+	return ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.IsLoopback() &&
+		!ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() &&
+		!ip.IsMulticast() && !ip.IsUnspecified()
+}
+
+// notifyURLHostSafe is the write-time half of the SSRF guard: literal IP
+// hosts must be public. Hostnames that resolve to internal addresses are
+// still caught at dial time by notifySafeDial (#368).
+func notifyURLHostSafe(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	if host == "" {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return publicNotifyIP(ip)
+	}
+	return true
+}
+
+// notifySafeDial resolves the target host once and dials a checked public
+// IP, so DNS rebinding cannot swap in an internal address after validation.
+// Redirects re-enter through this dialer, so they get the same check.
+func notifySafeDial(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if !publicNotifyIP(ip) {
+			return nil, fmt.Errorf("notify_url target %s is not a public address", host)
+		}
+		var d net.Dialer
+		return d.DialContext(ctx, network, addr)
+	}
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+	if err != nil {
+		return nil, err
+	}
+	for _, ip := range ips {
+		if publicNotifyIP(ip) {
+			var d net.Dialer
+			return d.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+		}
+	}
+	return nil, fmt.Errorf("notify_url host %s resolves only to non-public addresses", host)
+}
+
 // notifyHTTPClient is the send path's client; a var so tests can stub it.
-var notifyHTTPClient = &http.Client{Timeout: 10 * time.Second}
+var notifyHTTPClient = &http.Client{
+	Timeout: 10 * time.Second,
+	Transport: &http.Transport{
+		Proxy:       http.ProxyFromEnvironment,
+		DialContext: notifySafeDial,
+	},
+}

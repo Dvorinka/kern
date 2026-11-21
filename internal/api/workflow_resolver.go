@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -17,9 +18,12 @@ import (
 func (s *Server) reusableResolver(ctx context.Context, localPath, fullName, sha string, gh *github.Client) func(string) (string, error) {
 	return func(uses string) (string, error) {
 		if strings.HasPrefix(uses, "./") {
-			rel := strings.TrimPrefix(uses, "./")
+			rel, err := cleanLocalUses(strings.TrimPrefix(uses, "./"))
+			if err != nil {
+				return "", err
+			}
 			if localPath != "" {
-				b, err := os.ReadFile(filepath.Join(localPath, filepath.FromSlash(rel)))
+				b, err := os.ReadFile(localReusablePath(localPath, rel))
 				if err != nil {
 					return "", fmt.Errorf("reusable workflow %q: %w", uses, err)
 				}
@@ -40,6 +44,37 @@ func (s *Server) reusableResolver(ctx context.Context, localPath, fullName, sha 
 		}
 		return rg.FileContent(ctx, repo, path, ref)
 	}
+}
+
+// cleanLocalUses normalizes a "./" reusable-workflow path and rejects any
+// form that could escape the repository root — ".." segments, absolute
+// paths, and dot-only results (#368).
+func cleanLocalUses(rel string) (string, error) {
+	clean := path.Clean("/" + strings.TrimPrefix(rel, "/"))
+	clean = strings.TrimPrefix(clean, "/")
+	if clean == "" || clean == "." || strings.HasPrefix(clean, "../") || clean == ".." {
+		return "", fmt.Errorf("reusable workflow path %q escapes the repository root", rel)
+	}
+	return clean, nil
+}
+
+// localReusablePath joins a cleaned repo-relative path under localPath and
+// verifies — when both sides resolve — that symlinks cannot lead outside the
+// workspace (#368).
+func localReusablePath(localPath, rel string) string {
+	target := filepath.Join(localPath, filepath.FromSlash(rel))
+	root, rerr := filepath.EvalSymlinks(localPath)
+	real, terr := filepath.EvalSymlinks(target)
+	if rerr == nil && terr == nil {
+		if rel2, err := filepath.Rel(root, real); err == nil &&
+			rel2 != ".." && !strings.HasPrefix(rel2, ".."+string(filepath.Separator)) {
+			return real
+		}
+		// Resolved outside the root: return the unresolvable lexical path so
+		// the read fails instead of serving an escaped file.
+		return filepath.Join(localPath, "\x00blocked")
+	}
+	return target
 }
 
 // splitRemoteReusable parses owner/repo/.github/workflows/x.yml@ref.

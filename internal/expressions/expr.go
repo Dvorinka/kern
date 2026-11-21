@@ -1129,11 +1129,23 @@ func hashFilesFunc(ws string, args []any) (any, error) {
 	var files []string
 	for _, a := range args {
 		pat := Stringify(a)
+		// A pattern must stay inside the workspace: ".." segments would let
+		// hashFiles read arbitrary host files into a cache key (#368).
+		for _, seg := range strings.Split(filepath.ToSlash(pat), "/") {
+			if seg == ".." {
+				return nil, fmt.Errorf("hashFiles: pattern %q escapes the workspace", pat)
+			}
+		}
 		matches, err := doublestar.FilepathGlob(filepath.Join(ws, filepath.FromSlash(pat)))
 		if err != nil {
 			return nil, fmt.Errorf("hashFiles: invalid pattern %q: %w", pat, err)
 		}
 		for _, m := range matches {
+			// Defense in depth: every match must resolve under ws.
+			if rel, rerr := filepath.Rel(ws, m); rerr != nil ||
+				rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				continue
+			}
 			if info, err := os.Stat(m); err == nil && info.Mode().IsRegular() && !seen[m] {
 				seen[m] = true
 				files = append(files, m)

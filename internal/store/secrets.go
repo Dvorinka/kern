@@ -36,13 +36,31 @@ func (s *Store) UpsertSecret(ctx context.Context, orgID uuid.UUID, projectID, en
 	}
 }
 
+// Secrets returns secrets at exactly one scope: projectID nil means
+// org-level rows (project_id IS NULL), never "all project secrets" (#368).
 func (s *Store) Secrets(ctx context.Context, orgID uuid.UUID, projectID, envID *uuid.UUID) ([]Secret, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+secretCols+`
 		FROM secrets
-		WHERE org_id = $1 AND ($2::uuid IS NULL OR project_id = $2)
+		WHERE org_id = $1
+		  AND (($2::uuid IS NULL AND project_id IS NULL) OR project_id = $2)
 		  AND (($3::uuid IS NULL AND environment_id IS NULL) OR environment_id = $3)
 		ORDER BY name`, orgID, projectID, envID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanSecrets(rows)
+}
+
+// AllSecrets returns every non-environment secret in the org across all
+// project scopes — names and metadata for listings; values stay encrypted.
+func (s *Store) AllSecrets(ctx context.Context, orgID uuid.UUID) ([]Secret, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+secretCols+`
+		FROM secrets
+		WHERE org_id = $1 AND environment_id IS NULL
+		ORDER BY name`, orgID)
 	if err != nil {
 		return nil, err
 	}

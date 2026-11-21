@@ -2,9 +2,11 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -339,8 +341,8 @@ func (s *Server) triggerRun(c *gin.Context) {
 	}
 	if req.BundleRef != "" {
 		// Bundle refs are minted by PUT /projects/:project/source; only refs
-		// under this project's prefix are honoured.
-		prefix := "sources/" + p.Slug + "/"
+		// under this project's org+project namespace are honoured (#368).
+		prefix := fmt.Sprintf("sources/%s/%s/", p.OrgID, p.ID)
 		size, sizeErr := s.Blobs.Size(req.BundleRef)
 		if !strings.HasPrefix(req.BundleRef, prefix) || sizeErr != nil || size == 0 {
 			fail(c, http.StatusBadRequest, "invalid_bundle_ref",
@@ -448,14 +450,15 @@ func (s *Server) resolveTriggerSHA(ctx context.Context, p store.Project, ref, sh
 // rejected.
 func normWorkflowPath(p string) string {
 	p = strings.TrimSpace(strings.ReplaceAll(p, "\\", "/"))
-	for strings.HasPrefix(p, "./") {
-		p = strings.TrimPrefix(p, "./")
-	}
 	p = strings.TrimPrefix(p, "/")
-	if p == "" || p == "." || strings.HasPrefix(p, "../") || strings.Contains(p, "/../") {
+	// path.Clean collapses every traversal form — "a/../b", "a/..",
+	// "./x", doubled separators — before the escape checks (#368).
+	clean := path.Clean(p)
+	if clean == "" || clean == "." || clean == ".." ||
+		strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") {
 		return ""
 	}
-	return p
+	return clean
 }
 
 // triggerRunByPath starts a run for a workflow file that need not be a
@@ -569,7 +572,7 @@ func (s *Server) triggerRunByPath(c *gin.Context) {
 		"default_branch": p.DefaultBranch,
 	}
 	if req.BundleRef != "" {
-		prefix := "sources/" + p.Slug + "/"
+		prefix := fmt.Sprintf("sources/%s/%s/", p.OrgID, p.ID)
 		size, sizeErr := s.Blobs.Size(req.BundleRef)
 		if !strings.HasPrefix(req.BundleRef, prefix) || sizeErr != nil || size == 0 {
 			fail(c, http.StatusBadRequest, "invalid_bundle_ref",

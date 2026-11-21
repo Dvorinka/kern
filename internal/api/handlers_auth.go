@@ -96,8 +96,14 @@ func (s *Server) cliToken(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
+	// Role ceiling (#368): a member's CLI token may not carry the admin
+	// scope — that would outlive a later demotion and bypass requireRole.
+	scopes := []string{"read", "write", "admin"}
+	if roleRank(user.Role) < roleRank("admin") {
+		scopes = []string{"read", "write"}
+	}
 	rec, err := s.Store.CreateAPIToken(c.Request.Context(), user.ID, req.Name,
-		auth.TokenPrefix(token), hash, []string{"read", "write", "admin"}, expires, nil, nil, 0)
+		auth.TokenPrefix(token), hash, scopes, expires, nil, nil, 0)
 	if err != nil {
 		s.internalError(c, err)
 		return
@@ -253,6 +259,12 @@ func (s *Server) createToken(c *gin.Context) {
 	}
 	if req.MaxConcurrent < 0 || req.MaxConcurrent > 128 {
 		fail(c, http.StatusBadRequest, "invalid_grant", "max_concurrent must be between 0 and 128")
+		return
+	}
+	// Role ceiling (#368): only org admins and owners may mint tokens that
+	// carry the admin scope, regardless of the caller's auth kind.
+	if roleRank(user.Role) < roleRank("admin") && maxScope(scopes) == "admin" {
+		fail(c, http.StatusForbidden, "role_denied", "only org admins can mint admin-scoped tokens")
 		return
 	}
 	// A scoped token must not mint a wider one. Sessions are unrestricted.

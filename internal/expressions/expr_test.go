@@ -159,6 +159,13 @@ func TestHashFiles(t *testing.T) {
 	if _, err := Evaluate(`hashFiles('x')`, ctx()); err == nil {
 		t.Error("expected error without __workspace")
 	}
+
+	// Traversal patterns must not escape the workspace (#368).
+	for _, pat := range []string{`'../../etc/passwd'`, `'a/../../x'`, `'../**'`} {
+		if _, err := Evaluate(`hashFiles(`+pat+`)`, c); err == nil {
+			t.Errorf("hashFiles(%s) should reject workspace escape", pat)
+		}
+	}
 }
 
 func TestErrors(t *testing.T) {

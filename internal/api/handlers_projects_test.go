@@ -40,7 +40,10 @@ func TestNormWorkflowPath(t *testing.T) {
 		{".", ""},
 		{"../x.yml", ""},
 		{"a/../../b.yml", ""},
-		{"a/../b.yml", ""},
+		{"a/../b.yml", "b.yml"}, // cleans to an in-repo path, not an escape
+		{"a/..", ""},       // trailing traversal (#368)
+		{"a/./../b.yml", "b.yml"}, // cleans to an in-repo path
+		{"kern//ci.yml", "kern/ci.yml"},
 	} {
 		if got := normWorkflowPath(tc.in); got != tc.want {
 			t.Fatalf("normWorkflowPath(%q) = %q want %q", tc.in, got, tc.want)
