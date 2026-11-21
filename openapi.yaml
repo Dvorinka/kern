@@ -538,6 +538,15 @@ paths:
         - { name: ids, in: query, required: true, schema: { type: string, description: "comma-separated run ids" } }
       responses:
         "200": { description: Jobs grouped by run }
+  /runs/{id}/stream:
+    get:
+      tags: [runs]
+      summary: Multiplexed run SSE (job/step transitions + interleaved log chunks)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: follow, in: query, schema: { type: string, description: "0 snapshots once and closes" } }
+      responses:
+        "200": { description: text/event-stream }
   /runs/{id}/diagnose:
     get:
       tags: [runs]
@@ -992,6 +1001,16 @@ paths:
       summary: MCP JSON-RPC endpoint (same auth/scopes as HTTP)
       responses:
         "200": { description: JSON-RPC response }
+    get:
+      tags: [instance]
+      summary: MCP SSE stream — not supported (stateless transport)
+      responses:
+        "405": { description: Stateless MCP transport accepts POST only }
+    delete:
+      tags: [instance]
+      summary: MCP session close — not supported (stateless transport)
+      responses:
+        "405": { description: Stateless MCP transport accepts POST only }
 
   /runners/register:
     post:

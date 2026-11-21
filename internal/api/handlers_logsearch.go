@@ -73,10 +73,26 @@ func (s *Server) searchLogs(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), logSearchDeadline)
 	defer cancel()
-	steps, err := s.Store.SearchLogSteps(ctx, user.OrgID, c.Query("project"), runID, logSearchMaxSteps)
+	hits, stepsSeen, scanned, truncated, err := s.logSearchHits(ctx, user.OrgID, q, c.Query("project"), runID, limit)
 	if err != nil {
 		s.internalError(c, err)
 		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"hits": hits, "steps_scanned": stepsSeen, "bytes_scanned": scanned,
+		"truncated": truncated,
+	})
+}
+
+// logSearchHits scans step logs for q and returns hits plus the scan
+// counters. Shared by GET /logs/search and the kern_search_logs MCP tool.
+func (s *Server) logSearchHits(ctx context.Context, orgID uuid.UUID, q, project string, runID uuid.UUID, limit int) ([]logSearchHit, int, int64, bool, error) {
+	if limit <= 0 || limit > logSearchMaxHits {
+		limit = logSearchMaxHits
+	}
+	steps, err := s.Store.SearchLogSteps(ctx, orgID, project, runID, logSearchMaxSteps)
+	if err != nil {
+		return nil, 0, 0, false, err
 	}
 	needle := strings.ToLower(q)
 	hits := make([]logSearchHit, 0, limit)
@@ -135,8 +151,5 @@ func (s *Server) searchLogs(c *gin.Context) {
 			break
 		}
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"hits": hits, "steps_scanned": stepsSeen, "bytes_scanned": scanned,
-		"truncated": truncated,
-	})
+	return hits, stepsSeen, scanned, truncated, nil
 }

@@ -10,17 +10,26 @@ package api
 // `kern login`.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"github.com/dvorinka/kern/internal/auth"
+	"github.com/dvorinka/kern/internal/blobs"
 	"github.com/dvorinka/kern/internal/store"
+	"github.com/dvorinka/kern/internal/version"
+	"github.com/dvorinka/kern/internal/workflows"
 )
 
 const mcpProtocolVersion = "2025-06-18"
@@ -53,39 +62,139 @@ func rpcErr(id json.RawMessage, code int, msg string) rpcResponse {
 }
 
 // mcpTool is one callable tool: JSON Schema for inputs plus the implementation.
+// Annotations let agent clients auto-approve safe calls (readOnlyHint) and
+// flag irreversible ones (destructiveHint) per the 2025-06-18 spec.
 type mcpTool struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
 	InputSchema map[string]any `json:"inputSchema"`
+	Annotations map[string]any `json:"annotations,omitempty"`
 }
 
+// mcpAnn builds a ToolAnnotations value. Kern's surface is closed — every
+// tool stays inside this deployment (openWorldHint false).
+func mcpAnn(readOnly, destructive, idempotent bool) map[string]any {
+	return map[string]any{
+		"readOnlyHint":    readOnly,
+		"destructiveHint": destructive,
+		"idempotentHint":  idempotent,
+		"openWorldHint":   false,
+	}
+}
+
+// mcpVersions the server negotiates. Clients pin one after initialize via
+// the MCP-Protocol-Version header.
+var mcpVersions = map[string]bool{"2025-03-26": true, "2025-06-18": true}
+
 func (s *Server) mcp(c *gin.Context) {
-	var req rpcRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusOK, rpcErr(nil, -32700, "parse error"))
+	// Origin must target this host when present — the streamable-HTTP spec
+	// requires it to stop browser pages on other origins (DNS rebinding)
+	// from driving the endpoint. CLI clients send no Origin.
+	if origin := c.GetHeader("Origin"); origin != "" {
+		u, err := url.Parse(origin)
+		if err != nil || !strings.EqualFold(u.Host, c.Request.Host) {
+			fail(c, http.StatusForbidden, "origin_denied", "untrusted Origin")
+			return
+		}
+	}
+	if v := c.GetHeader("MCP-Protocol-Version"); v != "" && !mcpVersions[v] {
+		fail(c, http.StatusBadRequest, "mcp_version", "unsupported MCP-Protocol-Version")
 		return
 	}
-	// Notifications carry no id — the spec wants 202 with no body.
-	if len(req.ID) == 0 {
+	body, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, 4<<20))
+	if err != nil {
+		c.JSON(http.StatusRequestEntityTooLarge, rpcErr(nil, -32700, "request too large"))
+		return
+	}
+	trim := bytes.TrimSpace(body)
+	if len(trim) == 0 {
+		c.JSON(http.StatusBadRequest, rpcErr(nil, -32600, "invalid request"))
+		return
+	}
+	var reqs []rpcRequest
+	batch := trim[0] == '['
+	if batch {
+		if err := json.Unmarshal(trim, &reqs); err != nil || len(reqs) == 0 {
+			c.JSON(http.StatusBadRequest, rpcErr(nil, -32700, "parse error"))
+			return
+		}
+	} else {
+		var req rpcRequest
+		if err := json.Unmarshal(trim, &req); err != nil {
+			c.JSON(http.StatusBadRequest, rpcErr(nil, -32700, "parse error"))
+			return
+		}
+		reqs = []rpcRequest{req}
+	}
+	var resps []rpcResponse
+	for _, req := range reqs {
+		if r := s.mcpHandle(c, req); r != nil {
+			resps = append(resps, *r)
+		}
+	}
+	// Every message was a notification — the spec wants 202 with no body.
+	if len(resps) == 0 {
 		c.Status(http.StatusAccepted)
 		return
 	}
+	if batch {
+		c.JSON(http.StatusOK, resps)
+		return
+	}
+	c.JSON(http.StatusOK, resps[0])
+}
+
+// mcpHandle executes one JSON-RPC message. A nil result means the message
+// was a notification and produces no response body.
+func (s *Server) mcpHandle(c *gin.Context, req rpcRequest) *rpcResponse {
+	// Notifications carry no id and get no response.
+	if len(req.ID) == 0 {
+		return nil
+	}
+	if req.JSONRPC != "2.0" {
+		r := rpcErr(req.ID, -32600, `invalid request: jsonrpc must be "2.0"`)
+		return &r
+	}
+	var resp rpcResponse
 	switch req.Method {
 	case "initialize":
-		c.JSON(http.StatusOK, rpcOK(req.ID, map[string]any{
+		resp = rpcOK(req.ID, map[string]any{
 			"protocolVersion": mcpProtocolVersion,
-			"serverInfo":      map[string]any{"name": "kern", "version": "1"},
-			"capabilities":    map[string]any{"tools": map[string]any{}},
-		}))
+			"serverInfo":      map[string]any{"name": "kern", "version": version.Version},
+			"capabilities": map[string]any{
+				"tools":     map[string]any{},
+				"resources": map[string]any{},
+				"prompts":   map[string]any{},
+			},
+		})
 	case "ping":
-		c.JSON(http.StatusOK, rpcOK(req.ID, map[string]any{}))
+		resp = rpcOK(req.ID, map[string]any{})
 	case "tools/list":
-		c.JSON(http.StatusOK, rpcOK(req.ID, map[string]any{"tools": mcpTools()}))
+		resp = rpcOK(req.ID, map[string]any{"tools": mcpTools()})
+	case "resources/list":
+		return s.mcpResources(c, req)
+	case "resources/templates/list":
+		return s.mcpResourceTemplates(c, req)
+	case "resources/read":
+		return s.mcpResourceRead(c, req)
+	case "prompts/list":
+		resp = rpcOK(req.ID, map[string]any{"prompts": mcpPrompts()})
+	case "prompts/get":
+		return s.mcpPromptGet(c, req)
 	case "tools/call":
-		s.mcpCall(c, req)
+		return s.mcpCall(c, req)
 	default:
-		c.JSON(http.StatusOK, rpcErr(req.ID, -32601, "method not found"))
+		resp = rpcErr(req.ID, -32601, "method not found")
 	}
+	return &resp
+}
+
+// mcpMethodNotAllowed answers GET and DELETE on /mcp. GET would open an SSE
+// stream under the streamable transport — this server is stateless and
+// offers none, so 405 is the spec-compliant answer. DELETE tears down a
+// session this server never mints.
+func (s *Server) mcpMethodNotAllowed(c *gin.Context) {
+	c.AbortWithStatus(http.StatusMethodNotAllowed)
 }
 
 func props(defs map[string]map[string]any) map[string]any {
@@ -98,8 +207,10 @@ func num(desc string) map[string]any { return map[string]any{"type": "integer", 
 func mcpTools() []mcpTool {
 	return []mcpTool{
 		{Name: "kern_list_projects", Description: "List CI projects in the org.",
+			Annotations: mcpAnn(true, false, true),
 			InputSchema: props(map[string]map[string]any{})},
 		{Name: "kern_list_runs", Description: "List workflow runs, newest first.",
+			Annotations: mcpAnn(true, false, true),
 			InputSchema: func() map[string]any {
 				p := props(map[string]map[string]any{
 					"project": str("project slug to filter by"),
@@ -109,12 +220,14 @@ func mcpTools() []mcpTool {
 				return p
 			}()},
 		{Name: "kern_get_run", Description: "Run detail with every job and its steps (status, conclusion, diagnosis).",
+			Annotations: mcpAnn(true, false, true),
 			InputSchema: func() map[string]any {
 				p := props(map[string]map[string]any{"run_id": str("run UUID")})
 				p["required"] = []string{"run_id"}
 				return p
 			}()},
 		{Name: "kern_step_log", Description: "Step log bytes. Default: tail of the log; pass offset to page forward instead.",
+			Annotations: mcpAnn(true, false, true),
 			InputSchema: func() map[string]any {
 				p := props(map[string]map[string]any{
 					"job_id": str("job UUID"),
@@ -126,8 +239,10 @@ func mcpTools() []mcpTool {
 				return p
 			}()},
 		{Name: "kern_list_runners", Description: "Fleet runners with status, labels and active jobs.",
+			Annotations: mcpAnn(true, false, true),
 			InputSchema: props(map[string]map[string]any{})},
 		{Name: "kern_set_runner_drain", Description: "Drain or undrain a runner (id or name). Draining runners take no new jobs.",
+			Annotations: mcpAnn(false, false, true),
 			InputSchema: func() map[string]any {
 				p := props(map[string]map[string]any{
 					"runner":   str("runner UUID or name"),
@@ -137,12 +252,14 @@ func mcpTools() []mcpTool {
 				return p
 			}()},
 		{Name: "kern_get_project", Description: "Project detail with its workflows.",
+			Annotations: mcpAnn(true, false, true),
 			InputSchema: func() map[string]any {
 				p := props(map[string]map[string]any{"project": str("project slug")})
 				p["required"] = []string{"project"}
 				return p
 			}()},
 		{Name: "kern_trigger_run", Description: "Start a workflow run (workflow_dispatch by default).",
+			Annotations: mcpAnn(false, false, false),
 			InputSchema: func() map[string]any {
 				p := props(map[string]map[string]any{
 					"project":  str("project slug"),
@@ -155,27 +272,147 @@ func mcpTools() []mcpTool {
 				p["required"] = []string{"project", "workflow"}
 				return p
 			}()},
-		{Name: "kern_rerun_run", Description: "Re-run a completed or failed run from its original inputs.",
+		{Name: "kern_rerun_run", Description: "Re-run a completed or failed run from its original inputs. failed=true or jobs=[name] re-run jobs in place instead of seeding a fresh run.",
+			Annotations: mcpAnn(false, false, false),
 			InputSchema: func() map[string]any {
-				p := props(map[string]map[string]any{"run_id": str("run UUID")})
+				p := props(map[string]map[string]any{
+					"run_id": str("run UUID"),
+					"failed": map[string]any{"type": "boolean", "description": "re-run only the failed jobs in place"},
+					"jobs":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "job names to re-run in place"},
+				})
 				p["required"] = []string{"run_id"}
 				return p
 			}()},
 		{Name: "kern_list_secrets", Description: "Secret names and scopes for the org — never values. Optionally filtered by project slug and/or environment name.",
+			Annotations: mcpAnn(true, false, true),
 			InputSchema: props(map[string]map[string]any{
 				"project":     str("project slug"),
 				"environment": str("environment name (requires project)"),
 			})},
 		{Name: "kern_approve_run", Description: "Release a fork-gated run (awaiting_approval -> queued).",
+			Annotations: mcpAnn(false, false, true),
 			InputSchema: func() map[string]any {
 				p := props(map[string]map[string]any{"run_id": str("run UUID")})
 				p["required"] = []string{"run_id"}
 				return p
 			}()},
 		{Name: "kern_cancel_run", Description: "Cancel a queued or in-progress run.",
+			Annotations: mcpAnn(false, true, true),
 			InputSchema: func() map[string]any {
 				p := props(map[string]map[string]any{"run_id": str("run UUID")})
 				p["required"] = []string{"run_id"}
+				return p
+			}()},
+		{Name: "kern_diagnose_run", Description: "Single-call failure bundle: verdict, run context, jobs/steps, failed-step log tails bounded by max_bytes, runner map.",
+			Annotations: mcpAnn(true, false, true),
+			InputSchema: func() map[string]any {
+				p := props(map[string]map[string]any{
+					"run_id":    str("run UUID"),
+					"tail":      num("per-failed-step log tail bytes, default 8192"),
+					"max_steps": num("max failed steps to tail, default 5"),
+					"max_bytes": num("total log-tail byte budget across all steps, default 16384"),
+				})
+				p["required"] = []string{"run_id"}
+				return p
+			}()},
+		{Name: "kern_search_logs", Description: "Search step logs for a string across a project or run.",
+			Annotations: mcpAnn(true, false, true),
+			InputSchema: func() map[string]any {
+				p := props(map[string]map[string]any{
+					"q":       str("case-insensitive substring to find"),
+					"project": str("project slug to scope the search"),
+					"run":     str("run UUID to scope the search"),
+					"limit":   num("max hits, default 100"),
+				})
+				p["required"] = []string{"q"}
+				return p
+			}()},
+		{Name: "kern_wait_run", Description: "Block until a run reaches a terminal state (or timeout) and return the final state.",
+			Annotations: mcpAnn(true, false, false),
+			InputSchema: func() map[string]any {
+				p := props(map[string]map[string]any{
+					"run_id":  str("run UUID"),
+					"timeout": num("seconds to wait, default 120, max 600"),
+				})
+				p["required"] = []string{"run_id"}
+				return p
+			}()},
+		{Name: "kern_list_artifacts", Description: "Artifacts produced by a run.",
+			Annotations: mcpAnn(true, false, true),
+			InputSchema: func() map[string]any {
+				p := props(map[string]map[string]any{"run_id": str("run UUID")})
+				p["required"] = []string{"run_id"}
+				return p
+			}()},
+		{Name: "kern_sync_project", Description: "Re-discover and compile .github/workflows for a project (local dir or GitHub contents API).",
+			Annotations: mcpAnn(false, false, true),
+			InputSchema: func() map[string]any {
+				p := props(map[string]map[string]any{"project": str("project slug")})
+				p["required"] = []string{"project"}
+				return p
+			}()},
+		{Name: "kern_remediate_job", Description: "Approve a step's remediation proposal and requeue the failed job.",
+			Annotations: mcpAnn(false, false, false),
+			InputSchema: func() map[string]any {
+				p := props(map[string]map[string]any{
+					"job_id": str("job UUID"),
+					"step":   num("step number carrying the proposal"),
+				})
+				p["required"] = []string{"job_id", "step"}
+				return p
+			}()},
+		{Name: "kern_approve_deployment", Description: "Release a job waiting on an environment approval.",
+			Annotations: mcpAnn(false, false, false),
+			InputSchema: func() map[string]any {
+				p := props(map[string]map[string]any{"job_id": str("job UUID")})
+				p["required"] = []string{"job_id"}
+				return p
+			}()},
+		{Name: "kern_doctor", Description: "Deployment health: database reachability, queue depth, runner fleet, recent failure rate.",
+			Annotations: mcpAnn(true, false, true),
+			InputSchema: props(map[string]map[string]any{
+				"project": str("scope the report to one project slug"),
+			})},
+		{Name: "kern_predict_run", Description: "Estimate queue wait and duration for a run on a project from queue depth, runner capacity and run history.",
+			Annotations: mcpAnn(true, false, true),
+			InputSchema: func() map[string]any {
+				p := props(map[string]map[string]any{
+					"project":  str("project slug"),
+					"workflow": str("workflow path or name to narrow the estimate"),
+				})
+				p["required"] = []string{"project"}
+				return p
+			}()},
+		{Name: "kern_optimize_project", Description: "CI tuning suggestions for a project from its run, queue and failure stats.",
+			Annotations: mcpAnn(true, false, true),
+			InputSchema: func() map[string]any {
+				p := props(map[string]map[string]any{"project": str("project slug")})
+				p["required"] = []string{"project"}
+				return p
+			}()},
+		{Name: "kern_exec_job", Description: "Run a command inside a live job's container and return its output. Trusted, running docker jobs only.",
+			Annotations: mcpAnn(false, false, false),
+			InputSchema: func() map[string]any {
+				p := props(map[string]map[string]any{
+					"job_id":  str("job UUID (must be in_progress on a docker runner)"),
+					"command": str("shell command to run"),
+					"timeout": num("seconds to wait for completion, default 60, max 120"),
+					"tail":    num("output bytes to return, default 8192, max 65536"),
+				})
+				p["required"] = []string{"job_id", "command"}
+				return p
+			}()},
+		{Name: "kern_mint_agent_token", Description: "Mint a short-lived scoped API token for an agent session. Grants are narrowed to the caller's own.",
+			Annotations: mcpAnn(false, false, false),
+			InputSchema: func() map[string]any {
+				p := props(map[string]map[string]any{
+					"name":        str("token name, e.g. agent session id"),
+					"ttl_minutes": num("lifetime in minutes, default 60, max 1440"),
+					"projects":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "project slugs the token may touch"},
+					"labels":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "runner labels the token may dispatch to"},
+					"write":       map[string]any{"type": "boolean", "description": "grant write scope (trigger/rerun); default read-only"},
+				})
+				p["required"] = []string{"name"}
 				return p
 			}()},
 	}
@@ -198,14 +435,8 @@ func mcpJSON(v any) (map[string]any, error) {
 	}}, nil
 }
 
-func mcpArgString(params json.RawMessage, key string) (string, bool) {
-	var call struct {
-		Arguments map[string]json.RawMessage `json:"arguments"`
-	}
-	if json.Unmarshal(params, &call) != nil || call.Arguments == nil {
-		return "", false
-	}
-	raw, ok := call.Arguments[key]
+func mcpArgString(args map[string]json.RawMessage, key string) (string, bool) {
+	raw, ok := args[key]
 	if !ok {
 		return "", false
 	}
@@ -220,14 +451,8 @@ func mcpArgString(params json.RawMessage, key string) (string, bool) {
 	return "", false
 }
 
-func mcpArgInt(params json.RawMessage, key string, def int) int {
-	var call struct {
-		Arguments map[string]json.RawMessage `json:"arguments"`
-	}
-	if json.Unmarshal(params, &call) != nil {
-		return def
-	}
-	raw, ok := call.Arguments[key]
+func mcpArgInt(args map[string]json.RawMessage, key string, def int) int {
+	raw, ok := args[key]
 	if !ok {
 		return def
 	}
@@ -243,17 +468,23 @@ func mcpArgInt(params json.RawMessage, key string, def int) int {
 	return n
 }
 
-func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
+func (s *Server) mcpCall(c *gin.Context, req rpcRequest) *rpcResponse {
 	var call struct {
-		Name      string          `json:"name"`
-		Arguments json.RawMessage `json:"arguments"`
+		Name      string                     `json:"name"`
+		Arguments map[string]json.RawMessage `json:"arguments"`
 	}
 	if err := json.Unmarshal(req.Params, &call); err != nil {
-		c.JSON(http.StatusOK, rpcErr(req.ID, -32602, "invalid params"))
-		return
+		r := rpcErr(req.ID, -32602, "invalid params")
+		return &r
 	}
-	// Repack arguments under the key helpers expect.
-	params := req.Params
+	// Project-scoped tokens reach MCP, but only inside their grant.
+	if gerr := s.mcpToolAllowed(c, call.Name, call.Arguments); gerr != nil {
+		r := rpcOK(req.ID, map[string]any{
+			"isError": true,
+			"content": []map[string]any{{"type": "text", "text": gerr.Error()}},
+		})
+		return &r
+	}
 	user, _ := currentUser(c)
 	ctx := c.Request.Context()
 	var out any
@@ -262,10 +493,19 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 	case "kern_list_projects":
 		var projects []store.Project
 		projects, err = s.Store.Projects(ctx, user.OrgID)
+		if granted := tokenProjects(c); err == nil && len(granted) > 0 {
+			filtered := projects[:0]
+			for _, p := range projects {
+				if grantHas(granted, p.Slug) {
+					filtered = append(filtered, p)
+				}
+			}
+			projects = filtered
+		}
 		out = projects
 	case "kern_list_runs":
-		f := store.RunFilter{OrgID: user.OrgID, Status: mcpArgStringOr(params, "status"), Limit: mcpArgInt(params, "limit", 20)}
-		if slug := mcpArgStringOr(params, "project"); slug != "" {
+		f := store.RunFilter{OrgID: user.OrgID, Status: mcpArgStringOr(call.Arguments, "status"), Limit: mcpArgInt(call.Arguments, "limit", 20)}
+		if slug := mcpArgStringOr(call.Arguments, "project"); slug != "" {
 			var p store.Project
 			p, err = s.Store.Project(ctx, user.OrgID, slug)
 			if err == nil {
@@ -278,7 +518,7 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			out = runs
 		}
 	case "kern_get_run":
-		id, perr := s.mcpResolveRunID(c, mcpArgStringOr(params, "run_id"))
+		id, perr := s.mcpResolveRunID(c, mcpArgStringOr(call.Arguments, "run_id"))
 		if perr != nil {
 			err = perr
 			break
@@ -304,16 +544,21 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			for _, j := range jobs {
 				views = append(views, jobView{Job: j, Steps: stepsByJob[j.ID]})
 			}
-			out = map[string]any{"run": run, "jobs": views}
+			if err == nil {
+				out = map[string]any{"run": run, "jobs": views}
+			}
 		}
 	case "kern_step_log":
-		jobID, perr := s.mcpResolveJobID(ctx, user.OrgID, mcpArgStringOr(params, "job_id"))
+		jobID, perr := s.mcpResolveJobID(ctx, user.OrgID, mcpArgStringOr(call.Arguments, "job_id"))
 		if perr != nil {
 			err = perr
 			break
 		}
-		n := mcpArgInt(params, "step", 0)
-		tail := mcpArgInt(params, "tail", 8192)
+		n := mcpArgInt(call.Arguments, "step", 0)
+		tail := mcpArgInt(call.Arguments, "tail", 8192)
+		if tail <= 0 {
+			tail = 8192
+		}
 		// The job must belong to the caller's org before its log is read.
 		var runID uuid.UUID
 		runID, _, err = s.Store.JobRunID(ctx, jobID)
@@ -330,11 +575,30 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			ref, size, err = s.Store.StepLogRef(ctx, jobID, n)
 		}
 		if err == nil && ref == "" {
-			err = fmt.Errorf("step has no log")
+			// Skipped/cancelled steps never posted a log — report the
+			// conclusion as the log body instead of an isError result.
+			var steps []store.Step
+			steps, err = s.Store.StepsForJob(ctx, jobID)
+			if err != nil {
+				break
+			}
+			conclusion := ""
+			for _, st := range steps {
+				if st.Number == n {
+					conclusion = st.Conclusion
+				}
+			}
+			if conclusion == "skipped" || conclusion == "cancelled" {
+				text := "KERN: step " + conclusion + "\n"
+				out = map[string]any{"step": n, "offset": 0, "bytes": len(text),
+					"total_size": len(text), "next_offset": 0, "log": text}
+			} else {
+				err = fmt.Errorf("step has no log")
+			}
 		}
-		if err == nil {
+		if err == nil && out == nil {
 			offset := int64(0)
-			if o := mcpArgInt(params, "offset", -1); o >= 0 {
+			if o := mcpArgInt(call.Arguments, "offset", -1); o >= 0 {
 				offset = int64(o)
 			} else if size > int64(tail) {
 				offset = size - int64(tail)
@@ -342,7 +606,9 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			var data []byte
 			data, _, err = s.Blobs.ReadFrom(ref, offset, tail)
 			if err == nil {
-				out = map[string]any{"step": n, "offset": offset, "bytes": len(data), "log": string(data)}
+				out = map[string]any{"step": n, "offset": offset, "bytes": len(data),
+					"total_size": size, "next_offset": offset + int64(len(data)),
+					"log": string(data)}
 			}
 		}
 	case "kern_list_runners":
@@ -362,10 +628,12 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			for _, r := range runners {
 				views = append(views, runnerView{Runner: r, ActiveJobs: jobsByRunner[r.ID]})
 			}
-			out = views
+			if err == nil {
+				out = views
+			}
 		}
 	case "kern_get_project":
-		slug := mcpArgStringOr(params, "project")
+		slug := mcpArgStringOr(call.Arguments, "project")
 		if slug == "" {
 			err = fmt.Errorf("project is required")
 			break
@@ -385,8 +653,8 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			err = fmt.Errorf("token requires the write scope")
 			break
 		}
-		slug := mcpArgStringOr(params, "project")
-		want := mcpArgStringOr(params, "workflow")
+		slug := mcpArgStringOr(call.Arguments, "project")
+		want := mcpArgStringOr(call.Arguments, "workflow")
 		if slug == "" || want == "" {
 			err = fmt.Errorf("project and workflow are required")
 			break
@@ -401,25 +669,13 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 		if err != nil {
 			break
 		}
-		event := mcpArgStringOr(params, "event")
+		event := mcpArgStringOr(call.Arguments, "event")
 		if event == "" {
 			event = "workflow_dispatch"
 		}
-		ref := mcpArgStringOr(params, "ref")
+		ref := mcpArgStringOr(call.Arguments, "ref")
 		if ref == "" {
 			ref = "refs/heads/" + p.DefaultBranch
-		}
-		trust := mcpArgStringOr(params, "trust_level")
-		if trust == "" {
-			trust = "trusted"
-		}
-		validTrust := map[string]bool{
-			"trusted": true, "protected": true, "pull_request": true,
-			"fork": true, "deployment": true,
-		}
-		if !validTrust[trust] {
-			err = fmt.Errorf("unknown trust level %q", trust)
-			break
 		}
 		var version store.WorkflowVersion
 		wf, version, err = s.Store.LatestWorkflowVersion(ctx, p.ID, wf.Path)
@@ -431,7 +687,7 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			break
 		}
 		var inputs map[string]any
-		if raw, ok := mcpArgRaw(params, "inputs"); ok {
+		if raw, ok := mcpArgRaw(call.Arguments, "inputs"); ok {
 			if uerr := json.Unmarshal(raw, &inputs); uerr != nil {
 				err = fmt.Errorf("inputs must be a JSON object")
 				break
@@ -443,6 +699,43 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			"local_path":     p.LocalPath,
 			"default_branch": p.DefaultBranch,
 		}
+		// HTTP parity: resolve the ref's current head and compile the
+		// workflow as it exists there — the stored version goes stale
+		// between syncs.
+		sha := s.resolveTriggerSHA(ctx, p, ref, mcpArgStringOr(call.Arguments, "sha"))
+		if p.RepoFullName != "" && sha != "" {
+			if v, _, verr := s.workflowAtSHA(c, p.RepoFullName, p.ID, wf, sha); verr == nil {
+				version = v
+			}
+		}
+		// A manual dispatch against a PR ref carries the same pull_request
+		// payload fields the webhook path synthesizes.
+		if (event == "pull_request" || event == "pull_request_target") && p.RepoFullName != "" {
+			if num, ok := prNumberFromRef(ref); ok {
+				if gh, gerr := s.githubClient(ctx, p.RepoFullName); gerr == nil {
+					if pr, perr := gh.PullRequest(ctx, p.RepoFullName, num); perr == nil {
+						source["pr_number"] = pr.Number
+						source["head_ref"] = pr.Head.Ref
+						source["head_sha"] = pr.Head.SHA
+						source["head_repo"] = pr.Head.RepoFullName
+						source["base_ref"] = pr.Base.Ref
+						source["base_sha"] = pr.Base.SHA
+					}
+				}
+			}
+		}
+		// Label-pool tokens may only dispatch workflows that fit their pool.
+		if labels := tokenLabels(c); len(labels) > 0 {
+			var plan workflows.Plan
+			if len(version.Parsed) == 0 || json.Unmarshal(version.Parsed, &plan) != nil {
+				err = fmt.Errorf("this token is limited to a runner pool and the workflow plan could not be checked")
+				break
+			}
+			if msg := runsOnDenial(labels, plan.Jobs); msg != "" {
+				err = fmt.Errorf("%s", msg)
+				break
+			}
+		}
 		var run store.Run
 		run, err = s.Orch.StartRun(ctx, store.CreateRunParams{
 			ProjectID:         p.ID,
@@ -450,9 +743,9 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			WorkflowVersionID: version.ID,
 			Event:             event,
 			Ref:               ref,
-			SHA:               firstNonEmpty(mcpArgStringOr(params, "sha"), version.CommitSHA),
+			SHA:               firstNonEmpty(sha, version.CommitSHA),
 			Actor:             user.Email,
-			TrustLevel:        trust,
+			TrustLevel:        "trusted",
 			Source:            source,
 			Inputs:            inputs,
 			DispatchTokenID:   dispatchTokenID(c),
@@ -467,7 +760,7 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			err = fmt.Errorf("token requires the write scope")
 			break
 		}
-		id, perr := s.mcpResolveRunID(c, mcpArgStringOr(params, "run_id"))
+		id, perr := s.mcpResolveRunID(c, mcpArgStringOr(call.Arguments, "run_id"))
 		if perr != nil {
 			err = perr
 			break
@@ -478,6 +771,27 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 		}
 		if rerr != nil {
 			err = rerr
+			break
+		}
+		// failed=true or jobs=[name] re-run the finished run's jobs in
+		// place — gh rerun --failed semantics.
+		failed, _ := mcpArgBool(call.Arguments, "failed")
+		var jobNames []string
+		if raw, ok := mcpArgRaw(call.Arguments, "jobs"); ok {
+			_ = json.Unmarshal(raw, &jobNames)
+		}
+		if failed || len(jobNames) > 0 {
+			n, rjerr := s.Store.RerunJobs(ctx, orig.ID, jobNames)
+			if rjerr != nil {
+				err = rjerr
+				break
+			}
+			s.Store.Audit(ctx, user.OrgID, &user.ID, "run.rerun_jobs", orig.ID.String())
+			var run store.Run
+			run, err = s.Store.Run(ctx, orig.ID)
+			if err == nil {
+				out = map[string]any{"run": run, "jobs": n}
+			}
 			break
 		}
 		var source map[string]any
@@ -494,16 +808,22 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			Actor:             user.Email,
 			TrustLevel:        orig.TrustLevel,
 			Source:            source,
+			ConcurrencyGroup:  orig.ConcurrencyGroup,
 			DispatchTokenID:   dispatchTokenID(c),
 		})
 		if err == nil {
+			// Re-triggering a cancelled run retires the cancelled entry
+			// from the default lists; the row stays reachable by id.
+			if orig.Status == "cancelled" || orig.Conclusion == "cancelled" {
+				_, _ = s.Store.ClearRun(ctx, orig.ID)
+			}
 			s.Store.Audit(ctx, user.OrgID, &user.ID, "run.rerun", orig.ID.String())
 			out = run
 		}
 	case "kern_list_secrets":
 		// Names and scopes only — secret values never leave the store.
 		var projectID, envID *uuid.UUID
-		if slug := mcpArgStringOr(params, "project"); slug != "" {
+		if slug := mcpArgStringOr(call.Arguments, "project"); slug != "" {
 			p, perr := s.Store.Project(ctx, user.OrgID, slug)
 			if perr != nil {
 				err = perr
@@ -511,7 +831,7 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			}
 			projectID = &p.ID
 		}
-		if envName := mcpArgStringOr(params, "environment"); envName != "" {
+		if envName := mcpArgStringOr(call.Arguments, "environment"); envName != "" {
 			if projectID == nil {
 				err = fmt.Errorf("environment scope requires project")
 				break
@@ -538,8 +858,8 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			err = fmt.Errorf("requires the admin role")
 			break
 		}
-		name := mcpArgStringOr(params, "runner")
-		draining, dok := mcpArgBool(params, "draining")
+		name := mcpArgStringOr(call.Arguments, "runner")
+		draining, dok := mcpArgBool(call.Arguments, "draining")
 		if name == "" || !dok {
 			err = fmt.Errorf("runner and draining are required")
 			break
@@ -578,7 +898,7 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			err = fmt.Errorf("token requires the %s scope", need)
 			break
 		}
-		id, perr := s.mcpResolveRunID(c, mcpArgStringOr(params, "run_id"))
+		id, perr := s.mcpResolveRunID(c, mcpArgStringOr(call.Arguments, "run_id"))
 		if perr != nil {
 			err = perr
 			break
@@ -610,20 +930,128 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 				out = run
 			}
 		}
+	case "kern_diagnose_run":
+		runID, perr := uuid.Parse(mcpArgStringOr(call.Arguments, "run_id"))
+		if perr != nil {
+			err = fmt.Errorf("run_id must be a UUID")
+			break
+		}
+		out, err = s.mcpDiagnoseRun(ctx, user, runID,
+			mcpArgInt(call.Arguments, "tail", 8192),
+			mcpArgInt(call.Arguments, "max_steps", 5),
+			mcpArgInt(call.Arguments, "max_bytes", 16384))
+	case "kern_search_logs":
+		q := strings.TrimSpace(mcpArgStringOr(call.Arguments, "q"))
+		if q == "" {
+			err = fmt.Errorf("q is required")
+			break
+		}
+		var runID uuid.UUID
+		if v := mcpArgStringOr(call.Arguments, "run"); v != "" {
+			var perr error
+			runID, perr = uuid.Parse(v)
+			if perr != nil {
+				err = fmt.Errorf("run must be a uuid")
+				break
+			}
+		}
+		sctx, cancel := context.WithTimeout(ctx, logSearchDeadline)
+		hits, stepsSeen, scanned, truncated, lerr := s.logSearchHits(sctx, user.OrgID, q,
+			mcpArgStringOr(call.Arguments, "project"), runID,
+			mcpArgInt(call.Arguments, "limit", logSearchDefaultHit))
+		cancel()
+		if lerr != nil {
+			err = lerr
+			break
+		}
+		out = map[string]any{"hits": hits, "steps_scanned": stepsSeen,
+			"bytes_scanned": scanned, "truncated": truncated}
+	case "kern_wait_run":
+		runID, perr := uuid.Parse(mcpArgStringOr(call.Arguments, "run_id"))
+		if perr != nil {
+			err = fmt.Errorf("run_id must be a UUID")
+			break
+		}
+		timeout := mcpArgInt(call.Arguments, "timeout", 120)
+		if timeout <= 0 || timeout > 600 {
+			timeout = 120
+		}
+		out, err = s.mcpWaitRun(ctx, runID, time.Duration(timeout)*time.Second)
+	case "kern_list_artifacts":
+		runID, perr := uuid.Parse(mcpArgStringOr(call.Arguments, "run_id"))
+		if perr != nil {
+			err = fmt.Errorf("run_id must be a UUID")
+			break
+		}
+		out, err = s.Store.Artifacts(ctx, user.OrgID, &runID, 200)
+	case "kern_sync_project":
+		p, perr := s.Store.Project(ctx, user.OrgID, mcpArgStringOr(call.Arguments, "project"))
+		if perr != nil {
+			err = perr
+			break
+		}
+		out, err = s.syncProjectData(ctx, user, p)
+	case "kern_remediate_job":
+		jobID, perr := uuid.Parse(mcpArgStringOr(call.Arguments, "job_id"))
+		step := mcpArgInt(call.Arguments, "step", 0)
+		if perr != nil || step <= 0 {
+			err = fmt.Errorf("job_id must be a UUID and step a positive number")
+			break
+		}
+		var fix []string
+		fix, err = s.Store.ApproveRemediation(ctx, user.OrgID, jobID, step)
+		if err == nil {
+			s.Store.AuditMeta(ctx, user.OrgID, &user.ID, "remediation.approve",
+				fmt.Sprintf("job %s step %d", jobID, step), map[string]any{"fix": fix})
+			out = map[string]any{"ok": true, "requeued": true}
+		}
+	case "kern_approve_deployment":
+		jobID, perr := uuid.Parse(mcpArgStringOr(call.Arguments, "job_id"))
+		if perr != nil {
+			err = fmt.Errorf("job_id must be a UUID")
+			break
+		}
+		var dep store.Deployment
+		var released bool
+		dep, released, err = s.Store.ApproveDeployment(ctx, user.OrgID, jobID, user.ID, user.Email, user.Role)
+		if err == nil {
+			s.Store.Audit(ctx, user.OrgID, &user.ID, "deployment.approve",
+				dep.EnvironmentName+" job "+jobID.String())
+			out = map[string]any{"deployment": dep, "released": released}
+		}
+	case "kern_doctor":
+		out, err = s.mcpDoctor(ctx, user, mcpArgStringOr(call.Arguments, "project"))
+	case "kern_predict_run":
+		out, err = s.mcpPredictRun(ctx, user, mcpArgStringOr(call.Arguments, "project"),
+			mcpArgStringOr(call.Arguments, "workflow"))
+	case "kern_optimize_project":
+		out, err = s.mcpOptimizeProject(ctx, user, mcpArgStringOr(call.Arguments, "project"))
+	case "kern_exec_job":
+		jobID, perr := uuid.Parse(mcpArgStringOr(call.Arguments, "job_id"))
+		command := strings.TrimSpace(mcpArgStringOr(call.Arguments, "command"))
+		if perr != nil || command == "" {
+			err = fmt.Errorf("job_id must be a UUID and command is required")
+			break
+		}
+		out, err = s.mcpExecJob(ctx, user, jobID, command,
+			mcpArgInt(call.Arguments, "timeout", 60),
+			mcpArgInt(call.Arguments, "tail", 8192))
+	case "kern_mint_agent_token":
+		out, err = s.mcpMintAgentToken(c, user, call.Arguments)
 	default:
-		c.JSON(http.StatusOK, rpcErr(req.ID, -32602, "unknown tool "+call.Name))
-		return
+		r := rpcErr(req.ID, -32602, "unknown tool "+call.Name)
+		return &r
 	}
 	if err != nil {
 		msg := err.Error()
-		if strings.Contains(msg, "no rows") {
+		if errors.Is(err, store.ErrNotFound) || strings.Contains(msg, "no rows") {
 			msg = "not found"
 		}
-		c.JSON(http.StatusOK, rpcOK(req.ID, map[string]any{
+		r := rpcOK(req.ID, map[string]any{
 			"isError": true,
 			"content": []map[string]any{{"type": "text", "text": msg}},
-		}))
-		return
+		})
+		return &r
 	}
 	var env map[string]any
 	if m, ok := out.(map[string]any); ok && m["content"] != nil {
@@ -631,32 +1059,120 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 	} else {
 		env, err = mcpJSON(out)
 		if err != nil {
-			c.JSON(http.StatusOK, rpcErr(req.ID, -32603, "encode result"))
-			return
+			r := rpcErr(req.ID, -32603, "encode result")
+			return &r
 		}
 	}
-	c.JSON(http.StatusOK, rpcOK(req.ID, env))
+	r := rpcOK(req.ID, env)
+	return &r
 }
 
-func mcpArgStringOr(params json.RawMessage, key string) string {
-	s, _ := mcpArgString(params, key)
+// mcpToolAllowed confines a project-scoped token to its projects — the same
+// boundary constrainGrant draws on the REST surface. Unscoped tokens pass.
+func (s *Server) mcpToolAllowed(c *gin.Context, name string, args map[string]json.RawMessage) error {
+	granted := tokenProjects(c)
+	if len(granted) == 0 {
+		return nil
+	}
+	ctx := c.Request.Context()
+	runProjectSlug := func(runID uuid.UUID) (string, bool) {
+		run, err := s.Store.Run(ctx, runID)
+		if err != nil {
+			return "", false
+		}
+		p, err := s.Store.ProjectByID(ctx, run.ProjectID)
+		if err != nil {
+			return "", false
+		}
+		return p.Slug, true
+	}
+	runAllowed := func(key string) bool {
+		id, err := uuid.Parse(mcpArgStringOr(args, key))
+		if err != nil {
+			return false
+		}
+		slug, ok := runProjectSlug(id)
+		return ok && grantHas(granted, slug)
+	}
+	projectDenied := fmt.Errorf("project must be one of this token's projects")
+	switch name {
+	case "kern_list_projects":
+		// Result rows are filtered to granted slugs in the handler.
+	case "kern_list_runs", "kern_get_project", "kern_trigger_run", "kern_sync_project",
+		"kern_predict_run", "kern_optimize_project":
+		if !grantHas(granted, mcpArgStringOr(args, "project")) {
+			return projectDenied
+		}
+	case "kern_doctor":
+		// Scoped tokens must scope the report to a granted project.
+		if !grantHas(granted, mcpArgStringOr(args, "project")) {
+			return projectDenied
+		}
+	case "kern_remediate_job", "kern_approve_deployment", "kern_exec_job":
+		jobID, perr := uuid.Parse(mcpArgStringOr(args, "job_id"))
+		if perr != nil {
+			return fmt.Errorf("job_id must be a UUID")
+		}
+		job, jerr := s.Store.Job(ctx, jobID)
+		if jerr != nil {
+			return fmt.Errorf("job is outside this token's projects")
+		}
+		slug, ok := runProjectSlug(job.RunID)
+		if !ok || !grantHas(granted, slug) {
+			return fmt.Errorf("job is outside this token's projects")
+		}
+	case "kern_mint_agent_token":
+		// Narrowing happens in the handler — scoped tokens may only mint
+		// tokens for their own granted projects/labels.
+	case "kern_get_run", "kern_rerun_run", "kern_approve_run", "kern_cancel_run",
+		"kern_diagnose_run", "kern_wait_run", "kern_list_artifacts":
+		if !runAllowed("run_id") {
+			return fmt.Errorf("run is outside this token's projects")
+		}
+	case "kern_search_logs":
+		if run := mcpArgStringOr(args, "run"); run != "" {
+			if !runAllowed("run") {
+				return fmt.Errorf("run is outside this token's projects")
+			}
+		} else if !grantHas(granted, mcpArgStringOr(args, "project")) {
+			return projectDenied
+		}
+	case "kern_step_log":
+		jobID, perr := uuid.Parse(mcpArgStringOr(args, "job_id"))
+		if perr != nil {
+			return fmt.Errorf("job_id must be a UUID")
+		}
+		job, jerr := s.Store.Job(ctx, jobID)
+		if jerr != nil {
+			return fmt.Errorf("job is outside this token's projects")
+		}
+		slug, ok := runProjectSlug(job.RunID)
+		if !ok || !grantHas(granted, slug) {
+			return fmt.Errorf("job is outside this token's projects")
+		}
+	case "kern_list_secrets":
+		if slug := mcpArgStringOr(args, "project"); slug == "" || !grantHas(granted, slug) {
+			return projectDenied
+		}
+	default:
+		return fmt.Errorf("tool %q is not available to project-scoped tokens", name)
+	}
+	return nil
+}
+
+func mcpArgStringOr(args map[string]json.RawMessage, key string) string {
+	s, _ := mcpArgString(args, key)
 	return s
 }
 
 // mcpArgRaw returns the raw JSON value of one tool argument.
-func mcpArgRaw(params json.RawMessage, key string) (json.RawMessage, bool) {
-	var call struct {
-		Arguments map[string]json.RawMessage `json:"arguments"`
-	}
-	if json.Unmarshal(params, &call) != nil || call.Arguments == nil {
-		return nil, false
-	}
-	raw, ok := call.Arguments[key]
+func mcpArgRaw(args map[string]json.RawMessage, key string) (json.RawMessage, bool) {
+	raw, ok := args[key]
 	return raw, ok
 }
 
-func mcpArgBool(params json.RawMessage, key string) (bool, bool) {
-	raw, ok := mcpArgRaw(params, key)
+func mcpArgBool(args map[string]json.RawMessage, key string) (bool, bool) {
+	raw, ok := mcpArgRaw(args, key)
 	if !ok {
 		return false, false
 	}
@@ -697,6 +1213,464 @@ func (s *Server) mcpResolveWorkflow(ctx context.Context, projectID uuid.UUID, wa
 	}
 }
 
+// mcpDiagnoseRun builds the single-call failure bundle kern_diagnose_run
+// returns: run state, jobs with their steps, tails of the failed steps'
+// logs, and the runner map an agent needs to triage in one round trip.
+func (s *Server) mcpDiagnoseRun(ctx context.Context, user store.User, runID uuid.UUID, tail, maxSteps, maxBytes int) (map[string]any, error) {
+	if tail <= 0 || tail > 1<<20 {
+		tail = 8192
+	}
+	if maxSteps <= 0 || maxSteps > 20 {
+		maxSteps = 5
+	}
+	if maxBytes <= 0 || maxBytes > 1<<20 {
+		maxBytes = 16384 // one tool call ≈ one context page
+	}
+	run, err := s.Store.Run(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	jobs, err := s.Store.JobsForRun(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	type stepView struct {
+		store.Step
+		LogTail string `json:"log_tail,omitempty"`
+	}
+	type jobView struct {
+		store.Job
+		Steps      []stepView `json:"steps"`
+		RunnerName string     `json:"runner_name,omitempty"`
+	}
+	runners, _ := s.Store.Runners(ctx, user.OrgID)
+	names := map[uuid.UUID]string{}
+	for _, r := range runners {
+		names[r.ID] = r.Name
+	}
+	views := make([]jobView, 0, len(jobs))
+	tailed, budget := 0, maxBytes
+	for _, j := range jobs {
+		steps, err := s.Store.StepsForJob(ctx, j.ID)
+		if err != nil {
+			return nil, err
+		}
+		sv := make([]stepView, 0, len(steps))
+		for _, st := range steps {
+			v := stepView{Step: st}
+			if tailed < maxSteps && budget > 0 && st.Conclusion == "failure" && st.LogRef != "" {
+				want := tail
+				if want > budget {
+					want = budget
+				}
+				size := st.LogBytes
+				offset := int64(0)
+				if size > int64(want) {
+					offset = size - int64(want)
+				}
+				if data, _, rerr := s.Blobs.ReadFrom(st.LogRef, offset, want); rerr == nil {
+					v.LogTail = string(data)
+					budget -= len(data)
+					tailed++
+				}
+			}
+			sv = append(sv, v)
+		}
+		jv := jobView{Job: j, Steps: sv}
+		if j.RunnerID != nil {
+			jv.RunnerName = names[*j.RunnerID]
+		}
+		views = append(views, jv)
+	}
+	return map[string]any{
+		"verdict":     mcpVerdict(jobs, run.Classification),
+		"run_context": mcpRunContext(run),
+		"run":         run,
+		"jobs":        views,
+	}, nil
+}
+
+// mcpVerdict folds job classifications into the failure bundle's headline:
+// what kind of failure this is, whether a retry is worth anything, and how
+// sure the classification is.
+func mcpVerdict(jobs []store.Job, runClass string) map[string]any {
+	kind := ""
+	failed := 0
+	for _, j := range jobs {
+		if j.Conclusion != "failure" {
+			continue
+		}
+		failed++
+		if kind == "" && j.Classification != "" {
+			kind = j.Classification
+		}
+	}
+	if kind == "" {
+		kind = runClass
+	}
+	if failed == 0 && kind == "" {
+		return map[string]any{"class": "none", "retryable": false, "confidence": "high",
+			"summary": "run did not fail"}
+	}
+	class, retryable := "code", false
+	switch {
+	case transientRetryKinds[kind]:
+		class, retryable = "flake", true
+	case map[string]bool{
+		"ghcr_token": true, "github_token_scope": true, "missing_binary": true,
+		"missing_library": true, "permission_denied": true, "unsupported_action": true,
+		"pnpm_store": true, "stale_lock": true,
+	}[kind]:
+		class = "config"
+	case kind == "script_failure", kind == "prepare", kind == "":
+		class = "code"
+	case kind == "step_timeout", kind == "timeout", kind == "infra":
+		class, retryable = "infra", true
+	}
+	confidence := "low"
+	if kind != "" {
+		confidence = "medium"
+	}
+	for _, j := range jobs {
+		if j.Conclusion == "failure" && j.Classification != "" {
+			confidence = "high"
+			break
+		}
+	}
+	return map[string]any{
+		"class":      class,
+		"retryable":  retryable,
+		"confidence": confidence,
+		"summary":    fmt.Sprintf("%d job(s) failed%s", failed, map[bool]string{true: " — " + kind, false: ""}[kind != ""]),
+	}
+}
+
+// mcpRunContext is the repository slice of the bundle: what to check out to
+// reproduce the failure.
+func mcpRunContext(run store.Run) map[string]any {
+	ctx := map[string]any{
+		"project":    run.ProjectSlug,
+		"workflow":   run.WorkflowName,
+		"ref":        run.Ref,
+		"sha":        run.SHA,
+		"event":      run.Event,
+		"actor":      run.Actor,
+		"run_number": run.RunNumber,
+	}
+	if len(run.Source) > 0 {
+		var srcAny struct {
+			PR json.RawMessage `json:"pr_number"`
+		}
+		if json.Unmarshal(run.Source, &srcAny) == nil && len(srcAny.PR) > 0 {
+			var n int
+			var s string
+			if json.Unmarshal(srcAny.PR, &n) == nil {
+				ctx["pr_number"] = n
+			} else if json.Unmarshal(srcAny.PR, &s) == nil {
+				ctx["pr_number"] = s
+			}
+		}
+	}
+	return ctx
+}
+
+// mcpWaitRun polls until the run reaches a terminal status or the timeout
+// lapses — an agent blocking on a result burns one call instead of polling.
+func (s *Server) mcpWaitRun(ctx context.Context, runID uuid.UUID, timeout time.Duration) (map[string]any, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		run, err := s.Store.Run(ctx, runID)
+		if err != nil {
+			return nil, err
+		}
+		switch run.Status {
+		case "completed", "cancelled":
+			return map[string]any{"run": run, "terminal": true}, nil
+		}
+		if time.Now().After(deadline) {
+			return map[string]any{"run": run, "terminal": false}, nil
+		}
+		select {
+		case <-ctx.Done():
+			return map[string]any{"run": run, "terminal": false, "note": "client disconnected"}, nil
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+// mcpDoctor composes the deployment-health bundle: database reachability,
+// queue depth, runner fleet shape, and recent run stats — the first call an
+// agent makes when something looks wrong.
+func (s *Server) mcpDoctor(ctx context.Context, user store.User, project string) (map[string]any, error) {
+	out := map[string]any{}
+	dbCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	dbErr := s.Store.Pool().Ping(dbCtx)
+	cancel()
+	out["database"] = map[string]any{"reachable": dbErr == nil}
+	if dbErr != nil {
+		out["database"].(map[string]any)["error"] = "database unreachable"
+	}
+	out["uptime_seconds"] = int(time.Since(s.Started).Seconds())
+	out["version"] = version.Version
+
+	ov, err := s.Store.Overview(ctx, user.OrgID)
+	if err != nil {
+		return nil, err
+	}
+	out["queue"] = map[string]any{
+		"jobs_queued":      ov.JobsQueued,
+		"jobs_running":     ov.JobsRunning,
+		"avg_wait_seconds": int(ov.AvgQueueSeconds),
+		"p95_wait_seconds": int(ov.P95QueueSeconds),
+		"runs_active":      ov.RunsActive,
+		"avg_run_seconds":  int(ov.AvgRunSeconds),
+	}
+	runners, err := s.Store.Runners(ctx, user.OrgID)
+	if err != nil {
+		return nil, err
+	}
+	online, draining := 0, 0
+	for _, r := range runners {
+		if r.Status == "online" {
+			online++
+		}
+		if r.Draining {
+			draining++
+		}
+	}
+	out["runners"] = map[string]any{
+		"total": len(runners), "online": online, "draining": draining,
+	}
+	if project != "" {
+		p, err := s.Store.Project(ctx, user.OrgID, project)
+		if err != nil {
+			return nil, err
+		}
+		counts, err := s.Store.RunCounts(ctx, user.OrgID, &p.ID, false)
+		if err != nil {
+			return nil, err
+		}
+		failed, completed := counts["failed"], counts["completed"]
+		rate := 0.0
+		if completed > 0 {
+			rate = float64(failed) / float64(completed)
+		}
+		out["project"] = map[string]any{
+			"slug":           project,
+			"runs_running":   counts["running"],
+			"runs_completed": completed,
+			"runs_failed":    failed,
+			"failure_rate":   rate,
+			"median_seconds": counts["median_seconds"],
+		}
+	}
+	return out, nil
+}
+
+// mcpPredictRun estimates queue wait + duration for the next run on a
+// project. Queue wait scales the measured average by queued-per-runner;
+// duration is the project's median run time. A honest estimate, not a
+// scheduler promise.
+func (s *Server) mcpPredictRun(ctx context.Context, user store.User, project, workflow string) (map[string]any, error) {
+	p, err := s.Store.Project(ctx, user.OrgID, project)
+	if err != nil {
+		return nil, err
+	}
+	counts, err := s.Store.RunCounts(ctx, user.OrgID, &p.ID, false)
+	if err != nil {
+		return nil, err
+	}
+	ov, err := s.Store.Overview(ctx, user.OrgID)
+	if err != nil {
+		return nil, err
+	}
+	runners := ov.RunnersOnline
+	if runners < 1 {
+		runners = 1
+	}
+	// Queued jobs ahead of us share the online fleet; each adds roughly
+	// the average job wait to the expected wait.
+	wait := ov.AvgQueueSeconds * (1.0 + float64(ov.JobsQueued)/float64(runners))
+	dur := counts["median_seconds"]
+	return map[string]any{
+		"project":                project,
+		"workflow":               workflow,
+		"estimated_wait_seconds": int(wait),
+		"estimated_run_seconds":  dur,
+		"jobs_queued":            ov.JobsQueued,
+		"runners_online":         ov.RunnersOnline,
+		"basis":                  "avg queue wait scaled by queued/runners; median project run duration",
+	}, nil
+}
+
+// mcpOptimizeProject turns project stats into concrete tuning suggestions —
+// the same levers a human operator would check, in order.
+func (s *Server) mcpOptimizeProject(ctx context.Context, user store.User, project string) (map[string]any, error) {
+	p, err := s.Store.Project(ctx, user.OrgID, project)
+	if err != nil {
+		return nil, err
+	}
+	counts, err := s.Store.RunCounts(ctx, user.OrgID, &p.ID, false)
+	if err != nil {
+		return nil, err
+	}
+	ov, err := s.Store.Overview(ctx, user.OrgID)
+	if err != nil {
+		return nil, err
+	}
+	var suggestions []map[string]string
+	add := func(area, suggestion string) {
+		suggestions = append(suggestions, map[string]string{"area": area, "suggestion": suggestion})
+	}
+	completed := counts["completed"]
+	failed := counts["failed"]
+	if completed > 10 && float64(failed)/float64(completed) > 0.2 {
+		add("reliability", fmt.Sprintf(
+			"%.0f%% of runs fail — review the failure feed for a dominant classification before adding compute",
+			100*float64(failed)/float64(completed)))
+	}
+	if ov.AvgQueueSeconds > 60 && ov.JobsQueued > ov.RunnersOnline {
+		add("capacity", fmt.Sprintf(
+			"queue wait averages %ds with %d jobs queued against %d online runners — add runners or raise concurrency",
+			int(ov.AvgQueueSeconds), ov.JobsQueued, ov.RunnersOnline))
+	}
+	if med := counts["median_seconds"]; med > 30*60 {
+		add("duration", fmt.Sprintf(
+			"median run is %dm — split long test suites across jobs (`kern split --timings`) and cache dependency dirs",
+			med/60))
+	}
+	if len(suggestions) == 0 {
+		add("general", "no obvious bottleneck — queue wait, failure rate and median duration are all in normal range")
+	}
+	return map[string]any{
+		"project":     project,
+		"stats":       counts,
+		"suggestions": suggestions,
+	}, nil
+}
+
+// mcpMintAgentToken issues a short-lived scoped token for an agent session.
+// The grants mirror the REST createToken rules: a scoped caller can only
+// narrow its own projects/labels, never widen.
+func (s *Server) mcpMintAgentToken(c *gin.Context, user store.User, args map[string]json.RawMessage) (map[string]any, error) {
+	name := strings.TrimSpace(mcpArgStringOr(args, "name"))
+	if name == "" {
+		return nil, fmt.Errorf("name is required")
+	}
+	ttl := mcpArgInt(args, "ttl_minutes", 60)
+	if ttl <= 0 || ttl > 1440 {
+		ttl = 60
+	}
+	scopes := []string{"read"}
+	if w, _ := mcpArgBool(args, "write"); w {
+		scopes = []string{"read", "write"}
+	}
+	var projects, labels []string
+	if raw, ok := mcpArgRaw(args, "projects"); ok {
+		_ = json.Unmarshal(raw, &projects)
+	}
+	if raw, ok := mcpArgRaw(args, "labels"); ok {
+		_ = json.Unmarshal(raw, &labels)
+	}
+	var err error
+	if projects, err = cleanGrantList("project", projects, true); err != nil {
+		return nil, err
+	}
+	if labels, err = cleanGrantList("label", labels, false); err != nil {
+		return nil, err
+	}
+	// A scoped token must not mint a wider one — same check createToken runs.
+	if c.GetString(ctxAuthKind) == "api_token" {
+		if !scopeAllows(c, maxScope(scopes)) {
+			return nil, fmt.Errorf("token cannot mint a broader scope than its own")
+		}
+		if err := narrowList("project", tokenProjects(c), projects); err != nil {
+			return nil, err
+		}
+		if err := narrowList("label", tokenLabels(c), labels); err != nil {
+			return nil, err
+		}
+	}
+	expires := time.Now().Add(time.Duration(ttl) * time.Minute)
+	token, hash, err := auth.NewToken(auth.APIPrefix)
+	if err != nil {
+		return nil, err
+	}
+	rec, err := s.Store.CreateAPIToken(c.Request.Context(), user.ID, name,
+		auth.TokenPrefix(token), hash, scopes, &expires, projects, labels, 0)
+	if err != nil {
+		return nil, err
+	}
+	s.Store.AuditMeta(c.Request.Context(), user.OrgID, &user.ID, "token.create", name,
+		map[string]any{"scopes": scopes, "projects": projects, "labels": labels, "agent": true})
+	return map[string]any{
+		"token":      token,
+		"id":         rec.ID,
+		"prefix":     rec.Prefix,
+		"scopes":     scopes,
+		"projects":   projects,
+		"labels":     labels,
+		"expires_at": expires.UTC().Format(time.RFC3339),
+		"note":       "shown once — store it securely",
+	}, nil
+}
+
+// mcpExecJob runs a command inside a live job's container through the exec
+// subsystem — the same gates the HTTP route enforces (trusted run, docker
+// executor, job in progress) — and returns the finished output tail.
+func (s *Server) mcpExecJob(ctx context.Context, user store.User, jobID uuid.UUID, command string, timeout, tail int) (map[string]any, error) {
+	if timeout <= 0 || timeout > 120 {
+		timeout = 60
+	}
+	if tail <= 0 || tail > 64<<10 {
+		tail = 8192
+	}
+	ex, err := s.createExecSession(ctx, user, jobID, command, false)
+	if err != nil {
+		return nil, err
+	}
+	deadline := time.Now().Add(time.Duration(timeout) * time.Second)
+	for {
+		ex, err = s.Store.Exec(ctx, ex.ID)
+		if err != nil {
+			return nil, err
+		}
+		if ex.State == "done" || ex.State == "failed" || ex.State == "cancelled" {
+			break
+		}
+		if time.Now().After(deadline) {
+			return map[string]any{
+				"exec_id": ex.ID, "state": ex.State,
+				"timed_out": true, "note": "session still running — output may grow",
+			}, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+	key := blobs.ExecOutKey(ex.JobID.String(), ex.ID.String())
+	_, size, err := s.Blobs.ReadFrom(key, 0, 0)
+	out := ""
+	if err == nil && size > 0 {
+		off := size - int64(tail)
+		if off < 0 {
+			off = 0
+		}
+		if data, _, rerr := s.Blobs.ReadFrom(key, off, tail); rerr == nil {
+			out = string(data)
+		}
+	}
+	return map[string]any{
+		"exec_id":   ex.ID,
+		"state":     ex.State,
+		"exit_code": ex.ExitCode,
+		"error":     ex.Error,
+		"output":    out,
+		"log_size":  size,
+	}, nil
+}
 func (s *Server) mcpResolveRunID(c *gin.Context, raw string) (uuid.UUID, error) {
 	exact, prefix, ok := store.ParseIDPrefix(raw)
 	if !ok {

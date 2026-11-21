@@ -152,7 +152,7 @@ func (c *cli) cmdProjects(ctx context.Context, args []string) error {
 
 func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: kern runs list|show|trigger|cancel|approve|rerun|logs|wait")
+		return fmt.Errorf("usage: kern runs list|show|trigger|cancel|approve|rerun|logs|wait|watch")
 	}
 	if err := c.requireAuth(); err != nil {
 		return err
@@ -195,6 +195,8 @@ func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 			return err
 		}
 		return c.showRun(ctx, id)
+	case "watch":
+		return c.runsWatch(ctx, rest)
 	case "wait":
 		opts, pos := parseFlags(rest, "interval", "timeout")
 		id, err := strarg(pos, 0, "run id")

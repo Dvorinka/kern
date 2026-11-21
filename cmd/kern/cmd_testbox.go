@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -21,7 +23,38 @@ import (
 // changes included), and drive the real runner executor against an
 // in-process control-plane shim — no server, no fleet, no push.
 func (c *cli) cmdTestbox(ctx context.Context, args []string) error {
-	opts, pos := parseFlagsEx(args, []string{"privileged"}, "job", "dir", "env-file", "memory", "cpus", "event", "ref")
+	// --var/--secret repeat; parseFlags keeps only the last, so they are
+	// pulled out of args first (#376).
+	var varPairs, secretPairs []string
+	var rest []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--var" || a == "--secret" {
+			if i+1 >= len(args) {
+				return fmt.Errorf("%s requires KEY=VALUE", a)
+			}
+			i++
+			if a == "--var" {
+				varPairs = append(varPairs, args[i])
+			} else {
+				secretPairs = append(secretPairs, args[i])
+			}
+			continue
+		}
+		if strings.HasPrefix(a, "--var=") {
+			varPairs = append(varPairs, strings.TrimPrefix(a, "--var="))
+			continue
+		}
+		if strings.HasPrefix(a, "--secret=") {
+			secretPairs = append(secretPairs, strings.TrimPrefix(a, "--secret="))
+			continue
+		}
+		rest = append(rest, a)
+	}
+	opts, pos := parseFlagsEx(rest,
+		[]string{"keep", "dry-run", "privileged"},
+		"job", "dir", "env-file", "step", "from-step", "matrix",
+		"memory", "cpus", "ref", "event")
 	dir, err := filepath.Abs(first(opts["dir"], "."))
 	if err != nil {
 		return err
@@ -50,9 +83,12 @@ func (c *cli) cmdTestbox(ctx context.Context, args []string) error {
 	if res.Plan == nil || len(res.Plan.Jobs) == 0 {
 		return fmt.Errorf("%s compiled to no jobs", wfPath)
 	}
-	job, err := pickTestboxJob(res.Plan.Jobs, opts["job"])
+	job, err := pickTestboxJob(res.Plan.Jobs, opts["job"], opts["matrix"])
 	if err != nil {
 		return err
+	}
+	if opts["dry-run"] == "true" {
+		return testboxPlan(res, job)
 	}
 	bundle, files, _, err := bundleDir(dir)
 	if err != nil {
@@ -67,22 +103,90 @@ func (c *cli) cmdTestbox(ctx context.Context, args []string) error {
 			return err
 		}
 	}
-	workRoot, err := os.MkdirTemp("", "kern-testbox-")
-	if err != nil {
-		return err
+	vars := map[string]string{}
+	for _, kv := range varPairs {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || k == "" {
+			return fmt.Errorf("--var expects KEY=VALUE, got %q", kv)
+		}
+		vars[k] = v
 	}
-	defer os.RemoveAll(workRoot)
+	for _, kv := range secretPairs {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || k == "" {
+			return fmt.Errorf("--secret expects KEY=VALUE, got %q", kv)
+		}
+		secrets[k] = v
+	}
+	// --keep pins a stable work root so the toolchain caches under _cache
+	// (gomodcache, pnpm, cargo…) survive between iterations — the warm loop
+	// that makes testbox sub-second on dependency-heavy steps (#376).
+	var workRoot string
+	if opts["keep"] == "true" {
+		h := sha256.Sum256([]byte(dir + "|" + job.Key))
+		home, _ := os.UserHomeDir()
+		workRoot = filepath.Join(home, ".cache", "kern", "testbox",
+			hex.EncodeToString(h[:6]))
+		if err := os.MkdirAll(workRoot, 0o755); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "testbox: keeping work root %s (toolchain caches persist)\n", workRoot)
+	} else {
+		workRoot, err = os.MkdirTemp("", "kern-testbox-")
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(workRoot)
+	}
 	artifactsDir := filepath.Join(dir, ".kern-testbox", "artifacts")
 
 	claim := testboxClaim(res, job, dir, opts)
+	// Step-range selection: --step runs only step N; --from-step skips the
+	// prefix (a fresh workspace, so setup steps may still be needed — pair
+	// with --keep when iterating) (#376).
+	if n := atoi(opts["step"]); n > 0 {
+		var one []runner.StepSpec
+		for _, s := range claim.Steps {
+			if s.Number == n {
+				one = append(one, s)
+			}
+		}
+		if len(one) == 0 {
+			return fmt.Errorf("job has no step %d", n)
+		}
+		claim.Steps = one
+	} else if n := atoi(opts["from-step"]); n > 0 {
+		var tail []runner.StepSpec
+		for _, s := range claim.Steps {
+			if s.Number >= n {
+				tail = append(tail, s)
+			}
+		}
+		if len(tail) == 0 {
+			return fmt.Errorf("job has no step >= %d", n)
+		}
+		claim.Steps = tail
+	}
+	if opts["ref"] != "" {
+		claim.Run.Ref = opts["ref"]
+	}
+	if opts["event"] != "" {
+		claim.Run.Event = opts["event"]
+	}
+	if claim.Job.Env == nil {
+		claim.Job.Env = map[string]string{}
+	}
+	if opts["memory"] != "" {
+		claim.Job.Env["KERN_JOB_MEMORY"] = opts["memory"]
+	}
+	if opts["cpus"] != "" {
+		claim.Job.Env["KERN_JOB_CPUS"] = opts["cpus"]
+	}
 	logger, _ := zap.NewDevelopment()
 	status, err := runner.RunLocalJob(ctx, runner.Config{
-		WorkRoot:  workRoot,
-		Executor:  "docker",
-		JobMemory: opts["memory"],
-		JobCPUs:   opts["cpus"],
-		Local:     true,
-	}, claim, secrets, map[string]string{}, logger, os.Stdout, artifactsDir, bundle)
+		WorkRoot: workRoot,
+		Executor: "docker",
+	}, claim, secrets, vars, logger, os.Stdout, artifactsDir, bundle)
 	if err != nil {
 		return err
 	}
@@ -124,7 +228,19 @@ func testboxWorkflow(dir, arg string) (string, error) {
 	}
 }
 
-func pickTestboxJob(jobs []workflows.JobPlan, key string) (workflows.JobPlan, error) {
+func pickTestboxJob(jobs []workflows.JobPlan, key, matrix string) (workflows.JobPlan, error) {
+	if matrix != "" {
+		var filtered []workflows.JobPlan
+		for _, j := range jobs {
+			if matrixMatch(j.Matrix, matrix) {
+				filtered = append(filtered, j)
+			}
+		}
+		if len(filtered) == 0 {
+			return workflows.JobPlan{}, fmt.Errorf("no matrix combo matches %q", matrix)
+		}
+		jobs = filtered
+	}
 	if key != "" {
 		for _, j := range jobs {
 			if j.Key == key || j.Name == key {
@@ -141,6 +257,56 @@ func pickTestboxJob(jobs []workflows.JobPlan, key string) (workflows.JobPlan, er
 		keys[i] = j.Key
 	}
 	return workflows.JobPlan{}, fmt.Errorf("plan has %d jobs — pass --job <%s>", len(jobs), strings.Join(keys, "|"))
+}
+
+// matrixMatch checks a job's expanded matrix against --matrix k=v[,k2=v2].
+func matrixMatch(m map[string]any, sel string) bool {
+	for _, kv := range strings.Split(sel, ",") {
+		k, v, ok := strings.Cut(strings.TrimSpace(kv), "=")
+		if !ok || k == "" {
+			continue
+		}
+		got, exists := m[k]
+		if !exists || fmt.Sprint(got) != v {
+			return false
+		}
+	}
+	return true
+}
+
+// testboxPlan renders the compiled job for --dry-run: DAG position,
+// services, and the step list — no containers, no bundle (#376).
+func testboxPlan(res workflows.Result, job workflows.JobPlan) error {
+	fmt.Printf("workflow: %s\n", res.Name)
+	fmt.Printf("job:      %s (%s)\n", job.Name, job.Key)
+	if len(job.Needs) > 0 {
+		fmt.Printf("needs:    %s\n", strings.Join(job.Needs, ", "))
+	}
+	fmt.Printf("image:    %s\n", first(job.Image, "(default)"))
+	if len(job.Matrix) > 0 {
+		fmt.Printf("matrix:   %v\n", job.Matrix)
+	}
+	if len(job.RunsOn) > 0 {
+		fmt.Printf("runs-on:  %s\n", strings.Join(job.RunsOn, ", "))
+	}
+	for _, svc := range job.Services {
+		fmt.Printf("service:  %s  ports:%v\n", svc.Image, svc.Ports)
+	}
+	fmt.Println("steps:")
+	for i, s := range job.Steps {
+		name := s.Name
+		if name == "" {
+			name = s.Uses
+		}
+		if name == "" {
+			name = s.Run
+			if len(name) > 60 {
+				name = name[:60] + "…"
+			}
+		}
+		fmt.Printf("  %2d. %s\n", i+1, name)
+	}
+	return nil
 }
 
 // testboxClaim turns a compiled JobPlan into a runner claim. The bundle ref

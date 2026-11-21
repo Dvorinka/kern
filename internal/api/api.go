@@ -259,6 +259,7 @@ func (s *Server) buildRouter() *gin.Engine {
 		admin.POST("/runs/:id/approve", s.approveRun)
 		write.POST("/runs/:id/rerun", s.rerunRun)
 		write.POST("/runs/clear-cancelled", s.clearCancelledRuns)
+		auth.GET("/runs/:id/stream", s.runStream)
 		auth.GET("/runs/:id/diagnose", s.runDiagnose)
 		auth.GET("/steps/:stepID/logs", s.stepLogs)
 		auth.GET("/steps/:stepID/logs/stream", s.stepLogStream)
@@ -304,6 +305,10 @@ func (s *Server) buildRouter() *gin.Engine {
 		auth.GET("/geo/reverse", s.geoReverse)
 		auth.GET("/metrics", s.prometheus)
 		auth.POST("/mcp", s.mcp)
+		// Streamable-HTTP mounts: GET would open SSE (stateless server — 405),
+		// DELETE tears down a session that is never minted.
+		auth.GET("/mcp", s.mcpMethodNotAllowed)
+		auth.DELETE("/mcp", s.mcpMethodNotAllowed)
 		auth.GET("/projects/:project/settings", s.getProjectSettings)
 		admin.PUT("/projects/:project/settings", s.putProjectSettings)
 		auth.GET("/projects/:project/icon", s.projectIcon)
@@ -434,7 +439,8 @@ func (s *Server) cors() gin.HandlerFunc {
 			c.Header("Access-Control-Allow-Origin", origin)
 			c.Header("Access-Control-Allow-Credentials", "true")
 			c.Header("Vary", "Origin")
-			c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
+			c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Mcp-Session-Id, MCP-Protocol-Version")
+			c.Header("Access-Control-Expose-Headers", "Mcp-Session-Id")
 			c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		}
 		if c.Request.Method == http.MethodOptions {
@@ -449,6 +455,27 @@ type apiError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	Detail  string `json:"detail,omitempty"`
+}
+
+// statusError carries an HTTP status through ctx-based helpers shared by
+// HTTP handlers and MCP tools — the tool gets the message, the handler
+// gets the code back.
+type statusError struct {
+	status int
+	code   string
+	msg    string
+}
+
+func (e *statusError) Error() string { return e.msg }
+
+// writeErr maps a statusError back onto the wire; anything else is a 500.
+func (s *Server) writeErr(c *gin.Context, err error) {
+	var se *statusError
+	if errors.As(err, &se) {
+		fail(c, se.status, se.code, se.msg)
+		return
+	}
+	s.internalError(c, err)
 }
 
 func fail(c *gin.Context, status int, code, message string) {
