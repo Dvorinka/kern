@@ -75,4 +75,20 @@ func TestExecRequestLifecycle(t *testing.T) {
 	if dead.State != "failed" || dead.Error != "job finished" {
 		t.Fatalf("swept state = %q err=%q", dead.State, dead.Error)
 	}
+
+	// Client cancel transitions a running session to cancelled and closes stdin.
+	ex3, err := s.CreateExec(ctx, job.ID, "sleep 60", false, nil)
+	if err != nil {
+		t.Fatalf("create3: %v", err)
+	}
+	if _, err := s.StartExec(ctx, ex3.ID, r1.ID); err != nil {
+		t.Fatalf("start3: %v", err)
+	}
+	if err := s.CancelExec(ctx, ex3.ID); err != nil {
+		t.Fatalf("cancel3: %v", err)
+	}
+	cancelled, _ := s.Exec(ctx, ex3.ID)
+	if cancelled.State != "cancelled" || !cancelled.StdinClosed {
+		t.Fatalf("cancelled state = %q stdin_closed=%v", cancelled.State, cancelled.StdinClosed)
+	}
 }

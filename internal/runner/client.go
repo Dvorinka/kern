@@ -344,20 +344,21 @@ func (c *client) execOutput(ctx context.Context, execID string, data []byte) err
 	return c.do(ctx, http.MethodPost, "/api/v1/runners/exec/"+url.PathEscape(execID)+"/output", data, nil)
 }
 
-// execStdin returns stdin bytes after offset, the total size, and whether
-// the client closed the pipe.
-func (c *client) execStdin(ctx context.Context, execID string, after int64) ([]byte, int64, bool, error) {
+// execStdin returns stdin bytes after offset, the total size, whether
+// the client closed the pipe, and whether the session was cancelled.
+func (c *client) execStdin(ctx context.Context, execID string, after int64) ([]byte, int64, bool, bool, error) {
 	var out struct {
-		Data   string `json:"data"`
-		Size   int64  `json:"size"`
-		Closed bool   `json:"closed"`
+		Data      string `json:"data"`
+		Size      int64  `json:"size"`
+		Closed    bool   `json:"closed"`
+		Cancelled bool   `json:"cancelled"`
 	}
 	path := fmt.Sprintf("/api/v1/runners/exec/%s/stdin?after=%d", url.PathEscape(execID), after)
 	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
-		return nil, 0, false, err
+		return nil, 0, false, false, err
 	}
 	data, err := base64.StdEncoding.DecodeString(out.Data)
-	return data, out.Size, out.Closed, err
+	return data, out.Size, out.Closed, out.Cancelled, err
 }
 
 func (c *client) execFinish(ctx context.Context, execID string, exitCode *int, errText string) error {
