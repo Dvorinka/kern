@@ -142,7 +142,14 @@ export function RunsPage() {
 						{TABS.map((t) => (
 							<button
 								key={t.key || "all"}
-								onClick={() => setParams(t.key ? { tab: t.key } : {})}
+								onClick={() =>
+									setParams((p) => {
+										const n = new URLSearchParams(p);
+										if (t.key) n.set("tab", t.key);
+										else n.delete("tab");
+										return n;
+									})
+								}
 								className={cn(tab === t.key && "on")}
 							>
 								{t.label}
@@ -328,9 +335,6 @@ export function RunsPage() {
 							<span className="k">Stored</span>
 							<span className="v">{bytes(overview?.cache.bytes)}</span>
 						</div>
-						<div className="meter" style={{ margin: "10px 0 4px" }}>
-							<i style={{ width: "100%" }} />
-						</div>
 						<div className="kv" style={{ padding: "8px 0" }}>
 							<span className="k">Runs total</span>
 							<span className="v">{overview?.overview.runs_total ?? 0}</span>
@@ -402,10 +406,15 @@ function RunRow({
 			<StatusSq status={r.status} conclusion={r.conclusion} />
 			<div className="min-w-0">
 				<div className="truncate text-[13px] font-medium text-[var(--ink)]">
-					<span className="mr-2 font-mono font-normal text-[var(--faint)]">
-						#{r.run_number}
-					</span>
-					{r.commit_message?.split("\n")[0] || r.workflow_name}
+					{/* The row's primary target is a real anchor — keyboard focus
+					    and open-in-new-tab work; the row click is progressive
+					    enhancement on top of it. */}
+					<Link to={`/runs/${r.id}`} className="text-inherit no-underline">
+						<span className="mr-2 font-mono font-normal text-[var(--faint)]">
+							#{r.run_number}
+						</span>
+						{r.commit_message?.split("\n")[0] || r.workflow_name}
+					</Link>
 				</div>
 				<div className="mt-[3px] truncate font-mono text-[11px] text-[var(--faint)]">
 					<Link

@@ -85,6 +85,34 @@ export function RunGantt({
 	const elapsed = now - t0;
 	const flagHide = totalMs * 0.085;
 
+	// Critical path: the longest `needs` chain measured by queue-to-finish
+	// span. Highlighting it shows which jobs actually bound the run time.
+	const depIdx = (k: string) =>
+		laneData.findIndex((x) => !x.skipped && (x.j.job_key === k || x.j.name === k || x.j.key === k));
+	const memo = new Map<number, { t: number; path: number[] }>();
+	const chain = (i: number): { t: number; path: number[] } => {
+		const hit = memo.get(i);
+		if (hit) return hit;
+		memo.set(i, { t: 0, path: [] }); // guard cycles
+		const l = laneData[i]!;
+		let best = { t: 0, path: [] as number[] };
+		for (const k of l.j.needs ?? []) {
+			const d = depIdx(k);
+			if (d < 0 || d === i) continue;
+			const c = chain(d);
+			if (c.t > best.t) best = c;
+		}
+		const r = { t: best.t + ((l.en ?? now) - l.qs), path: [...best.path, i] };
+		memo.set(i, r);
+		return r;
+	};
+	let crit = new Set<number>();
+	if (laneData.length > 0) {
+		let bi = 0;
+		for (let i = 1; i < laneData.length; i++) if (chain(i).t > chain(bi).t) bi = i;
+		crit = new Set(chain(bi).path);
+	}
+
 	const laneSub = ({ j, waiting, skipped, cancelled }: Lane): string => {
 		if (skipped) return "did not run";
 		if (cancelled) return "cancelled";
@@ -206,7 +234,7 @@ export function RunGantt({
 									);
 								})}
 							</svg>
-							{laneData.map((l) => (
+							{laneData.map((l, li) => (
 								<div className="lane" style={{ height: LH }} key={l.j.id}>
 									{l.skipped ? null : l.cancelled ? (
 										<i
@@ -223,8 +251,19 @@ export function RunGantt({
 										/>
 									) : (
 										<>
+											{/* queue-wait segment: queued_at → started_at */}
+											{l.st - l.qs > 1500 && (
+												<i
+													className="bar q wait"
+													style={{
+														left: `${pct(l.qs)}%`,
+														width: `${Math.max(0.6, pct(l.st) - pct(l.qs))}%`,
+													}}
+													title={`${l.j.name} · queued ${mmss(l.st - l.qs)}`}
+												/>
+											)}
 											<i
-												className={`bar pat-${jobHue(l.j.job_key || l.j.name)}${l.running ? " run" : ""}${l.failed ? " fail" : ""}`}
+												className={`bar pat-${jobHue(l.j.job_key || l.j.name)}${l.running ? " run" : ""}${l.failed ? " fail" : ""}${crit.has(li) ? " crit" : ""}`}
 												style={
 													{
 														left: `${pct(l.st)}%`,

@@ -530,6 +530,41 @@ paths:
                 type: object
                 properties:
                   runs: { type: array, items: { $ref: "#/components/schemas/Run" } }
+  /runs/jobs:
+    get:
+      tags: [runs]
+      summary: Jobs for many runs in one request (batch detail)
+      parameters:
+        - { name: ids, in: query, required: true, schema: { type: string, description: "comma-separated run ids" } }
+      responses:
+        "200": { description: Jobs grouped by run }
+  /runs/{id}/stream:
+    get:
+      tags: [runs]
+      summary: Multiplexed run SSE (job/step transitions + interleaved log chunks)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: follow, in: query, schema: { type: string, description: "0 snapshots once and closes" } }
+      responses:
+        "200": { description: text/event-stream }
+  /runs/{id}/diagnose:
+    get:
+      tags: [runs]
+      summary: Single-call diagnosis bundle (run, jobs+steps, failed-step log tails, runner map)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: tail, in: query, schema: { type: integer, description: "per-step log tail bytes (bounded)" } }
+      responses:
+        "200": { description: Diagnosis bundle }
+  /geo/reverse:
+    get:
+      tags: [instance]
+      summary: Server-proxied reverse geocode for runner map pins
+      parameters:
+        - { name: lat, in: query, required: true, schema: { type: number } }
+        - { name: lon, in: query, required: true, schema: { type: number } }
+      responses:
+        "200": { description: Place label }
   /runs/{id}:
     get:
       tags: [runs]

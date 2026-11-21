@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
@@ -17,6 +17,7 @@ import { bytes, catColor, duration, projectColor, refName, relTime, shortSha } f
 export function RunDetailPage() {
 	const { id } = useParams<{ id: string }>();
 		const qc = useQueryClient();
+	const nav = useNavigate();
 	const { data, isLoading } = useQuery({
 		queryKey: ["run", id],
 		queryFn: () => api.get<RunDetail>(`/runs/${id}`),
@@ -39,7 +40,15 @@ export function RunDetailPage() {
 		onSuccess: () => qc.invalidateQueries({ queryKey: ["run", id] }),
 	});
 	const rerun = useMutation({
-		mutationFn: () => api.post(`/runs/${id}/rerun`),
+		mutationFn: (body?: { failed?: boolean }) =>
+			api.post<{ run: { id: string } }>(`/runs/${id}/rerun`, body),
+		onSuccess: (res, body) => {
+			qc.invalidateQueries({ queryKey: ["run", id] });
+			qc.invalidateQueries({ queryKey: ["runs"] });
+			// A fresh run navigates to it; an in-place failed-jobs rerun
+			// stays on this run.
+			if (!body?.failed && res.run?.id && res.run.id !== id) nav(`/runs/${res.run.id}`);
+		},
 	});
 	const approve = useMutation({
 		mutationFn: () => api.post(`/runs/${id}/approve`),
@@ -48,25 +57,79 @@ export function RunDetailPage() {
 
 	const [jobId, setJobId] = useState<string | null>(null);
 	const [stepN, setStepN] = useState<number | null>(null);
-	// ?job=<key|id> deep links — trace lanes and queue rows land on a
-	// specific job's log.
-	const [params] = useSearchParams();
+	const [bundleCopied, setBundleCopied] = useState(false);
+	// ?job=<key|id>&step=<n> deep links — trace lanes and queue rows land on
+	// a specific job's log; picking a job/step writes the URL back so the
+	// selection is shareable and survives reload.
+	const [params, setParams] = useSearchParams();
 	const wantJob = params.get("job");
+	const wantStep = params.get("step");
 	useEffect(() => {
-		if (!wantJob || !data) return;
-		const j = data.jobs.find((j) => j.job_key === wantJob || j.id === wantJob || j.name === wantJob);
-		if (j) setJobId(j.id);
-	}, [wantJob, data]);
+		if (!data) return;
+		if (wantJob) {
+			const j = data.jobs.find(
+				(j) => j.job_key === wantJob || j.id === wantJob || j.name === wantJob,
+			);
+			if (j) setJobId(j.id);
+		}
+		if (wantStep) setStepN(Number(wantStep) || null);
+	}, [wantJob, wantStep, data]);
+	const syncParams = (jid: string | null, n: number | null) =>
+		setParams(
+			(prev) => {
+				const p = new URLSearchParams(prev);
+				if (jid) p.set("job", jid); else p.delete("job");
+				if (n != null) p.set("step", String(n)); else p.delete("step");
+				return p;
+			},
+			{ replace: true },
+		);
+	const pickJob = (jid: string) => {
+		setJobId(jid);
+		setStepN(null);
+		syncParams(jid, null);
+	};
+	const pickStep = (n: number | null) => {
+		setStepN(n);
+		const js = data?.jobs ?? [];
+		const j =
+			js.find((j) => j.id === jobId) ??
+			js.find((j) => j.status === "in_progress") ??
+			js.find((j) => j.conclusion === "failure") ??
+			js[0];
+		syncParams(j?.id ?? null, n);
+	};
 
 	const runnerNames = new Map((runners?.runners ?? []).map((r) => [r.id, r.name]));
 
+	// duration() resolves "now" itself — a 1s tick while live turns the
+	// header clock into a real elapsed timer.
+	const live =
+		data?.run.status === "in_progress" ||
+		data?.run.status === "queued" ||
+		data?.run.status === "awaiting_approval";
+	const [tick, setTick] = useState(0);
+	useEffect(() => {
+		if (!live) return;
+		const t = setInterval(() => setTick((n) => n + 1), 1000);
+		return () => clearInterval(t);
+	}, [live]);
+	void tick;
+	const copyBundle = async () => {
+		const d = await api.get(`/runs/${id}/diagnose`);
+		await navigator.clipboard.writeText(JSON.stringify(d, null, 2));
+		setBundleCopied(true);
+		setTimeout(() => setBundleCopied(false), 2000);
+	};
+
 	if (isLoading || !data) return <Spinner />;
 	const { run, jobs } = data;
-	const live =
-		run.status === "in_progress" || run.status === "queued" || run.status === "awaiting_approval";
 	const title = run.commit_message?.split("\n")[0] || `${run.workflow_name} #${run.run_number}`;
 	const job =
-		jobs.find((j) => j.id === jobId) ?? jobs.find((j) => j.status === "in_progress") ?? jobs[0];
+		jobs.find((j) => j.id === jobId) ??
+		jobs.find((j) => j.status === "in_progress") ??
+		jobs.find((j) => j.conclusion === "failure") ??
+		jobs[0];
 
 	return (
 		<div className="page">
@@ -124,12 +187,29 @@ export function RunDetailPage() {
 								Cancel
 							</button>
 						)}
+						{jobs.some((j) => j.conclusion === "failure") && (
+							<button className="pill" onClick={() => rerun.mutate({ failed: true })} disabled={rerun.isPending}>
+								Re-run failed
+							</button>
+						)}
 						<button className="pill solid" onClick={() => rerun.mutate()} disabled={rerun.isPending}>
 							Re-run
+						</button>
+						<button
+							className="pill"
+							title="Copy the run, failed-step log tails, and runner context as JSON for an AI diagnosis"
+							onClick={() => void copyBundle()}
+						>
+							{bundleCopied ? "Copied" : "Copy diagnosis"}
 						</button>
 					</span>
 				</span>
 			</div>
+			{(rerun.error || cancel.error) && (
+				<div className="text-xs text-[var(--err)]">
+					{(rerun.error ?? cancel.error)?.message}
+				</div>
+			)}
 			<dl className="rkv">
 				<div>
 					<dt>Trigger</dt>
@@ -169,19 +249,16 @@ export function RunDetailPage() {
 				run={run}
 				jobs={jobs}
 				runners={runnerNames}
-				onPickJob={(jid) => {
-					setJobId(jid);
-					setStepN(null);
-				}}
+				onPickJob={pickJob}
 			/>
 			{job && (
 				<StepsPanel
 					jobs={jobs}
 					job={job}
 					runners={runnerNames}
-					onPickJob={setJobId}
+					onPickJob={pickJob}
 					stepN={stepN}
-					onPickStep={setStepN}
+					onPickStep={pickStep}
 					live={live}
 				/>
 			)}
@@ -211,6 +288,7 @@ function StepsPanel({
 	const sel =
 		steps.find((s) => s.number === stepN) ??
 		steps.find((s) => s.status === "running") ??
+		steps.find((s) => s.conclusion === "failure") ??
 		steps[steps.length - 1];
 	return (
 		<div className="tsec gap">

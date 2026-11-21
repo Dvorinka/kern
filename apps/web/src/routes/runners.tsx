@@ -40,7 +40,8 @@ export function RunnersPage() {
 		onSuccess: () => qc.invalidateQueries({ queryKey: ["runners"] }),
 	});
 	const drain = useMutation({
-		mutationFn: (id: string) => api.post(`/runners/${id}/drain`, { draining: true }),
+		mutationFn: (v: { id: string; draining: boolean }) =>
+			api.post(`/runners/${v.id}/drain`, { draining: v.draining }),
 		onSuccess: () => qc.invalidateQueries({ queryKey: ["runners"] }),
 	});
 	const remove = useMutation({
@@ -48,6 +49,31 @@ export function RunnersPage() {
 		onSuccess: () => qc.invalidateQueries({ queryKey: ["runners"] }),
 	});
 	const [staleDismissed, setStaleDismissed] = useState(false);
+	const [confirmDel, setConfirmDel] = useState<string | null>(null);
+	// Bulk selection — drain/undrain/delete the checked runners with the
+	// same per-runner mutations, fanned out in parallel.
+	const [sel, setSel] = useState<Set<string>>(new Set());
+	const toggleSel = (id: string) =>
+		setSel((s) => {
+			const n = new Set(s);
+			if (n.has(id)) n.delete(id); else n.add(id);
+			return n;
+		});
+	const bulk = useMutation({
+		mutationFn: async (v: { ids: string[]; op: "drain" | "undrain" | "delete" }) => {
+			await Promise.all(
+				v.ids.map((id) =>
+					v.op === "delete"
+						? api.del(`/runners/${id}`)
+						: api.post(`/runners/${id}/drain`, { draining: v.op === "drain" }),
+				),
+			);
+		},
+		onSuccess: () => {
+			setSel(new Set());
+			qc.invalidateQueries({ queryKey: ["runners"] });
+		},
+	});
 
 	// Offline runners whose last heartbeat is older than a week are almost
 	// certainly decommissioned leftovers (replaced VMs, retired agents).
@@ -92,10 +118,13 @@ export function RunnersPage() {
 							className="pill"
 							title={`last seen ${relTime(r.last_heartbeat_at)}`}
 							onClick={() => {
-								if (confirm(`Delete runner ${r.name}?`)) remove.mutate(r.id);
+								if (confirmDel === r.id) {
+									remove.mutate(r.id);
+									setConfirmDel(null);
+								} else setConfirmDel(r.id);
 							}}
 						>
-							<Trash2 size={11} /> {r.name}
+							<Trash2 size={11} /> {confirmDel === r.id ? "confirm?" : r.name}
 						</button>
 					))}
 					<Button size="sm" variant="ghost" className="ml-auto" onClick={() => setStaleDismissed(true)}>
@@ -134,7 +163,30 @@ export function RunnersPage() {
 							}
 						/>
 					) : (
-						data.runners.map((r) => {
+						<>
+						{sel.size > 0 && (
+							<div className="frow" style={{ padding: "6px 12px" }}>
+								<span className="fn">{sel.size} selected</span>
+								<span className="ml-auto flex gap-1">
+									<Button size="sm" variant="ghost" disabled={bulk.isPending}
+										onClick={() => bulk.mutate({ ids: [...sel], op: "drain" })}>
+										Drain
+									</Button>
+									<Button size="sm" variant="ghost" disabled={bulk.isPending}
+										onClick={() => bulk.mutate({ ids: [...sel], op: "undrain" })}>
+										Undrain
+									</Button>
+									<Button size="sm" variant="ghost" disabled={bulk.isPending}
+										onClick={() => bulk.mutate({ ids: [...sel], op: "delete" })}>
+										Delete
+									</Button>
+									<Button size="sm" variant="ghost" onClick={() => setSel(new Set())}>
+										Clear
+									</Button>
+								</span>
+							</div>
+						)}
+						{data.runners.map((r) => {
 							const busy = (r.active_jobs ?? 0) > 0;
 							const cpu = r.cpu_percent != null ? Math.round(r.cpu_percent) : null;
 							const mem =
@@ -147,6 +199,13 @@ export function RunnersPage() {
 									: null;
 							return (
 								<div key={r.id} className="frow">
+									<input
+										type="checkbox"
+										aria-label={`Select ${r.name}`}
+										checked={sel.has(r.id)}
+										onChange={() => toggleSel(r.id)}
+										style={{ marginRight: 10 }}
+									/>
 									<div className="fn">
 										<b>
 											{r.icon && (
@@ -166,9 +225,12 @@ export function RunnersPage() {
 										</small>
 									</div>
 									<div className={`slots ${r.status === "offline" ? "off" : ""}`}>
-										{Array.from({ length: Math.min(8, Math.max(4, r.cpus)) }, (_, i) => (
-											<i key={i} className={busy && i < (r.active_jobs ?? 0) ? "j jr" : busy ? "j" : ""} />
-										))}
+										{Array.from(
+											{ length: Math.min(8, Math.max(4, r.cpus ?? 4, r.active_jobs ?? 0)) },
+											(_, i) => (
+												<i key={i} className={i < (r.active_jobs ?? 0) ? "j jr" : ""} />
+											),
+										)}
 									</div>
 									<div className="ld">
 										<div className="meter">
@@ -256,9 +318,9 @@ export function RunnersPage() {
 											</button>
 											<button
 												className="pill"
-												title="Drain (finish current work, take no new jobs)"
-												disabled={r.draining || drain.isPending}
-												onClick={() => drain.mutate(r.id)}
+												title={r.draining ? "Undrain (resume taking new jobs)" : "Drain (finish current work, take no new jobs)"}
+												disabled={drain.isPending}
+												onClick={() => drain.mutate({ id: r.id, draining: !r.draining })}
 											>
 												<Pause size={12} />
 											</button>
@@ -267,10 +329,13 @@ export function RunnersPage() {
 												title="Delete runner"
 												disabled={remove.isPending}
 												onClick={() => {
-													if (confirm(`Delete runner ${r.name}?`)) remove.mutate(r.id);
+													if (confirmDel === r.id) {
+														remove.mutate(r.id);
+														setConfirmDel(null);
+													} else setConfirmDel(r.id);
 												}}
 											>
-												<Trash2 size={12} />
+												{confirmDel === r.id ? "confirm?" : <Trash2 size={12} />}
 											</button>
 										</span>
 									</div>
@@ -283,7 +348,8 @@ export function RunnersPage() {
 									)}
 								</div>
 							);
-						})
+						})}
+						</>
 					)}
 				</div>
 			)}
@@ -350,7 +416,7 @@ function EnrollCard({ onDone }: { onDone: () => void }) {
 		.filter(Boolean)
 		.join(" ");
 	const dockerCmd = minted
-		? `docker run -d --name kern-runner --restart always -e KERN_CONTROL_URL=${window.location.origin} -e KERN_RUNNER_JOIN_TOKEN=${minted.token} ${minted.autoUpdate ? "-e KERN_RUNNER_UPDATE=1 " : ""}-e KERN_RUNNER_CONCURRENCY=1 -e KERN_WORK_ROOT=/opt/kern/work -e HOME=/root ${envFlags} -v /var/run/docker.sock:/var/run/docker.sock -v /opt/kern/work:/opt/kern/work kern-runner:local`
+		? `docker run -d --name kern-runner --restart always -e KERN_CONTROL_URL=${window.location.origin} -e KERN_RUNNER_JOIN_TOKEN=${minted.token} ${minted.autoUpdate ? "-e KERN_RUNNER_UPDATE=1 " : ""}-e KERN_WORK_ROOT=/opt/kern/work -e HOME=/root ${envFlags} -v /var/run/docker.sock:/var/run/docker.sock -v /opt/kern/work:/opt/kern/work ghcr.io/dvorinka/kern-runner`
 		: "";
 
 	return (
@@ -433,19 +499,23 @@ function EnvEditor({ runner, onDone }: { runner: Runner; onDone: () => void }) {
 			onDone();
 		},
 	});
+	const [formErr, setFormErr] = useState("");
 	const submit = (e: FormEvent<HTMLFormElement>) => {
 		e.preventDefault();
 		const env: Record<string, string> = {};
+		let n = 0;
 		for (const line of draft.split("\n")) {
+			n++;
 			const t = line.trim();
 			if (!t || t.startsWith("#")) continue;
 			const eq = t.indexOf("=");
 			if (eq <= 0) {
-				save.reset();
+				setFormErr(`line ${n}: expected KEY=value`);
 				return;
 			}
 			env[t.slice(0, eq).trim()] = t.slice(eq + 1);
 		}
+		setFormErr("");
 		save.mutate(env);
 	};
 	return (
@@ -465,6 +535,7 @@ function EnvEditor({ runner, onDone }: { runner: Runner; onDone: () => void }) {
 					<Button type="button" variant="ghost" size="sm" onClick={onDone}>
 						Cancel
 					</Button>
+					{formErr && <span className="text-xs text-[var(--err)]">{formErr}</span>}
 					{save.error && <span className="text-xs text-[var(--err)]">{save.error.message}</span>}
 				</div>
 			</form>
@@ -494,8 +565,8 @@ function GeoEditor({ runner, onDone }: { runner: Runner; onDone: () => void }) {
 			void (async () => {
 				try {
 					const r = await fetch(
-						`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=10&lat=${la}&lon=${ln}`,
-						{ headers: { Accept: "application/json" } },
+						`/api/v1/geo/reverse?lat=${la}&lon=${ln}`,
+						{ credentials: "same-origin" },
 					);
 					if (!r.ok) return;
 					const j = (await r.json()) as { address?: Record<string, string> };

@@ -1,4 +1,5 @@
-import { useQueries } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { api } from "../lib/api";
 import type { Job, Run, RunDetail } from "../lib/types";
 import { cn } from "./ui";
@@ -145,19 +146,24 @@ export function Fingerprint({
 	);
 }
 
-// useRunDetails fans out /runs/:id for visible rows. Completed runs are
-// immutable so they cache forever; live runs re-poll on the list's cadence.
+// useRunDetails resolves job state for every visible run in ONE request —
+// GET /runs/jobs returns jobs grouped by run id. The return shape mirrors
+// the old per-row useQueries array so callers stay untouched.
 export function useRunDetails(runs: Run[] | undefined) {
-	const list = runs ?? [];
-	return useQueries({
-		queries: list.map((r) => {
-			const live = r.status === "in_progress" || r.status === "queued";
-			return {
-				queryKey: ["run", r.id],
-				queryFn: () => api.get<RunDetail>(`/runs/${r.id}`),
-				staleTime: live ? 0 : Number.POSITIVE_INFINITY,
-				refetchInterval: live ? 4000 : false,
-			};
-		}),
+	const list = useMemo(() => runs ?? [], [runs]);
+	const ids = useMemo(() => list.map((r) => r.id), [list]);
+	const key = ids.join(",");
+	const live = list.some((r) => r.status === "in_progress" || r.status === "queued");
+	const q = useQuery({
+		queryKey: ["runs-jobs", key],
+		queryFn: () =>
+			api.get<{ jobs: Record<string, Job[]> }>(`/runs/jobs?ids=${key}`),
+		enabled: ids.length > 0,
+		staleTime: live ? 0 : Number.POSITIVE_INFINITY,
+		refetchInterval: live ? 4000 : false,
 	});
+	return list.map((r) => ({
+		data: { run: r, jobs: q.data?.jobs?.[r.id] } as RunDetail,
+		isLoading: q.isLoading,
+	}));
 }
