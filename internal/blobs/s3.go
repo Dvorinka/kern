@@ -10,6 +10,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -231,4 +232,38 @@ func (s *S3) Delete(key string) error {
 	s.locks.Delete(k)
 	lock.Unlock()
 	return s.client.RemoveObject(context.Background(), s.bucket, k, minio.RemoveObjectOptions{})
+}
+
+// Presigner is the optional half of Store: backends that can hand out
+// pre-signed object URLs let runners upload/download blobs directly,
+// taking the cache archive off the API's bandwidth budget entirely
+// (#369). Filesystem intentionally does not implement it — callers fall
+// back to the proxied path.
+type Presigner interface {
+	PresignPut(ctx context.Context, key string, ttl time.Duration) (string, error)
+	PresignGet(ctx context.Context, key string, ttl time.Duration) (string, error)
+}
+
+func (s *S3) PresignPut(ctx context.Context, key string, ttl time.Duration) (string, error) {
+	k, err := s.key(key)
+	if err != nil {
+		return "", err
+	}
+	u, err := s.client.PresignedPutObject(ctx, s.bucket, k, ttl)
+	if err != nil {
+		return "", err
+	}
+	return u.String(), nil
+}
+
+func (s *S3) PresignGet(ctx context.Context, key string, ttl time.Duration) (string, error) {
+	k, err := s.key(key)
+	if err != nil {
+		return "", err
+	}
+	u, err := s.client.PresignedGetObject(ctx, s.bucket, k, ttl, nil)
+	if err != nil {
+		return "", err
+	}
+	return u.String(), nil
 }

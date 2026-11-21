@@ -1200,6 +1200,24 @@ paths:
           application/octet-stream: { schema: { type: string, format: binary } }
       responses:
         "200": { description: Stored }
+  /runners/jobs/{jobID}/cache/{key}/prepare:
+    post:
+      tags: [runner-protocol]
+      summary: Prepare a presigned-URL cache upload (404 presign_unavailable on filesystem backends)
+      parameters: [{ name: jobID, in: path, required: true, schema: { type: string } }, { name: key, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: Signed upload URL + blob_ref }
+        "404": { description: Backend cannot presign — use PUT }
+  /runners/jobs/{jobID}/cache/{key}/commit:
+    post:
+      tags: [runner-protocol]
+      summary: Commit a presigned cache upload after the direct PUT lands
+      parameters: [{ name: jobID, in: path, required: true, schema: { type: string } }, { name: key, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: Cache entry recorded }
+        "400": { description: Missing blob or foreign blob_ref }
+        "409": { description: Key already exists }
+
   /logs/search:
     get:
       tags: [runs]
