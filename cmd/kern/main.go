@@ -365,6 +365,8 @@ func dispatch(c *cli, args []string) int {
 		err = c.cmdCompletion(rest)
 	case "init":
 		err = c.cmdInit(ctx, rest)
+	case "top":
+		err = c.cmdTop(ctx, rest)
 	case "upgrade":
 		uctx, ustop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer ustop()

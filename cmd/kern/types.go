@@ -93,6 +93,7 @@ type job struct {
 	Classification string          `json:"classification,omitempty"`
 	QueueReason    string          `json:"queue_reason"`
 	RunsOn         []string        `json:"runs_on"`
+	Needs          []string        `json:"needs"`
 	QueuedAt       *time.Time      `json:"queued_at"`
 	StartedAt      *time.Time      `json:"started_at"`
 	CompletedAt    *time.Time      `json:"completed_at"`
