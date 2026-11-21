@@ -66,3 +66,4 @@ func memInfo() (total, available int64, ok bool) {
 	}
 	return int64(ms.ullTotalPhys), int64(ms.ullAvailPhys), true
 }
+func cgroupMemAvailable() (int64, bool) { return 0, false }

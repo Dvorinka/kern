@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"regexp"
 	"sort"
 	"strings"
@@ -28,16 +29,33 @@ func imageLedgerPath(workRoot string) string {
 	return filepath.Join(workRoot, imageLedgerName)
 }
 
-// recordImageUse notes that image was just pulled for a job. Best effort: a
-// lost ledger entry only means the image is never GC'd.
-func recordImageUse(workRoot, image string) {
-	ledger := loadImageLedger(workRoot)
-	ledger[image] = time.Now().Unix()
+// imageLedgerMu serializes ledger read-modify-write across recordImageUse and
+// the sweeps — unlocked writers previously lost entries and could leave a
+// torn file after a mid-write crash (#373).
+var imageLedgerMu sync.Mutex
+
+// writeImageLedger persists via temp+rename so a reader never sees a partial
+// file.
+func writeImageLedger(workRoot string, ledger map[string]int64) {
 	data, err := json.Marshal(ledger)
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(imageLedgerPath(workRoot), data, 0o640)
+	tmp := imageLedgerPath(workRoot) + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o640); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, imageLedgerPath(workRoot))
+}
+
+// recordImageUse notes that image was just pulled for a job. Best effort: a
+// lost ledger entry only means the image is never GC'd.
+func recordImageUse(workRoot, image string) {
+	imageLedgerMu.Lock()
+	defer imageLedgerMu.Unlock()
+	ledger := loadImageLedger(workRoot)
+	ledger[image] = time.Now().Unix()
+	writeImageLedger(workRoot, ledger)
 }
 
 func loadImageLedger(workRoot string) map[string]int64 {
@@ -79,7 +97,9 @@ func (a *Agent) sweepImagesOlder(ctx context.Context, maxAge time.Duration) {
 		return // never pull an image out from under a running job
 	}
 	cutoff := time.Now().Add(-maxAge).Unix()
+	imageLedgerMu.Lock()
 	ledger := loadImageLedger(a.cfg.WorkRoot)
+	imageLedgerMu.Unlock()
 	dirty := false
 	for image, usedAt := range ledger {
 		if usedAt >= cutoff {
@@ -106,9 +126,9 @@ func (a *Agent) sweepImagesOlder(ctx context.Context, maxAge time.Duration) {
 		delete(ledger, image)
 	}
 	if dirty {
-		if data, err := json.Marshal(ledger); err == nil {
-			_ = os.WriteFile(imageLedgerPath(a.cfg.WorkRoot), data, 0o640)
-		}
+		imageLedgerMu.Lock()
+		writeImageLedger(a.cfg.WorkRoot, ledger)
+		imageLedgerMu.Unlock()
 	}
 }
 
@@ -319,7 +339,7 @@ func (a *Agent) sweepWorkspaceLinks() {
 // cheap, always safe, and keeps disk creep from partial pulls and
 // retagged builds from accumulating between pressure events.
 func (a *Agent) pruneDangling(ctx context.Context) {
-	if a.executor() != "docker" || a.active.Load() > 0 {
+	if !a.dockerOK() || a.active.Load() > 0 {
 		return
 	}
 	pctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
@@ -350,8 +370,15 @@ func (a *Agent) sweepWorkspacesOlderThan(age time.Duration) {
 		return
 	}
 	cutoff := time.Now().Add(-age)
+	// Never touch a live job's workspace: a long job whose top-level dir mtime
+	// drifted past the horizon was previously swept mid-run (#373).
+	protected := map[string]bool{}
+	a.activeJobs.Range(func(k, _ any) bool {
+		protected[sanitizeID(k.(string))] = true
+		return true
+	})
 	for _, e := range entries {
-		if !e.IsDir() || strings.HasPrefix(e.Name(), "_") {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), "_") || protected[e.Name()] {
 			continue
 		}
 		info, err := e.Info()
@@ -637,9 +664,6 @@ func (a *Agent) sweepTmpStale(age time.Duration) {
 }
 
 func (a *Agent) maybePruneDisk(ctx context.Context) {
-	if a.executor() != "docker" {
-		return // host mode has no daemon to prune
-	}
 	pct := a.cfg.DiskMinFreePct
 	if pct <= 0 {
 		return
@@ -649,36 +673,41 @@ func (a *Agent) maybePruneDisk(ctx context.Context) {
 	if !diskUnderPressure(free, total, pct) && !critical {
 		return
 	}
-	// Docker prunes only touch stopped/unused objects — a running job's
+	// Docker prunes run whenever a daemon is reachable — host executors with
+	// the kern-docker capability share the filesystem and benefit the same
+	// (#373). They only touch stopped/unused objects — a running job's
 	// containers, images, volumes and networks are in use and skipped by the
 	// daemon. Deferring all reclaim to idle was the defect that let jobs die
 	// on ENOSPC mid-write: pressure is worst exactly while jobs hold space.
-	a.log.Warn("disk pressure: pruning docker",
-		zap.Int64("free_bytes", free), zap.Int64("total_bytes", total),
-		zap.Float64("min_free_pct", pct), zap.Bool("critical", critical))
-	// BuildKit prunes to a keep-storage budget instead of wiping: the
-	// unbounded -af was the cold-cache penalty every pressured build paid
-	// (#330). Most-recent cache survives up to the budget.
-	prune := [][]string{
-		{"builder", "prune", "-af", "--keep-storage", a.buildxKeep()},
-		{"container", "prune", "-f"}, // stopped containers only
-		{"image", "prune", "-f"},     // dangling images only; tagged job images stay
-		{"network", "prune", "-f"},   // unused networks
-	}
-	for _, args := range prune {
-		ctxCmd, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		out, err := exec.CommandContext(ctxCmd, "docker", args...).CombinedOutput()
-		cancel()
-		if err != nil {
-			a.log.Warn("disk prune step failed", zap.Strings("args", args), zap.String("docker", tailStr(string(out), 200)))
-			continue
+	hasDocker := a.dockerOK()
+	if hasDocker {
+		a.log.Warn("disk pressure: pruning docker",
+			zap.Int64("free_bytes", free), zap.Int64("total_bytes", total),
+			zap.Float64("min_free_pct", pct), zap.Bool("critical", critical))
+		// BuildKit prunes to a keep-storage budget instead of wiping: the
+		// unbounded -af was the cold-cache penalty every pressured build paid
+		// (#330). Most-recent cache survives up to the budget.
+		prune := [][]string{
+			{"builder", "prune", "-af", "--keep-storage", a.buildxKeep()},
+			{"container", "prune", "-f"}, // stopped containers only
+			{"image", "prune", "-f"},     // dangling images only; tagged job images stay
+			{"network", "prune", "-f"},   // unused networks
 		}
-		a.log.Info("disk prune", zap.Strings("args", args), zap.String("out", tailStr(strings.TrimSpace(string(out)), 200)))
-	}
-	if free2, _ := diskSpace(a.cfg.WorkRoot); free2 > free {
-		a.log.Info("disk prune complete",
-			zap.Int64("reclaimed_bytes", free2-free),
-			zap.Int64("free_before", free), zap.Int64("free_after", free2))
+		for _, args := range prune {
+			ctxCmd, cancel := context.WithTimeout(ctx, 2*time.Minute)
+			out, err := exec.CommandContext(ctxCmd, "docker", args...).CombinedOutput()
+			cancel()
+			if err != nil {
+				a.log.Warn("disk prune step failed", zap.Strings("args", args), zap.String("docker", tailStr(string(out), 200)))
+				continue
+			}
+			a.log.Info("disk prune", zap.Strings("args", args), zap.String("out", tailStr(strings.TrimSpace(string(out)), 200)))
+		}
+		if free2, _ := diskSpace(a.cfg.WorkRoot); free2 > free {
+			a.log.Info("disk prune complete",
+				zap.Int64("reclaimed_bytes", free2-free),
+				zap.Int64("free_before", free), zap.Int64("free_after", free2))
+		}
 	}
 	// Deep reclaim can remove objects a live job is reading (ledger images,
 	// job workspaces, _cache entries mid-build) — it stays idle-gated.
@@ -693,7 +722,9 @@ func (a *Agent) maybePruneDisk(ctx context.Context) {
 			zap.Int64("free_bytes", free), zap.Int64("total_bytes", total),
 			zap.Float64("critical_free_pct", a.cfg.DiskCriticalFreePct),
 			zap.Int64("critical_floor_bytes", a.cfg.DiskCriticalFloorBytes))
-		a.sweepImagesOlder(ctx, criticalImageAge)
+		if hasDocker {
+			a.sweepImagesOlder(ctx, criticalImageAge)
+		}
 		a.sweepWorkspacesOlderThan(criticalWorkspaceAge)
 		a.sweepBoundedCacheTo(a.cfg.CacheMaxBytes / 2)
 		a.sweepTmpStale(criticalTmpAge)

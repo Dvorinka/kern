@@ -16,7 +16,7 @@ func totalDisk(dir string) int64 {
 	if err := unix.Statfs(dir, &stat); err != nil {
 		return 0
 	}
-	return int64(stat.Bavail) * int64(stat.Bsize)
+	return int64(stat.Blocks) * int64(stat.Bsize)
 }
 
 // diskSpace reports free and total bytes on the filesystem holding dir.

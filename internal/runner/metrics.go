@@ -68,7 +68,9 @@ func (h *hostSampler) sample(workRoot string, activeJobs int) heartbeatMetrics {
 	if used, ok := memUsed(); ok {
 		m.MemUsedBytes = &used
 	}
-	if free, total := diskSpace(workRoot); free > 0 {
+	// Report when the stat succeeded (total > 0) — gating on free > 0 meant a
+	// 100%-full disk emitted no metric and suppressed the disk alert (#373).
+	if free, total := diskSpace(workRoot); total > 0 {
 		m.DiskFreeBytes = &free
 		m.DiskBytes = &total
 	}
@@ -85,9 +87,13 @@ func memUsed() (int64, bool) {
 	return (total - available), true
 }
 
-// memAvailable reports the kernel's estimate of memory a new allocation
-// can use without swapping.
+// memAvailable reports the memory a new allocation can use without swapping
+// or tripping an OOM kill. Inside a cgroup v2 container that is memory.max
+// minus memory.current — the runner's own ceiling, not the host's (#373).
 func memAvailable() (int64, bool) {
+	if avail, ok := cgroupMemAvailable(); ok {
+		return avail, true
+	}
 	_, available, ok := memInfo()
 	return available, ok
 }
@@ -219,13 +225,26 @@ func parseNetIO(s string) (int64, int64) {
 var humanScale = map[string]float64{
 	"B": 1, "KiB": 1 << 10, "MiB": 1 << 20, "GiB": 1 << 30, "TiB": 1 << 40,
 	"kB": 1e3, "MB": 1e6, "GB": 1e9, "TB": 1e12,
+	// Shorthand forms used by KERN_JOB_DISK et al ("20g", "512m") — binary,
+	// matching the CLI parser in cmd/runner/main.go (#373).
+	"k": 1 << 10, "m": 1 << 20, "g": 1 << 30, "t": 1 << 40,
+	"kb": 1e3, "mb": 1e6, "gb": 1e9, "tb": 1e12,
+	"kib": 1 << 10, "mib": 1 << 20, "gib": 1 << 30, "tib": 1 << 40,
 }
 
 func parseHumanBytes(s string) int64 {
+	s = strings.TrimSpace(s)
 	i := 0
 	for i < len(s) && (s[i] == '.' || (s[i] >= '0' && s[i] <= '9')) {
 		i++
 	}
 	v, _ := strconv.ParseFloat(s[:i], 64)
-	return int64(v * humanScale[s[i:]])
+	if m, ok := humanScale[s[i:]]; ok {
+		return int64(v * m)
+	}
+	// Case-insensitive retry covers "20G", "512MB" and friends.
+	if m, ok := humanScale[strings.ToLower(s[i:])]; ok {
+		return int64(v * m)
+	}
+	return 0
 }

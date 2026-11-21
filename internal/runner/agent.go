@@ -131,7 +131,9 @@ type Agent struct {
 	token      string
 	sampler    hostSampler
 	active     atomic.Int32
+	claiming   atomic.Int32 // in-flight claim() calls — part of busy() (#373)
 	updating   atomic.Bool
+	healing    atomic.Bool // toolset heal single-flight (#373)
 	nextUpdate atomic.Int64
 	// diskPaused latches while the work-root filesystem is under pressure so
 	// the transition is logged once per episode, not once per worker tick.
@@ -325,6 +327,12 @@ func (a *Agent) toolsetHealDue(missing []string) bool {
 // minutes (apt update, tarball fetch), so this runs off the heartbeat
 // goroutine; ctx is the agent's run context so shutdown cancels mid-install.
 func (a *Agent) healToolset(ctx context.Context, missing []string) {
+	// Single-flight: two sweeps reporting different missing sets could
+	// otherwise run installs concurrently (#373).
+	if !a.healing.CompareAndSwap(false, true) {
+		return
+	}
+	defer a.healing.Store(false)
 	for _, name := range missing {
 		// The generic package-manager fallback is Linux-only; on Windows a
 		// tool without a curated plan cannot self-heal — skip the doomed
@@ -567,7 +575,7 @@ func (a *Agent) maybeSelfUpdate(ctx context.Context, offer *updateOffer) {
 	a.log.Info("runner self-update", zap.String("version", offer.Version), zap.String("image", offer.Image))
 	uctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
-	busy := func() bool { return a.active.Load() != 0 }
+	busy := func() bool { return a.active.Load() != 0 || a.claiming.Load() != 0 }
 	var err error
 	if inContainer() {
 		err = applySelfUpdate(uctx, offer.Image, busy)
@@ -614,8 +622,12 @@ func (a *Agent) workerLoop(ctx context.Context, n int) {
 			sleepCtx(ctx, 15*time.Second)
 			continue
 		}
+		// Mark the claim in flight: a 25s poll inside the busy() check let
+		// self-update re-exec the runner mid-claim and burn the lease (#373).
+		a.claiming.Add(1)
 		claim, err := a.c.claim(ctx, 25)
 		if err != nil {
+			a.claiming.Add(-1)
 			if ctx.Err() != nil {
 				return
 			}
@@ -628,9 +640,13 @@ func (a *Agent) workerLoop(ctx context.Context, n int) {
 		}
 		backoff = time.Second
 		if claim == nil {
+			a.claiming.Add(-1)
 			continue
 		}
+		// Promote to active before releasing the claiming mark so busy()
+		// never reads both counters at zero with a job in hand.
 		a.active.Add(1)
+		a.claiming.Add(-1)
 		a.executeJob(ctx, claim)
 		a.active.Add(-1)
 		a.lastActivity.Store(time.Now().UnixNano())
@@ -653,7 +669,7 @@ func (a *Agent) ephemeralLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 		}
-		if a.active.Load() != 0 || a.retire.Load() {
+		if a.active.Load() != 0 || a.claiming.Load() != 0 || a.retire.Load() {
 			continue
 		}
 		if time.Since(time.Unix(0, a.lastActivity.Load())) < idle {
