@@ -11,7 +11,9 @@ package runner
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -1036,6 +1038,15 @@ func (e *executor) checkout(ctx context.Context) error {
 	if run.RepoURL == "" {
 		return fmt.Errorf("run has neither repo_url nor local_path; there is nothing to check out")
 	}
+	if os.Getenv("KERN_GIT_MIRRORS") != "0" {
+		if err := e.checkoutViaMirror(ctx, run, ws); err == nil {
+			e.persistGitPushAuth(ctx, ws)
+			return nil
+		} else {
+			e.log.Warn("mirror checkout failed; falling back to direct clone",
+				zap.String("repo", run.RepoURL), zap.Error(err))
+		}
+	}
 	args := cloneArgs(run, ws)
 	if out, err := exec.CommandContext(ctx, "git", args...).CombinedOutput(); err != nil {
 		return fmt.Errorf("clone %s: %w (%s)", run.RepoURL, err, tailStr(string(out), 400))
@@ -1057,6 +1068,74 @@ func (e *executor) checkout(ctx context.Context) error {
 		_ = exec.CommandContext(ctx, "git", "-C", ws, "checkout", "--force", branch).Run()
 	}
 	e.persistGitPushAuth(ctx, ws)
+	return nil
+}
+
+// mirrorMu serializes mirror fetch/checkout across concurrent jobs — a
+// fetch pruning refs must not race a worktree add reading them.
+// ponytail: one global mirror lock; per-repo granularity if cross-repo
+// fetch contention shows up.
+var mirrorMu sync.Mutex
+
+// checkoutViaMirror keeps a bare mirror per repo under _cache/_repos,
+// fetches just the target ref/SHA into it, and materializes the workspace
+// as a detached worktree — objects hardlink into the mirror, so no
+// full-history network clone and no object copy at all (#372).
+func (e *executor) checkoutViaMirror(ctx context.Context, run ClaimRun, ws string) error {
+	target := run.Ref
+	if run.SHA != "" {
+		target = run.SHA
+	}
+	if target == "" {
+		return fmt.Errorf("no ref or sha to mirror")
+	}
+	sum := sha256.Sum256([]byte(run.RepoURL))
+	mirror := filepath.Join(e.cachePath(), "_repos", hex.EncodeToString(sum[:8])+".git")
+
+	mirrorMu.Lock()
+	defer mirrorMu.Unlock()
+	if fi, err := os.Stat(mirror); err != nil || !fi.IsDir() {
+		if err := os.MkdirAll(filepath.Dir(mirror), 0o755); err != nil {
+			return err
+		}
+		if out, err := exec.CommandContext(ctx, "git", "init", "--bare", "--quiet", mirror).CombinedOutput(); err != nil {
+			return fmt.Errorf("init mirror: %w (%s)", err, tailStr(string(out), 300))
+		}
+		if out, err := exec.CommandContext(ctx, "git", "-C", mirror, "remote", "add", "origin", run.RepoURL).CombinedOutput(); err != nil {
+			return fmt.Errorf("mirror remote: %w (%s)", err, tailStr(string(out), 300))
+		}
+	}
+	fetch := []string{"-C", mirror}
+	if run.CloneToken != "" {
+		// Same header scheme as cloneArgs — never written to config.
+		basic := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + run.CloneToken))
+		fetch = append(fetch, "-c", "http.extraHeader=Authorization: Basic "+basic)
+	}
+	fetch = append(fetch, "fetch", "--filter=blob:none", "--prune", "origin", target)
+	if out, err := exec.CommandContext(ctx, "git", fetch...).CombinedOutput(); err != nil {
+		// Hosts without partial-clone support reject --filter; retry full.
+		full := make([]string, 0, len(fetch))
+		for _, a := range fetch {
+			if a != "--filter=blob:none" {
+				full = append(full, a)
+			}
+		}
+		if out2, err2 := exec.CommandContext(ctx, "git", full...).CombinedOutput(); err2 != nil {
+			return fmt.Errorf("mirror fetch %s: %w (%s)", target, err2, tailStr(string(out)+string(out2), 400))
+		}
+	}
+	// FETCH_HEAD is not a ref — pin it so the worktree can name it, and
+	// drop stale worktree registrations left by reaped job dirs.
+	if out, err := exec.CommandContext(ctx, "git", "-C", mirror, "update-ref", "refs/mirror/head", "FETCH_HEAD").CombinedOutput(); err != nil {
+		return fmt.Errorf("mirror pin: %w (%s)", err, tailStr(string(out), 300))
+	}
+	_ = exec.CommandContext(ctx, "git", "-C", mirror, "worktree", "prune").Run()
+	if out, err := exec.CommandContext(ctx, "git", "-C", mirror, "worktree", "add", "--detach", ws, "refs/mirror/head").CombinedOutput(); err != nil {
+		return fmt.Errorf("mirror worktree: %w (%s)", err, tailStr(string(out), 400))
+	}
+	// The worktree's origin is the local mirror path — restore the real
+	// remote so step git ops and push auth behave like a normal clone.
+	_ = exec.CommandContext(ctx, "git", "-C", ws, "remote", "set-url", "origin", run.RepoURL).Run()
 	return nil
 }
 
