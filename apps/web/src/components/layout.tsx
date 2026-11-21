@@ -239,6 +239,12 @@ export function Layout() {
 
 // ⌘K palette — every page is reachable, plus projects, runners and recent
 // runs via the endpoints the app already queries. Navigates on select.
+const ACTIONS: { label: string; sub: string; to: string }[] = [
+	{ label: "Enroll a runner", sub: "action", to: "/runners" },
+	{ label: "Create an API token", sub: "action", to: "/settings" },
+	{ label: "Browse artifacts", sub: "action", to: "/runs" },
+];
+
 const PAGES: { label: string; sub: string; to: string }[] = [
 	{ label: "Overview", sub: "page", to: "/" },
 	{ label: "Projects", sub: "page", to: "/projects" },
@@ -277,6 +283,10 @@ function CommandK({ onClose }: { onClose: () => void }) {
 		for (const p of PAGES) {
 			if (!needle || p.label.toLowerCase().includes(needle))
 				out.push({ key: `page:${p.to}`, ...p, sq: "ok" });
+		}
+		for (const a of ACTIONS) {
+			if (needle && a.label.toLowerCase().includes(needle))
+				out.push({ key: `act:${a.to}:${a.label}`, ...a, sq: "live" });
 		}
 		for (const r of runners?.runners ?? []) {
 			if (

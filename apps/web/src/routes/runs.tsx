@@ -406,10 +406,15 @@ function RunRow({
 			<StatusSq status={r.status} conclusion={r.conclusion} />
 			<div className="min-w-0">
 				<div className="truncate text-[13px] font-medium text-[var(--ink)]">
-					<span className="mr-2 font-mono font-normal text-[var(--faint)]">
-						#{r.run_number}
-					</span>
-					{r.commit_message?.split("\n")[0] || r.workflow_name}
+					{/* The row's primary target is a real anchor — keyboard focus
+					    and open-in-new-tab work; the row click is progressive
+					    enhancement on top of it. */}
+					<Link to={`/runs/${r.id}`} className="text-inherit no-underline">
+						<span className="mr-2 font-mono font-normal text-[var(--faint)]">
+							#{r.run_number}
+						</span>
+						{r.commit_message?.split("\n")[0] || r.workflow_name}
+					</Link>
 				</div>
 				<div className="mt-[3px] truncate font-mono text-[11px] text-[var(--faint)]">
 					<Link

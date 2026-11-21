@@ -57,6 +57,7 @@ export function RunDetailPage() {
 
 	const [jobId, setJobId] = useState<string | null>(null);
 	const [stepN, setStepN] = useState<number | null>(null);
+	const [bundleCopied, setBundleCopied] = useState(false);
 	// ?job=<key|id>&step=<n> deep links — trace lanes and queue rows land on
 	// a specific job's log; picking a job/step writes the URL back so the
 	// selection is shareable and survives reload.
@@ -101,10 +102,28 @@ export function RunDetailPage() {
 
 	const runnerNames = new Map((runners?.runners ?? []).map((r) => [r.id, r.name]));
 
+	// duration() resolves "now" itself — a 1s tick while live turns the
+	// header clock into a real elapsed timer.
+	const live =
+		data?.run.status === "in_progress" ||
+		data?.run.status === "queued" ||
+		data?.run.status === "awaiting_approval";
+	const [tick, setTick] = useState(0);
+	useEffect(() => {
+		if (!live) return;
+		const t = setInterval(() => setTick((n) => n + 1), 1000);
+		return () => clearInterval(t);
+	}, [live]);
+	void tick;
+	const copyBundle = async () => {
+		const d = await api.get(`/runs/${id}/diagnose`);
+		await navigator.clipboard.writeText(JSON.stringify(d, null, 2));
+		setBundleCopied(true);
+		setTimeout(() => setBundleCopied(false), 2000);
+	};
+
 	if (isLoading || !data) return <Spinner />;
 	const { run, jobs } = data;
-	const live =
-		run.status === "in_progress" || run.status === "queued" || run.status === "awaiting_approval";
 	const title = run.commit_message?.split("\n")[0] || `${run.workflow_name} #${run.run_number}`;
 	const job =
 		jobs.find((j) => j.id === jobId) ??
@@ -175,6 +194,13 @@ export function RunDetailPage() {
 						)}
 						<button className="pill solid" onClick={() => rerun.mutate()} disabled={rerun.isPending}>
 							Re-run
+						</button>
+						<button
+							className="pill"
+							title="Copy the run, failed-step log tails, and runner context as JSON for an AI diagnosis"
+							onClick={() => void copyBundle()}
+						>
+							{bundleCopied ? "Copied" : "Copy diagnosis"}
 						</button>
 					</span>
 				</span>

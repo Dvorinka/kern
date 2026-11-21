@@ -524,6 +524,83 @@ func (s *Server) stepLogStream(c *gin.Context) {
 	}
 }
 
+
+// runDiagnose bundles everything a diagnosis needs in one request instead
+// of a 2+2N fan-out: run, jobs with steps, per-failed-step log tails from
+// blob storage, and a runner identity map for jobs that claimed one.
+func (s *Server) runDiagnose(c *gin.Context) {
+	user, _ := currentUser(c)
+	id, ok := s.runIDParam(c)
+	if !ok {
+		return
+	}
+	tail := int64(parseInt(c.DefaultQuery("tail", "65536"), 65536))
+	if tail <= 0 || tail > 1<<20 {
+		tail = 64 << 10
+	}
+	run, err := s.Store.Run(c.Request.Context(), id)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	jobs, err := s.Store.JobsForRun(c.Request.Context(), run.ID)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	type diagStep struct {
+		store.Step
+		LogTail string `json:"log_tail,omitempty"`
+		LogSize int64  `json:"log_size,omitempty"`
+	}
+	type diagJob struct {
+		Job   store.Job  `json:"job"`
+		Steps []diagStep `json:"steps"`
+	}
+	failed := func(st store.Step) bool {
+		if st.Conclusion != "" && st.Conclusion != "success" && st.Conclusion != "skipped" {
+			return true
+		}
+		return len(st.Diagnosis) > 0 && string(st.Diagnosis) != "null"
+	}
+	out := make([]diagJob, 0, len(jobs))
+	for _, j := range jobs {
+		dj := diagJob{Job: j}
+		steps, err := s.Store.StepsForJob(c.Request.Context(), j.ID)
+		if err != nil {
+			continue
+		}
+		for _, st := range steps {
+			ds := diagStep{Step: st}
+			if failed(st) && st.LogRef != "" {
+				size, err := s.Blobs.Size(st.LogRef)
+				if err == nil {
+					ds.LogSize = size
+					off := size - tail
+					if off < 0 {
+						off = 0
+					}
+					data, _, err := s.Blobs.ReadFrom(st.LogRef, off, int(tail))
+					if err == nil {
+						ds.LogTail = string(data)
+					}
+				}
+			}
+			dj.Steps = append(dj.Steps, ds)
+		}
+		out = append(out, dj)
+	}
+	runners, err := s.Store.Runners(c.Request.Context(), user.OrgID)
+	byID := map[uuid.UUID]gin.H{}
+	if err == nil {
+		for _, r := range runners {
+			byID[r.ID] = gin.H{"id": r.ID, "name": r.Name, "hostname": r.Hostname,
+				"os": r.OS, "arch": r.Arch, "version": r.Version, "labels": r.Labels}
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"run": run, "jobs": out, "runners": byID})
+}
+
 // StepByIDParam resolves the step id path parameter, writing an error response when invalid.
 func (s *Server) StepByIDParam(c *gin.Context) (store.Step, uuid.UUID, uuid.UUID, error) {
 	id, err := uuid.Parse(c.Param("stepID"))

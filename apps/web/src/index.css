@@ -689,6 +689,10 @@ select.fsel {
 	display: flex;
 	font-family: var(--mono);
 	padding-right: 14px;
+	/* Native virtualization: off-screen rows skip layout/paint; the
+	   intrinsic-size estimate keeps the scrollbar stable. */
+	content-visibility: auto;
+	contain-intrinsic-size: auto 20px;
 }
 .log .l:hover {
 	background: rgba(255, 255, 255, 0.04);
@@ -3930,4 +3934,11 @@ html {
 	.mmenu a {
 		padding: 14px;
 	}
+}
+.bar.q.wait {
+	border-style: dotted;
+	opacity: 0.7;
+}
+.bar.crit {
+	box-shadow: 0 0 0 2px var(--warn, #e8b339);
 }

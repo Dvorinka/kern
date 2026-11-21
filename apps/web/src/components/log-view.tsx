@@ -27,6 +27,7 @@ interface LLine {
 	n: number;
 	text: string;
 	lvl: Lvl;
+	g?: number;
 }
 
 const RE_ERR = /\b(error|failed|failure|fatal|panic|errno)\b|\bFAIL(?:ED)?\b|✗|✘|::error/i;
@@ -111,6 +112,7 @@ export function LogView({
 	const [text, setText] = useState("");
 	const [lines, setLines] = useState<LLine[]>([]);
 	const [partial, setPartial] = useState("");
+	const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
 	const [err, setErr] = useState("");
 	const [trunc, setTrunc] = useState<{ next: number; size: number } | null>(null);
 	const [wrap, setWrap] = useState(true);
@@ -126,6 +128,9 @@ export function LogView({
 	// completed lines — the old useMemo re-stripped ANSI and re-classified
 	// the entire accumulated log on every SSE chunk (O(N²) on long logs).
 	const pendingRef = useRef("");
+	// Open ##[group] stack — ##[endgroup] lines are dropped by classify, so
+	// membership is tracked here on the raw text.
+	const grpRef = useRef<number[]>([]);
 	const appendText = (chunk: string) => {
 		if (!chunk) return;
 		const joined = pendingRef.current + chunk.replace(ANSI, "");
@@ -137,8 +142,16 @@ export function LogView({
 		setLines((prev) => {
 			const out = prev.slice();
 			for (const raw of parts) {
+				if (raw.startsWith("##[endgroup]")) {
+					grpRef.current.pop();
+					continue;
+				}
 				const c = classify(raw);
-				if (c) out.push({ n: out.length + 1, ...c });
+				if (c) {
+					const n = out.length + 1;
+					out.push({ n, g: grpRef.current[grpRef.current.length - 1] ?? 0, ...c });
+					if (raw.startsWith("##[group]")) grpRef.current.push(n);
+				}
 			}
 			return out;
 		});
@@ -158,7 +171,9 @@ export function LogView({
 		setText("");
 		setLines([]);
 		setPartial("");
+		setCollapsed(new Set());
 		pendingRef.current = "";
+		grpRef.current = [];
 		setErr("");
 		setTrunc(null);
 		setQ("");
@@ -254,17 +269,43 @@ export function LogView({
 	const filtering = q.trim() !== "" || lvl !== "";
 	const shown = useMemo(() => {
 		const needle = q.trim().toLowerCase();
+		const filtering = !!needle || !!lvl;
+		// Collapsed ##[group] bodies hide unless a filter is active.
+		const hidden = (l: LLine): boolean => {
+			if (filtering || collapsed.size === 0) return false;
+			let g = l.g ?? 0;
+			let guard = 0;
+			while (g && guard++ < 64) {
+				if (collapsed.has(g)) return true;
+				g = parsed[g - 1]?.g ?? 0;
+			}
+			return false;
+		};
 		return parsed.filter(
 			(l) =>
+				!hidden(l) &&
 				(!lvl || l.lvl === lvl) &&
 				(!needle || l.text.toLowerCase().includes(needle)),
 		);
-	}, [parsed, q, lvl]);
+	}, [parsed, q, lvl, collapsed]);
 
 	useEffect(() => {
 		const el = logRef.current;
 		if (follow && !filtering && el) el.scrollTop = el.scrollHeight;
 	}, [text, follow, filtering]);
+
+	// #L<n> deep links: once lines land, jump to the hashed row and mark it.
+	const didHashRef = useRef(false);
+	useEffect(() => {
+		if (didHashRef.current || parsed.length === 0) return;
+		const m = location.hash.match(/^#L(\d+)$/);
+		if (!m) return;
+		const n = Number(m[1]);
+		didHashRef.current = true;
+		setSelLine(n);
+		setFollow(false);
+		logRef.current?.querySelector(`#L${CSS.escape(String(n))}`)?.scrollIntoView();
+	}, [parsed]);
 
 	const copyAll = async () => {
 		try {
@@ -398,13 +439,34 @@ export function LogView({
 					const nodes = l.lvl === "err" || l.lvl === "warn" ? [l.text] : toks(l.text);
 					return (
 						<div
+							id={`L${l.n}`}
 							className={cn("l", l.lvl && `l-l${l.lvl === "grp" ? "g" : l.lvl === "err" ? "e" : l.lvl === "warn" ? "w" : l.lvl === "cmd" ? "c" : "d"}`, active && l.n === parsed[parsed.length - 1]?.n && "l-lv", selLine === l.n && "l-sel")}
 							key={l.n}
 						>
-							<span className="lnum" onClick={() => setSelLine(selLine === l.n ? null : l.n)}>
+							<span
+								className="lnum"
+								onClick={() => {
+									setSelLine(selLine === l.n ? null : l.n);
+									history.replaceState(null, "", `#L${l.n}`);
+								}}
+							>
 								{l.n}
 							</span>
-							<span className="lm">
+							<span
+								className="lm"
+								style={l.lvl === "grp" ? { cursor: "pointer" } : undefined}
+								onClick={
+									l.lvl === "grp"
+										? () =>
+												setCollapsed((s) => {
+													const n = new Set(s);
+													if (n.has(l.n)) n.delete(l.n); else n.add(l.n);
+													return n;
+												})
+										: undefined
+								}
+							>
+								{l.lvl === "grp" && (collapsed.has(l.n) ? "▸ " : "▾ ")}
 								{withHits(l.text, nodes, q.trim())}
 								{active && l.n === parsed[parsed.length - 1]?.n && <span className="cursor" />}
 							</span>
