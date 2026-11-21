@@ -64,7 +64,12 @@ func TestGrantRouteAllowed(t *testing.T) {
 	if !grantRouteAllowed("/api/v1/runs/:id/cancel") {
 		t.Fatal("cancel denied")
 	}
-	if grantRouteAllowed("/api/v1/secrets") || grantRouteAllowed("/api/v1/mcp") || grantRouteAllowed("") {
+	// MCP and log search are allowed — their handlers re-check the project
+	// grant inside the tool call / query params.
+	if !grantRouteAllowed("/api/v1/mcp") || !grantRouteAllowed("/api/v1/logs/search") {
+		t.Fatal("mcp/log-search denied to scoped tokens")
+	}
+	if grantRouteAllowed("/api/v1/secrets") || grantRouteAllowed("") {
 		t.Fatal("org-wide route allowed")
 	}
 }

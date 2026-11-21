@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"io"
@@ -36,52 +37,54 @@ func (s *Server) createExec(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_body", "command is required for a non-interactive exec")
 		return
 	}
-	job, err := s.Store.Job(c.Request.Context(), id)
-	if errors.Is(err, store.ErrNotFound) {
-		fail(c, http.StatusNotFound, "not_found", "job not found")
+	user, _ := currentUser(c)
+	ex, err := s.createExecSession(c.Request.Context(), user, id, req.Command, req.Interactive)
+	if err != nil {
+		s.writeErr(c, err)
 		return
 	}
+	c.JSON(http.StatusCreated, gin.H{"exec": ex})
+}
+
+// createExecSession runs the exec gates — job running on a docker runner,
+// trusted run only — then creates the session. Shared by the HTTP route
+// and the kern_exec_job MCP tool.
+func (s *Server) createExecSession(ctx context.Context, user store.User, jobID uuid.UUID, command string, interactive bool) (store.ExecRequest, error) {
+	job, err := s.Store.Job(ctx, jobID)
+	if errors.Is(err, store.ErrNotFound) {
+		return store.ExecRequest{}, &statusError{http.StatusNotFound, "not_found", "job not found"}
+	}
 	if err != nil {
-		s.internalError(c, err)
-		return
+		return store.ExecRequest{}, err
 	}
 	// Tenant check before the status check so a foreign job id answers the
 	// same 404 as a missing one — no existence/status oracle (#368).
-	run, err := s.Store.Run(c.Request.Context(), job.RunID)
+	run, err := s.Store.Run(ctx, job.RunID)
 	if err != nil {
-		s.internalError(c, err)
-		return
+		return store.ExecRequest{}, err
 	}
-	user, _ := currentUser(c)
 	if run.OrgID != user.OrgID {
-		fail(c, http.StatusNotFound, "not_found", "job not found")
-		return
+		return store.ExecRequest{}, &statusError{http.StatusNotFound, "not_found", "job not found"}
 	}
 	if job.Status != "in_progress" || job.RunnerID == nil {
-		fail(c, http.StatusConflict, "job_not_running", "job is not running on a runner")
-		return
+		return store.ExecRequest{}, &statusError{http.StatusConflict, "job_not_running", "job is not running on a runner"}
 	}
 	if run.TrustLevel == "fork" || run.TrustLevel == "pull_request" {
-		fail(c, http.StatusForbidden, "untrusted_run", "exec is disabled for untrusted runs")
-		return
+		return store.ExecRequest{}, &statusError{http.StatusForbidden, "untrusted_run", "exec is disabled for untrusted runs"}
 	}
-	runner, err := s.Store.Runner(c.Request.Context(), *job.RunnerID)
+	runner, err := s.Store.Runner(ctx, *job.RunnerID)
 	if err != nil {
-		s.internalError(c, err)
-		return
+		return store.ExecRequest{}, err
 	}
 	if runner.Executor != "" && runner.Executor != "docker" {
-		fail(c, http.StatusConflict, "host_executor", "exec needs the docker executor; this job runs on a host executor")
-		return
+		return store.ExecRequest{}, &statusError{http.StatusConflict, "host_executor", "exec needs the docker executor; this job runs on a host executor"}
 	}
-	createdBy := &user.ID
-	ex, err := s.Store.CreateExec(c.Request.Context(), job.ID, req.Command, req.Interactive, createdBy)
+	ex, err := s.Store.CreateExec(ctx, job.ID, command, interactive, &user.ID)
 	if err != nil {
-		s.internalError(c, err)
-		return
+		return store.ExecRequest{}, err
 	}
-	s.Store.Audit(c.Request.Context(), user.OrgID, createdBy, "exec.create", job.ID.String())
-	c.JSON(http.StatusCreated, gin.H{"exec": ex})
+	s.Store.Audit(ctx, user.OrgID, &user.ID, "exec.create", job.ID.String())
+	return ex, nil
 }
 
 // execForUser resolves an exec request for the user-facing routes.

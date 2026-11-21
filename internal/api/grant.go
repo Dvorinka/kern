@@ -166,7 +166,8 @@ func grantRouteAllowed(path string) bool {
 		"/api/v1/runs", "/api/v1/runs/:id", "/api/v1/runs/:id/cancel", "/api/v1/runs/:id/rerun",
 		"/api/v1/runs/:id/stream", "/api/v1/runs/:id/diagnose",
 		"/api/v1/artifacts", "/api/v1/artifacts/:id", "/api/v1/artifacts/:id/download",
-		"/api/v1/steps/:stepID/logs", "/api/v1/steps/:stepID/logs/stream", "/api/v1/steps/:stepID/summary":
+		"/api/v1/steps/:stepID/logs", "/api/v1/steps/:stepID/logs/stream", "/api/v1/steps/:stepID/summary",
+		"/api/v1/mcp", "/api/v1/logs/search":
 		return true
 	default:
 		return strings.HasPrefix(path, "/api/v1/projects/:project")
@@ -234,6 +235,19 @@ func (s *Server) enforceGrantIDs(c *gin.Context, path string) bool {
 			return false
 		}
 		return s.enforceRunGrant(c, id)
+	case "/api/v1/logs/search":
+		// Scoped tokens must pin the search to one of their projects —
+		// omitting it would search every project's logs.
+		slug := c.Query("project")
+		if slug == "" {
+			fail(c, http.StatusForbidden, "project_required", "this token must pass ?project= set to one of its projects")
+			return false
+		}
+		if !grantHas(tokenProjects(c), slug) {
+			fail(c, http.StatusForbidden, "project_denied", "token cannot access project "+slug)
+			return false
+		}
+		return true
 	case "/api/v1/artifacts/:id", "/api/v1/artifacts/:id/download":
 		id, err := uuid.Parse(c.Param("id"))
 		if err != nil {

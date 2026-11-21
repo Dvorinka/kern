@@ -966,6 +966,16 @@ paths:
       summary: MCP JSON-RPC endpoint (same auth/scopes as HTTP)
       responses:
         "200": { description: JSON-RPC response }
+    get:
+      tags: [instance]
+      summary: MCP SSE stream — not supported (stateless transport)
+      responses:
+        "405": { description: Stateless MCP transport accepts POST only }
+    delete:
+      tags: [instance]
+      summary: MCP session close — not supported (stateless transport)
+      responses:
+        "405": { description: Stateless MCP transport accepts POST only }
 
   /runners/register:
     post:
