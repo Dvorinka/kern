@@ -255,6 +255,11 @@ func newJobExecutor(cfg Config, c *client, claim *Claim, secretMap, varMap map[s
 		secretMap["GITHUB_TOKEN"] = claim.Run.GitHubToken
 		maskValues = append(maskValues, claim.Run.GitHubToken)
 	}
+	// The job-scoped cache credential reaches steps as ACTIONS_RUNTIME_TOKEN;
+	// an echoed value must not land in the log blob verbatim (#368).
+	if claim.Job.CacheToken != "" {
+		maskValues = append(maskValues, claim.Job.CacheToken)
+	}
 	var logMask *secrets.Masker
 	if len(maskValues) > 0 {
 		logMask = secrets.NewMasker(maskValues)

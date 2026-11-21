@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -255,7 +256,16 @@ func (s *Server) listSecrets(c *gin.Context) {
 	if !ok {
 		return
 	}
-	rows, err := s.Store.Secrets(c.Request.Context(), user.OrgID, projectID, envID)
+	// Unscoped lists span org and project scopes (env secrets need an
+	// explicit ?environment=). Scoped queries return exactly that scope —
+	// a nil project_id means org-level rows only (#368).
+	var rows []store.Secret
+	var err error
+	if projectID == nil && envID == nil {
+		rows, err = s.Store.AllSecrets(c.Request.Context(), user.OrgID)
+	} else {
+		rows, err = s.Store.Secrets(c.Request.Context(), user.OrgID, projectID, envID)
+	}
 	if err != nil {
 		s.internalError(c, err)
 		return
@@ -282,8 +292,12 @@ func (s *Server) getOrgSettings(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
+	// notify_secret never leaves the server — not even its ciphertext.
+	var settingsMap map[string]string
+	_ = json.Unmarshal(raw, &settingsMap)
+	delete(settingsMap, "notify_secret")
 	c.JSON(http.StatusOK, gin.H{
-		"settings":              raw,
+		"settings":              settingsMap,
 		"self_heal":             settingsValue(raw, "self_heal", "off"),
 		"public_ci":             settingsValue(raw, "public_ci", "off"),
 		"auto_update":           settingsValue(raw, "auto_update", "off"),
@@ -381,6 +395,9 @@ func orgSettingWrites(selfHeal, publicCI, autoUpdate, runnerAutostart, notifyURL
 		if v != "" && !strings.HasPrefix(v, "https://") && !strings.HasPrefix(v, "http://") {
 			return nil, "notify_url must be an http(s) URL or empty to disable"
 		}
+		if v != "" && !notifyURLHostSafe(v) {
+			return nil, "notify_url must not target a private or loopback address"
+		}
 		out["notify_url"] = v
 	}
 	if notifySecret != nil {
@@ -465,6 +482,16 @@ func (s *Server) putOrgSettings(c *gin.Context) {
 		return
 	}
 	for k, v := range writes {
+		if k == "notify_secret" && v != "" {
+			// Encrypt at rest, bound to the org; the plaintext never
+			// touches the settings table or the API response (#368).
+			ct, nonce, err := s.Cipher.EncryptAAD(v, "notify_secret|"+user.OrgID.String())
+			if err != nil {
+				s.internalError(c, err)
+				return
+			}
+			v = "enc1:" + base64.StdEncoding.EncodeToString(ct) + ":" + base64.StdEncoding.EncodeToString(nonce)
+		}
 		if err := s.Store.PutOrgSetting(c.Request.Context(), user.OrgID, k, v); err != nil {
 			s.internalError(c, err)
 			return
@@ -472,6 +499,7 @@ func (s *Server) putOrgSettings(c *gin.Context) {
 		v = auditSettingValue(k, v)
 		s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "settings."+k, v)
 	}
+	delete(writes, "notify_secret") // never echo the credential back
 	c.JSON(http.StatusOK, writes)
 }
 
@@ -623,6 +651,10 @@ func (s *Server) putProjectSettings(c *gin.Context) {
 		v := strings.TrimSpace(*req.NotifyURL)
 		if v != "" && v != "off" && !strings.HasPrefix(v, "https://") && !strings.HasPrefix(v, "http://") {
 			fail(c, http.StatusBadRequest, "invalid_body", "notify_url must be an http(s) URL, off, or empty to inherit the org webhook")
+			return
+		}
+		if v != "" && v != "off" && !notifyURLHostSafe(v) {
+			fail(c, http.StatusBadRequest, "invalid_body", "notify_url must not target a private or loopback address")
 			return
 		}
 		writes["notify_url"] = v
@@ -789,6 +821,21 @@ func (s *Server) dismissRemediation(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+// uuidPtr renders a scope id for AAD context; nil scopes become "-".
+func uuidPtr(id *uuid.UUID) string {
+	if id == nil {
+		return "-"
+	}
+	return id.String()
+}
+
+// secretAAD is the authenticated-data string putSecret binds each secret
+// ciphertext to; decryption recomputes it from the row's own scope fields.
+func secretAAD(sec store.Secret) string {
+	return fmt.Sprintf("secret|%s|%s|%s|%s", sec.OrgID,
+		uuidPtr(sec.ProjectID), uuidPtr(sec.EnvironmentID), sec.Name)
+}
+
 func secretSummaries(rows []store.Secret) []gin.H {
 	out := make([]gin.H, 0, len(rows))
 	for _, r := range rows {
@@ -818,7 +865,11 @@ func (s *Server) putSecret(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_body", "secret value is required")
 		return
 	}
-	ct, nonce, err := s.Cipher.Encrypt(req.Value)
+	// AAD binds the ciphertext to this org/project/environment/name so a
+	// row copied between scopes fails to decrypt (#368).
+	aad := fmt.Sprintf("secret|%s|%s|%s|%s", user.OrgID,
+		uuidPtr(projectID), uuidPtr(envID), name)
+	ct, nonce, err := s.Cipher.EncryptAAD(req.Value, aad)
 	if err != nil {
 		s.internalError(c, err)
 		return

@@ -62,7 +62,7 @@ func (s *Server) actOnCheckRun(c *gin.Context, body []byte) (status, detail stri
 	if jobKey != "" {
 		keys = []string{jobKey}
 	}
-	n, err := s.Store.RerunJobs(c.Request.Context(), runID, keys)
+	n, err := s.Store.RerunJobs(c.Request.Context(), runID, keys, uuid.Nil)
 	if err != nil {
 		return "ignored", fmt.Sprintf("rerequest %s #%d: %s", run.WorkflowName, run.RunNumber, err)
 	}
@@ -89,7 +89,7 @@ func (s *Server) actOnCheckSuite(c *gin.Context, body []byte) (status, detail st
 	}
 	var parts []string
 	for _, run := range runs {
-		n, err := s.Store.RerunJobs(c.Request.Context(), run.ID, nil)
+		n, err := s.Store.RerunJobs(c.Request.Context(), run.ID, nil, uuid.Nil)
 		if err != nil {
 			parts = append(parts, fmt.Sprintf("%s #%d (%s)", run.WorkflowName, run.RunNumber, err))
 			continue

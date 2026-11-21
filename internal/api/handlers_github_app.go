@@ -157,12 +157,15 @@ func (s *Server) githubAppCallback(c *gin.Context) {
 		fail(c, http.StatusBadGateway, "github_conversion_failed", err.Error())
 		return
 	}
-	pemCT, pemN, err := s.Cipher.Encrypt(conv.PEM)
+	// AAD binds each ciphertext to the owning org+app so a row copied
+	// between tenants fails to decrypt (#368).
+	appAAD := fmt.Sprintf("ghapp|%s|%s", user.OrgID, conv.Slug)
+	pemCT, pemN, err := s.Cipher.EncryptAAD(conv.PEM, appAAD)
 	if err != nil {
 		s.internalError(c, err)
 		return
 	}
-	secCT, secN, err := s.Cipher.Encrypt(conv.WebhookSecret)
+	secCT, secN, err := s.Cipher.EncryptAAD(conv.WebhookSecret, appAAD)
 	if err != nil {
 		s.internalError(c, err)
 		return
@@ -293,7 +296,8 @@ func (s *Server) appForRow(row store.GitHubApp) (*github.App, error) {
 	if app, ok := s.ghApps[row.ID]; ok {
 		return app, nil
 	}
-	pemData, err := s.Cipher.Decrypt(row.PEMCiphertext, row.PEMNonce)
+	pemData, err := s.Cipher.DecryptAAD(row.PEMCiphertext, row.PEMNonce,
+		fmt.Sprintf("ghapp|%s|%s", row.OrgID, row.Slug))
 	if err != nil {
 		return nil, err
 	}
@@ -327,7 +331,8 @@ func (s *Server) webhookSecrets(ctx context.Context) []webhookSecret {
 		return out
 	}
 	for _, r := range rows {
-		if sec, err := s.Cipher.Decrypt(r.SecretCiphertext, r.SecretNonce); err == nil && len(sec) > 0 {
+		if sec, err := s.Cipher.DecryptAAD(r.SecretCiphertext, r.SecretNonce,
+			fmt.Sprintf("ghapp|%s|%s", r.OrgID, r.Slug)); err == nil && len(sec) > 0 {
 			out = append(out, webhookSecret{value: sec, orgID: r.OrgID})
 		}
 	}

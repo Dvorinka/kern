@@ -223,7 +223,7 @@ func (e *executor) runStepBody(ctx context.Context, step StepSpec) (string, int,
 		return "failure", 1, fmt.Errorf("write step env file")
 	}
 
-	pump := newLogPump(e.c, e.jobID, step.Number, e.logMask, &e.ann)
+	pump := newLogPump(e.c, e.jobID, step.Number, maskStream(e.logMask), &e.ann)
 	defer pump.close()
 	go e.watchSilence(stepCtx, step, pump)
 	if hdr := runStepHeader(step); hdr != "" {
@@ -710,8 +710,9 @@ type logPump struct {
 	jobID string
 	step  int
 	// mask covers credentials the server-side masker cannot know (the
-	// per-run clone and GITHUB_TOKENs). Nil means passthrough.
-	mask *secrets.Masker
+	// per-run clone, GITHUB_TOKEN and cache tokens). Nil means passthrough.
+	// It is a Stream so a secret split across flushes stays masked (#368).
+	mask *secrets.Stream
 	// anns collects ::error::/::warning:: workflow commands seen on this
 	// step's streams; nil disables parsing.
 	anns *annotationSink
@@ -731,7 +732,15 @@ const (
 	logFlushInterval = time.Second
 )
 
-func newLogPump(c *client, jobID string, step int, mask *secrets.Masker, anns *annotationSink) *logPump {
+// maskStream wraps the executor's shared masker in a per-pump stream.
+func maskStream(m *secrets.Masker) *secrets.Stream {
+	if m == nil {
+		return nil
+	}
+	return m.NewStream()
+}
+
+func newLogPump(c *client, jobID string, step int, mask *secrets.Stream, anns *annotationSink) *logPump {
 	p := &logPump{c: c, jobID: jobID, step: step, mask: mask, anns: anns, stop: make(chan struct{})}
 	p.closed.Add(1)
 	go func() {
@@ -766,8 +775,29 @@ func (p *logPump) writeQuiet(line []byte) {
 
 func (p *logPump) append(line []byte) {
 	if p.mask != nil {
-		line = p.mask.MaskBytes(line)
+		// ::add-mask:: registers a job-emitted value before this line is
+		// masked, so the command's own payload and later echoes are hidden
+		// (GitHub workflow-command parity, #368).
+		if v, ok := addMaskValue(line); ok {
+			p.mask.Add(v)
+		}
+		line = p.mask.Write(line)
 	}
+	p.push(line)
+}
+
+// addMaskValue extracts the payload of a ::add-mask:: workflow command.
+func addMaskValue(line []byte) (string, bool) {
+	s := strings.TrimSuffix(string(line), "\n")
+	s = strings.TrimSuffix(s, "\r")
+	if !strings.HasPrefix(s, "::add-mask::") {
+		return "", false
+	}
+	v := strings.TrimPrefix(s, "::add-mask::")
+	return v, v != ""
+}
+
+func (p *logPump) push(line []byte) {
 	if p.anns != nil {
 		if a := parseAnnotation(line); a != nil {
 			p.anns.add(*a)
@@ -819,6 +849,12 @@ func (p *logPump) tailCopy() string {
 func (p *logPump) close() {
 	close(p.stop)
 	p.closed.Wait()
+	// Release any secret-prefix tail the stream held back, then flush.
+	if p.mask != nil {
+		if tail := p.mask.Flush(); len(tail) > 0 {
+			p.push(tail)
+		}
+	}
 	p.flush()
 }
 

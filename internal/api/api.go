@@ -50,6 +50,11 @@ type Server struct {
 	geoSelfMu   sync.Mutex               // serializes the control-plane self-lookup
 	metrics     *kernMetrics
 	ghCache     *ghCacheState
+	// logMasks holds a chunked masking stream per "jobID/stepN" so a secret
+	// split across log POSTs cannot leak; claimMasks holds the clone,
+	// GitHub and cache tokens minted at claim so they mask like secrets.
+	logMasks   sync.Map
+	claimMasks sync.Map
 }
 
 // ghAppState is a pending GitHub App manifest conversion: the nonce the

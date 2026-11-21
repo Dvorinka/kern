@@ -688,17 +688,21 @@ func rerunSeed(jobs []rerunJob, keys []string) map[uuid.UUID]bool {
 // and flips the run back to 'in_progress'. keys empty means "everything that
 // did not succeed" (gh rerun --failed); otherwise the named job keys plus
 // their dependents (gh rerun --job). Returns the number of jobs reset.
-func (s *Store) RerunJobs(ctx context.Context, runID uuid.UUID, keys []string) (int, error) {
+func (s *Store) RerunJobs(ctx context.Context, runID uuid.UUID, keys []string, dispatchTokenID uuid.UUID) (int, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
 
+	// The rerun is a fresh dispatch by the caller: restamp the run's token
+	// so the claim query charges the caller's max_concurrent_jobs, not the
+	// original dispatcher's (#368).
 	tag, err := tx.Exec(ctx, `
 		UPDATE workflow_runs SET status = 'in_progress', conclusion = '',
-			completed_at = NULL, started_at = COALESCE(started_at, now())
-		WHERE id = $1 AND status IN ('completed', 'cancelled')`, runID)
+			completed_at = NULL, started_at = COALESCE(started_at, now()),
+			dispatch_token_id = NULLIF($2, '00000000-0000-0000-0000-000000000000'::uuid)
+		WHERE id = $1 AND status IN ('completed', 'cancelled')`, runID, dispatchTokenID)
 	if err != nil {
 		return 0, err
 	}
