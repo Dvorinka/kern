@@ -173,6 +173,23 @@ func (s *Server) postExecStdin(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+// cancelExec marks a pending or running exec session cancelled so the runner
+// kills the remote docker exec when the client disconnects (e.g. Ctrl-C).
+func (s *Server) cancelExec(c *gin.Context) {
+	ex, ok := s.execForUser(c)
+	if !ok {
+		return
+	}
+	if err := s.Store.CancelExec(c.Request.Context(), ex.ID); err != nil {
+		s.internalError(c, err)
+		return
+	}
+	if user, ok := currentUser(c); ok {
+		s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "exec.cancel", ex.ID.String())
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
 // runnerExec resolves an exec request for the runner-facing routes and
 // verifies the exec's job is still leased to this runner.
 func (s *Server) runnerExec(c *gin.Context) (store.ExecRequest, store.Job, store.Runner, bool) {
@@ -269,9 +286,10 @@ func (s *Server) execStdinFeed(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"data":   base64.StdEncoding.EncodeToString(chunk),
-		"size":   size,
-		"closed": ex.StdinClosed,
+		"data":      base64.StdEncoding.EncodeToString(chunk),
+		"size":      size,
+		"closed":    ex.StdinClosed,
+		"cancelled": ex.State == "cancelled",
 	})
 }
 

@@ -275,6 +275,7 @@ func (s *Server) buildRouter() *gin.Engine {
 		admin.POST("/jobs/:id/exec", s.createExec)
 		auth.GET("/exec/:id", s.getExec)
 		admin.POST("/exec/:id/stdin", s.postExecStdin)
+		admin.DELETE("/exec/:id", s.cancelExec)
 
 		auth.GET("/secrets", s.listSecrets)
 		admin.PUT("/secrets/:name", s.putSecret)

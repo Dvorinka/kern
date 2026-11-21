@@ -588,7 +588,7 @@ func (e *executor) imageUserHome(ctx context.Context) string {
 
 // startContainer creates and starts the idle job container.
 func (e *executor) startContainer(ctx context.Context) error {
-	if e.cfg.Concurrency <= 1 {
+	if !e.cfg.Local && e.cfg.Concurrency <= 1 {
 		e.preJobContainers = containerIDs(ctx)
 	}
 	workRoot := e.workRoot()
@@ -754,7 +754,7 @@ func (e *executor) startContainer(ctx context.Context) error {
 		// workspace so client paths land on the right host path at any
 		// concurrency. The legacy /github/workspace link stays for jobs
 		// still on the shared path.
-		if dirExists("/github") {
+		if !e.cfg.Local && dirExists("/github") {
 			_ = os.Remove("/github/workspace")
 			_ = os.Symlink(filepath.Join(e.workRoot(), "workspace"), "/github/workspace")
 			wsLinks := filepath.Join("/github", "workspaces")
@@ -1165,12 +1165,14 @@ func (e *executor) cleanup() {
 	if !e.host {
 		_ = exec.CommandContext(ctx, "docker", "rm", "-f", e.container).Run()
 		e.stopServices(ctx)
-		e.reapOrphanContainers(ctx)
+		if !e.cfg.Local {
+			e.reapOrphanContainers(ctx)
+		}
 	} else if len(e.claim.Job.Services) > 0 {
 		e.stopServices(ctx)
 	}
 	_ = os.RemoveAll(e.workRoot())
-	if !e.host && e.privileged() && dirExists("/github") {
+	if !e.cfg.Local && !e.host && e.privileged() && dirExists("/github") {
 		_ = os.Remove(filepath.Join("/github", "workspaces", sanitizeID(e.claim.Job.ID)))
 	}
 }

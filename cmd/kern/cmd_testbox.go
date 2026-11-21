@@ -21,7 +21,7 @@ import (
 // changes included), and drive the real runner executor against an
 // in-process control-plane shim — no server, no fleet, no push.
 func (c *cli) cmdTestbox(ctx context.Context, args []string) error {
-	opts, pos := parseFlags(args, "job", "dir", "env-file")
+	opts, pos := parseFlagsEx(args, []string{"privileged"}, "job", "dir", "env-file", "memory", "cpus", "event", "ref")
 	dir, err := filepath.Abs(first(opts["dir"], "."))
 	if err != nil {
 		return err
@@ -74,18 +74,21 @@ func (c *cli) cmdTestbox(ctx context.Context, args []string) error {
 	defer os.RemoveAll(workRoot)
 	artifactsDir := filepath.Join(dir, ".kern-testbox", "artifacts")
 
-	claim := testboxClaim(res, job, dir)
+	claim := testboxClaim(res, job, dir, opts)
 	logger, _ := zap.NewDevelopment()
 	status, err := runner.RunLocalJob(ctx, runner.Config{
-		WorkRoot: workRoot,
-		Executor: "docker",
+		WorkRoot:  workRoot,
+		Executor:  "docker",
+		JobMemory: opts["memory"],
+		JobCPUs:   opts["cpus"],
+		Local:     true,
 	}, claim, secrets, map[string]string{}, logger, os.Stdout, artifactsDir, bundle)
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "testbox: job %s → %s\n", job.Key, status)
 	if status != "success" {
-		os.Exit(1)
+		return exitCodeError{code: 1}
 	}
 	return nil
 }
@@ -142,8 +145,8 @@ func pickTestboxJob(jobs []workflows.JobPlan, key string) (workflows.JobPlan, er
 
 // testboxClaim turns a compiled JobPlan into a runner claim. The bundle ref
 // sends the executor down the /source download path, which the local shim
-// serves from the tarball.
-func testboxClaim(res workflows.Result, job workflows.JobPlan, dir string) *runner.Claim {
+// serves from the tarball. Runs unprivileged by default unless --privileged is set.
+func testboxClaim(res workflows.Result, job workflows.JobPlan, dir string, opts map[string]string) *runner.Claim {
 	claim := &runner.Claim{}
 	runID, jobID := uuid.NewString(), uuid.NewString()
 	claim.Job.ID, claim.Job.RunID = jobID, runID
@@ -167,12 +170,15 @@ func testboxClaim(res workflows.Result, job workflows.JobPlan, dir string) *runn
 	_ = json.Unmarshal(steps, &claim.Steps)
 
 	claim.Run.ID = runID
-	claim.Run.Event = "testbox"
-	claim.Run.Ref = "refs/heads/testbox"
+	claim.Run.Event = first(opts["event"], "push")
+	claim.Run.Ref = first(opts["ref"], gitCurrentRef(dir), "refs/heads/main")
 	claim.Run.Actor = "testbox"
 	claim.Run.Workflow = res.Name
 	claim.Run.ProjectSlug = "testbox"
-	claim.Run.TrustLevel = "trusted"
+	claim.Run.TrustLevel = "untrusted"
+	if opts["privileged"] == "true" {
+		claim.Run.TrustLevel = "trusted"
+	}
 	claim.Run.BundleRef = "local"
 	if sha, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output(); err == nil {
 		claim.Run.SHA = strings.TrimSpace(string(sha))
@@ -180,9 +186,17 @@ func testboxClaim(res workflows.Result, job workflows.JobPlan, dir string) *runn
 	return claim
 }
 
+func gitCurrentRef(dir string) string {
+	out, err := exec.Command("git", "-C", dir, "symbolic-ref", "HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // loadEnvFile reads KEY=VALUE lines (blank lines and # comments skipped)
-// into secrets — the testbox answer to repo secrets. Single quotes do not
-// survive; the file is read verbatim.
+// into secrets — the testbox answer to repo secrets. Supports optional
+// leading `export ` and strips matching surrounding single/double quotes.
 func loadEnvFile(path string, into map[string]string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -193,9 +207,16 @@ func loadEnvFile(path string, into map[string]string) error {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+		if strings.HasPrefix(line, "export ") || strings.HasPrefix(line, "export\t") {
+			line = strings.TrimSpace(strings.TrimPrefix(line, "export"))
+		}
 		k, v, ok := strings.Cut(line, "=")
+		k = strings.TrimSpace(k)
 		if !ok || k == "" {
 			return fmt.Errorf("%s:%d: not a KEY=VALUE line", path, i+1)
+		}
+		if len(v) >= 2 && ((v[0] == '"' && v[len(v)-1] == '"') || (v[0] == '\'' && v[len(v)-1] == '\'')) {
+			v = v[1 : len(v)-1]
 		}
 		into[k] = v
 	}
