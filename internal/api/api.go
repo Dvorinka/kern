@@ -265,6 +265,10 @@ func (s *Server) buildRouter() *gin.Engine {
 		auth.GET("/instance/update", s.updateCheck)
 		auth.GET("/metrics", s.prometheus)
 		auth.POST("/mcp", s.mcp)
+		// Streamable-HTTP mounts: GET would open SSE (stateless server — 405),
+		// DELETE tears down a session that is never minted.
+		auth.GET("/mcp", s.mcpMethodNotAllowed)
+		auth.DELETE("/mcp", s.mcpMethodNotAllowed)
 		auth.GET("/projects/:project/settings", s.getProjectSettings)
 		admin.PUT("/projects/:project/settings", s.putProjectSettings)
 		auth.GET("/projects/:project/icon", s.projectIcon)
@@ -394,7 +398,8 @@ func (s *Server) cors() gin.HandlerFunc {
 			c.Header("Access-Control-Allow-Origin", origin)
 			c.Header("Access-Control-Allow-Credentials", "true")
 			c.Header("Vary", "Origin")
-			c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
+			c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Mcp-Session-Id, MCP-Protocol-Version")
+			c.Header("Access-Control-Expose-Headers", "Mcp-Session-Id")
 			c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		}
 		if c.Request.Method == http.MethodOptions {

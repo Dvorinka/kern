@@ -10,10 +10,14 @@ package api
 // `kern login`.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"path"
 	"strings"
 
@@ -21,6 +25,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/dvorinka/kern/internal/store"
+	"github.com/dvorinka/kern/internal/version"
+	"github.com/dvorinka/kern/internal/workflows"
 )
 
 const mcpProtocolVersion = "2025-06-18"
@@ -53,39 +59,133 @@ func rpcErr(id json.RawMessage, code int, msg string) rpcResponse {
 }
 
 // mcpTool is one callable tool: JSON Schema for inputs plus the implementation.
+// Annotations let agent clients auto-approve safe calls (readOnlyHint) and
+// flag irreversible ones (destructiveHint) per the 2025-06-18 spec.
 type mcpTool struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
 	InputSchema map[string]any `json:"inputSchema"`
+	Annotations map[string]any `json:"annotations,omitempty"`
 }
 
+// mcpAnn builds a ToolAnnotations value. Kern's surface is closed — every
+// tool stays inside this deployment (openWorldHint false).
+func mcpAnn(readOnly, destructive, idempotent bool) map[string]any {
+	return map[string]any{
+		"readOnlyHint":    readOnly,
+		"destructiveHint": destructive,
+		"idempotentHint":  idempotent,
+		"openWorldHint":   false,
+	}
+}
+
+// mcpVersions the server negotiates. Clients pin one after initialize via
+// the MCP-Protocol-Version header.
+var mcpVersions = map[string]bool{"2025-03-26": true, "2025-06-18": true}
+
 func (s *Server) mcp(c *gin.Context) {
-	var req rpcRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusOK, rpcErr(nil, -32700, "parse error"))
+	// Origin must target this host when present — the streamable-HTTP spec
+	// requires it to stop browser pages on other origins (DNS rebinding)
+	// from driving the endpoint. CLI clients send no Origin.
+	if origin := c.GetHeader("Origin"); origin != "" {
+		u, err := url.Parse(origin)
+		if err != nil || !strings.EqualFold(u.Host, c.Request.Host) {
+			fail(c, http.StatusForbidden, "origin_denied", "untrusted Origin")
+			return
+		}
+	}
+	if v := c.GetHeader("MCP-Protocol-Version"); v != "" && !mcpVersions[v] {
+		fail(c, http.StatusBadRequest, "mcp_version", "unsupported MCP-Protocol-Version")
 		return
 	}
-	// Notifications carry no id — the spec wants 202 with no body.
-	if len(req.ID) == 0 {
+	body, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, 4<<20))
+	if err != nil {
+		c.JSON(http.StatusRequestEntityTooLarge, rpcErr(nil, -32700, "request too large"))
+		return
+	}
+	trim := bytes.TrimSpace(body)
+	if len(trim) == 0 {
+		c.JSON(http.StatusBadRequest, rpcErr(nil, -32600, "invalid request"))
+		return
+	}
+	var reqs []rpcRequest
+	batch := trim[0] == '['
+	if batch {
+		if err := json.Unmarshal(trim, &reqs); err != nil || len(reqs) == 0 {
+			c.JSON(http.StatusBadRequest, rpcErr(nil, -32700, "parse error"))
+			return
+		}
+	} else {
+		var req rpcRequest
+		if err := json.Unmarshal(trim, &req); err != nil {
+			c.JSON(http.StatusBadRequest, rpcErr(nil, -32700, "parse error"))
+			return
+		}
+		reqs = []rpcRequest{req}
+	}
+	var resps []rpcResponse
+	for _, req := range reqs {
+		if r := s.mcpHandle(c, req); r != nil {
+			resps = append(resps, *r)
+		}
+	}
+	// Every message was a notification — the spec wants 202 with no body.
+	if len(resps) == 0 {
 		c.Status(http.StatusAccepted)
 		return
 	}
+	if batch {
+		c.JSON(http.StatusOK, resps)
+		return
+	}
+	c.JSON(http.StatusOK, resps[0])
+}
+
+// mcpHandle executes one JSON-RPC message. A nil result means the message
+// was a notification and produces no response body.
+func (s *Server) mcpHandle(c *gin.Context, req rpcRequest) *rpcResponse {
+	// Notifications carry no id and get no response.
+	if len(req.ID) == 0 {
+		return nil
+	}
+	if req.JSONRPC != "2.0" {
+		r := rpcErr(req.ID, -32600, `invalid request: jsonrpc must be "2.0"`)
+		return &r
+	}
+	var resp rpcResponse
 	switch req.Method {
 	case "initialize":
-		c.JSON(http.StatusOK, rpcOK(req.ID, map[string]any{
+		resp = rpcOK(req.ID, map[string]any{
 			"protocolVersion": mcpProtocolVersion,
-			"serverInfo":      map[string]any{"name": "kern", "version": "1"},
-			"capabilities":    map[string]any{"tools": map[string]any{}},
-		}))
+			"serverInfo":      map[string]any{"name": "kern", "version": version.Version},
+			"capabilities": map[string]any{
+				"tools":     map[string]any{},
+				"resources": map[string]any{},
+				"prompts":   map[string]any{},
+			},
+		})
 	case "ping":
-		c.JSON(http.StatusOK, rpcOK(req.ID, map[string]any{}))
+		resp = rpcOK(req.ID, map[string]any{})
 	case "tools/list":
-		c.JSON(http.StatusOK, rpcOK(req.ID, map[string]any{"tools": mcpTools()}))
+		resp = rpcOK(req.ID, map[string]any{"tools": mcpTools()})
+	case "resources/list":
+		resp = rpcOK(req.ID, map[string]any{"resources": []any{}})
+	case "prompts/list":
+		resp = rpcOK(req.ID, map[string]any{"prompts": []any{}})
 	case "tools/call":
-		s.mcpCall(c, req)
+		return s.mcpCall(c, req)
 	default:
-		c.JSON(http.StatusOK, rpcErr(req.ID, -32601, "method not found"))
+		resp = rpcErr(req.ID, -32601, "method not found")
 	}
+	return &resp
+}
+
+// mcpMethodNotAllowed answers GET and DELETE on /mcp. GET would open an SSE
+// stream under the streamable transport — this server is stateless and
+// offers none, so 405 is the spec-compliant answer. DELETE tears down a
+// session this server never mints.
+func (s *Server) mcpMethodNotAllowed(c *gin.Context) {
+	c.AbortWithStatus(http.StatusMethodNotAllowed)
 }
 
 func props(defs map[string]map[string]any) map[string]any {
@@ -98,8 +198,10 @@ func num(desc string) map[string]any { return map[string]any{"type": "integer", 
 func mcpTools() []mcpTool {
 	return []mcpTool{
 		{Name: "kern_list_projects", Description: "List CI projects in the org.",
+			Annotations: mcpAnn(true, false, true),
 			InputSchema: props(map[string]map[string]any{})},
 		{Name: "kern_list_runs", Description: "List workflow runs, newest first.",
+			Annotations: mcpAnn(true, false, true),
 			InputSchema: func() map[string]any {
 				p := props(map[string]map[string]any{
 					"project": str("project slug to filter by"),
@@ -109,12 +211,14 @@ func mcpTools() []mcpTool {
 				return p
 			}()},
 		{Name: "kern_get_run", Description: "Run detail with every job and its steps (status, conclusion, diagnosis).",
+			Annotations: mcpAnn(true, false, true),
 			InputSchema: func() map[string]any {
 				p := props(map[string]map[string]any{"run_id": str("run UUID")})
 				p["required"] = []string{"run_id"}
 				return p
 			}()},
 		{Name: "kern_step_log", Description: "Step log bytes. Default: tail of the log; pass offset to page forward instead.",
+			Annotations: mcpAnn(true, false, true),
 			InputSchema: func() map[string]any {
 				p := props(map[string]map[string]any{
 					"job_id": str("job UUID"),
@@ -126,8 +230,10 @@ func mcpTools() []mcpTool {
 				return p
 			}()},
 		{Name: "kern_list_runners", Description: "Fleet runners with status, labels and active jobs.",
+			Annotations: mcpAnn(true, false, true),
 			InputSchema: props(map[string]map[string]any{})},
 		{Name: "kern_set_runner_drain", Description: "Drain or undrain a runner (id or name). Draining runners take no new jobs.",
+			Annotations: mcpAnn(false, false, true),
 			InputSchema: func() map[string]any {
 				p := props(map[string]map[string]any{
 					"runner":   str("runner UUID or name"),
@@ -137,12 +243,14 @@ func mcpTools() []mcpTool {
 				return p
 			}()},
 		{Name: "kern_get_project", Description: "Project detail with its workflows.",
+			Annotations: mcpAnn(true, false, true),
 			InputSchema: func() map[string]any {
 				p := props(map[string]map[string]any{"project": str("project slug")})
 				p["required"] = []string{"project"}
 				return p
 			}()},
 		{Name: "kern_trigger_run", Description: "Start a workflow run (workflow_dispatch by default).",
+			Annotations: mcpAnn(false, false, false),
 			InputSchema: func() map[string]any {
 				p := props(map[string]map[string]any{
 					"project":  str("project slug"),
@@ -155,24 +263,32 @@ func mcpTools() []mcpTool {
 				p["required"] = []string{"project", "workflow"}
 				return p
 			}()},
-		{Name: "kern_rerun_run", Description: "Re-run a completed or failed run from its original inputs.",
+		{Name: "kern_rerun_run", Description: "Re-run a completed or failed run from its original inputs. failed=true or jobs=[name] re-run jobs in place instead of seeding a fresh run.",
+			Annotations: mcpAnn(false, false, false),
 			InputSchema: func() map[string]any {
-				p := props(map[string]map[string]any{"run_id": str("run UUID")})
+				p := props(map[string]map[string]any{
+					"run_id": str("run UUID"),
+					"failed": map[string]any{"type": "boolean", "description": "re-run only the failed jobs in place"},
+					"jobs":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "job names to re-run in place"},
+				})
 				p["required"] = []string{"run_id"}
 				return p
 			}()},
 		{Name: "kern_list_secrets", Description: "Secret names and scopes for the org — never values. Optionally filtered by project slug and/or environment name.",
+			Annotations: mcpAnn(true, false, true),
 			InputSchema: props(map[string]map[string]any{
 				"project":     str("project slug"),
 				"environment": str("environment name (requires project)"),
 			})},
 		{Name: "kern_approve_run", Description: "Release a fork-gated run (awaiting_approval -> queued).",
+			Annotations: mcpAnn(false, false, true),
 			InputSchema: func() map[string]any {
 				p := props(map[string]map[string]any{"run_id": str("run UUID")})
 				p["required"] = []string{"run_id"}
 				return p
 			}()},
 		{Name: "kern_cancel_run", Description: "Cancel a queued or in-progress run.",
+			Annotations: mcpAnn(false, true, true),
 			InputSchema: func() map[string]any {
 				p := props(map[string]map[string]any{"run_id": str("run UUID")})
 				p["required"] = []string{"run_id"}
@@ -198,14 +314,8 @@ func mcpJSON(v any) (map[string]any, error) {
 	}}, nil
 }
 
-func mcpArgString(params json.RawMessage, key string) (string, bool) {
-	var call struct {
-		Arguments map[string]json.RawMessage `json:"arguments"`
-	}
-	if json.Unmarshal(params, &call) != nil || call.Arguments == nil {
-		return "", false
-	}
-	raw, ok := call.Arguments[key]
+func mcpArgString(args map[string]json.RawMessage, key string) (string, bool) {
+	raw, ok := args[key]
 	if !ok {
 		return "", false
 	}
@@ -220,14 +330,8 @@ func mcpArgString(params json.RawMessage, key string) (string, bool) {
 	return "", false
 }
 
-func mcpArgInt(params json.RawMessage, key string, def int) int {
-	var call struct {
-		Arguments map[string]json.RawMessage `json:"arguments"`
-	}
-	if json.Unmarshal(params, &call) != nil {
-		return def
-	}
-	raw, ok := call.Arguments[key]
+func mcpArgInt(args map[string]json.RawMessage, key string, def int) int {
+	raw, ok := args[key]
 	if !ok {
 		return def
 	}
@@ -243,17 +347,23 @@ func mcpArgInt(params json.RawMessage, key string, def int) int {
 	return n
 }
 
-func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
+func (s *Server) mcpCall(c *gin.Context, req rpcRequest) *rpcResponse {
 	var call struct {
-		Name      string          `json:"name"`
-		Arguments json.RawMessage `json:"arguments"`
+		Name      string                     `json:"name"`
+		Arguments map[string]json.RawMessage `json:"arguments"`
 	}
 	if err := json.Unmarshal(req.Params, &call); err != nil {
-		c.JSON(http.StatusOK, rpcErr(req.ID, -32602, "invalid params"))
-		return
+		r := rpcErr(req.ID, -32602, "invalid params")
+		return &r
 	}
-	// Repack arguments under the key helpers expect.
-	params := req.Params
+	// Project-scoped tokens reach MCP, but only inside their grant.
+	if gerr := s.mcpToolAllowed(c, call.Name, call.Arguments); gerr != nil {
+		r := rpcOK(req.ID, map[string]any{
+			"isError": true,
+			"content": []map[string]any{{"type": "text", "text": gerr.Error()}},
+		})
+		return &r
+	}
 	user, _ := currentUser(c)
 	ctx := c.Request.Context()
 	var out any
@@ -262,10 +372,19 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 	case "kern_list_projects":
 		var projects []store.Project
 		projects, err = s.Store.Projects(ctx, user.OrgID)
+		if granted := tokenProjects(c); err == nil && len(granted) > 0 {
+			filtered := projects[:0]
+			for _, p := range projects {
+				if grantHas(granted, p.Slug) {
+					filtered = append(filtered, p)
+				}
+			}
+			projects = filtered
+		}
 		out = projects
 	case "kern_list_runs":
-		f := store.RunFilter{Status: mcpArgStringOr(params, "status"), Limit: mcpArgInt(params, "limit", 20)}
-		if slug := mcpArgStringOr(params, "project"); slug != "" {
+		f := store.RunFilter{Status: mcpArgStringOr(call.Arguments, "status"), Limit: mcpArgInt(call.Arguments, "limit", 20)}
+		if slug := mcpArgStringOr(call.Arguments, "project"); slug != "" {
 			var p store.Project
 			p, err = s.Store.Project(ctx, user.OrgID, slug)
 			if err == nil {
@@ -278,7 +397,7 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			out = runs
 		}
 	case "kern_get_run":
-		id, perr := uuid.Parse(mcpArgStringOr(params, "run_id"))
+		id, perr := uuid.Parse(mcpArgStringOr(call.Arguments, "run_id"))
 		if perr != nil {
 			err = fmt.Errorf("run_id must be a UUID")
 			break
@@ -294,28 +413,56 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			}
 			views := []jobView{}
 			for _, j := range jobs {
-				steps, _ := s.Store.StepsForJob(ctx, j.ID)
+				var steps []store.Step
+				steps, err = s.Store.StepsForJob(ctx, j.ID)
+				if err != nil {
+					break
+				}
 				views = append(views, jobView{Job: j, Steps: steps})
 			}
-			out = map[string]any{"run": run, "jobs": views}
+			if err == nil {
+				out = map[string]any{"run": run, "jobs": views}
+			}
 		}
 	case "kern_step_log":
-		jobID, perr := uuid.Parse(mcpArgStringOr(params, "job_id"))
+		jobID, perr := uuid.Parse(mcpArgStringOr(call.Arguments, "job_id"))
 		if perr != nil {
 			err = fmt.Errorf("job_id must be a UUID")
 			break
 		}
-		n := mcpArgInt(params, "step", 0)
-		tail := mcpArgInt(params, "tail", 8192)
+		n := mcpArgInt(call.Arguments, "step", 0)
+		tail := mcpArgInt(call.Arguments, "tail", 8192)
+		if tail <= 0 {
+			tail = 8192
+		}
 		var ref string
 		var size int64
 		ref, size, err = s.Store.StepLogRef(ctx, jobID, n)
 		if err == nil && ref == "" {
-			err = fmt.Errorf("step has no log")
+			// Skipped/cancelled steps never posted a log — report the
+			// conclusion as the log body instead of an isError result.
+			var steps []store.Step
+			steps, err = s.Store.StepsForJob(ctx, jobID)
+			if err != nil {
+				break
+			}
+			conclusion := ""
+			for _, st := range steps {
+				if st.Number == n {
+					conclusion = st.Conclusion
+				}
+			}
+			if conclusion == "skipped" || conclusion == "cancelled" {
+				text := "KERN: step " + conclusion + "\n"
+				out = map[string]any{"step": n, "offset": 0, "bytes": len(text),
+					"total_size": len(text), "next_offset": 0, "log": text}
+			} else {
+				err = fmt.Errorf("step has no log")
+			}
 		}
-		if err == nil {
+		if err == nil && out == nil {
 			offset := int64(0)
-			if o := mcpArgInt(params, "offset", -1); o >= 0 {
+			if o := mcpArgInt(call.Arguments, "offset", -1); o >= 0 {
 				offset = int64(o)
 			} else if size > int64(tail) {
 				offset = size - int64(tail)
@@ -323,7 +470,9 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			var data []byte
 			data, _, err = s.Blobs.ReadFrom(ref, offset, tail)
 			if err == nil {
-				out = map[string]any{"step": n, "offset": offset, "bytes": len(data), "log": string(data)}
+				out = map[string]any{"step": n, "offset": offset, "bytes": len(data),
+					"total_size": size, "next_offset": offset + int64(len(data)),
+					"log": string(data)}
 			}
 		}
 	case "kern_list_runners":
@@ -336,13 +485,19 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			}
 			views := []runnerView{}
 			for _, r := range runners {
-				jobs, _ := s.Store.RunnerActiveJobs(ctx, r.ID)
+				var jobs []store.Job
+				jobs, err = s.Store.RunnerActiveJobs(ctx, r.ID)
+				if err != nil {
+					break
+				}
 				views = append(views, runnerView{Runner: r, ActiveJobs: jobs})
 			}
-			out = views
+			if err == nil {
+				out = views
+			}
 		}
 	case "kern_get_project":
-		slug := mcpArgStringOr(params, "project")
+		slug := mcpArgStringOr(call.Arguments, "project")
 		if slug == "" {
 			err = fmt.Errorf("project is required")
 			break
@@ -362,8 +517,8 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			err = fmt.Errorf("token requires the write scope")
 			break
 		}
-		slug := mcpArgStringOr(params, "project")
-		want := mcpArgStringOr(params, "workflow")
+		slug := mcpArgStringOr(call.Arguments, "project")
+		want := mcpArgStringOr(call.Arguments, "workflow")
 		if slug == "" || want == "" {
 			err = fmt.Errorf("project and workflow are required")
 			break
@@ -378,25 +533,13 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 		if err != nil {
 			break
 		}
-		event := mcpArgStringOr(params, "event")
+		event := mcpArgStringOr(call.Arguments, "event")
 		if event == "" {
 			event = "workflow_dispatch"
 		}
-		ref := mcpArgStringOr(params, "ref")
+		ref := mcpArgStringOr(call.Arguments, "ref")
 		if ref == "" {
 			ref = "refs/heads/" + p.DefaultBranch
-		}
-		trust := mcpArgStringOr(params, "trust_level")
-		if trust == "" {
-			trust = "trusted"
-		}
-		validTrust := map[string]bool{
-			"trusted": true, "protected": true, "pull_request": true,
-			"fork": true, "deployment": true,
-		}
-		if !validTrust[trust] {
-			err = fmt.Errorf("unknown trust level %q", trust)
-			break
 		}
 		var version store.WorkflowVersion
 		wf, version, err = s.Store.LatestWorkflowVersion(ctx, p.ID, wf.Path)
@@ -408,7 +551,7 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			break
 		}
 		var inputs map[string]any
-		if raw, ok := mcpArgRaw(params, "inputs"); ok {
+		if raw, ok := mcpArgRaw(call.Arguments, "inputs"); ok {
 			if uerr := json.Unmarshal(raw, &inputs); uerr != nil {
 				err = fmt.Errorf("inputs must be a JSON object")
 				break
@@ -420,6 +563,43 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			"local_path":     p.LocalPath,
 			"default_branch": p.DefaultBranch,
 		}
+		// HTTP parity: resolve the ref's current head and compile the
+		// workflow as it exists there — the stored version goes stale
+		// between syncs.
+		sha := s.resolveTriggerSHA(ctx, p, ref, mcpArgStringOr(call.Arguments, "sha"))
+		if p.RepoFullName != "" && sha != "" {
+			if v, _, verr := s.workflowAtSHA(c, p.RepoFullName, p.ID, wf, sha); verr == nil {
+				version = v
+			}
+		}
+		// A manual dispatch against a PR ref carries the same pull_request
+		// payload fields the webhook path synthesizes.
+		if (event == "pull_request" || event == "pull_request_target") && p.RepoFullName != "" {
+			if num, ok := prNumberFromRef(ref); ok {
+				if gh, gerr := s.githubClient(ctx, p.RepoFullName); gerr == nil {
+					if pr, perr := gh.PullRequest(ctx, p.RepoFullName, num); perr == nil {
+						source["pr_number"] = pr.Number
+						source["head_ref"] = pr.Head.Ref
+						source["head_sha"] = pr.Head.SHA
+						source["head_repo"] = pr.Head.RepoFullName
+						source["base_ref"] = pr.Base.Ref
+						source["base_sha"] = pr.Base.SHA
+					}
+				}
+			}
+		}
+		// Label-pool tokens may only dispatch workflows that fit their pool.
+		if labels := tokenLabels(c); len(labels) > 0 {
+			var plan workflows.Plan
+			if len(version.Parsed) == 0 || json.Unmarshal(version.Parsed, &plan) != nil {
+				err = fmt.Errorf("this token is limited to a runner pool and the workflow plan could not be checked")
+				break
+			}
+			if msg := runsOnDenial(labels, plan.Jobs); msg != "" {
+				err = fmt.Errorf("%s", msg)
+				break
+			}
+		}
 		var run store.Run
 		run, err = s.Orch.StartRun(ctx, store.CreateRunParams{
 			ProjectID:         p.ID,
@@ -427,9 +607,9 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			WorkflowVersionID: version.ID,
 			Event:             event,
 			Ref:               ref,
-			SHA:               firstNonEmpty(mcpArgStringOr(params, "sha"), version.CommitSHA),
+			SHA:               firstNonEmpty(sha, version.CommitSHA),
 			Actor:             user.Email,
-			TrustLevel:        trust,
+			TrustLevel:        "trusted",
 			Source:            source,
 			Inputs:            inputs,
 			DispatchTokenID:   dispatchTokenID(c),
@@ -444,7 +624,7 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			err = fmt.Errorf("token requires the write scope")
 			break
 		}
-		id, perr := uuid.Parse(mcpArgStringOr(params, "run_id"))
+		id, perr := uuid.Parse(mcpArgStringOr(call.Arguments, "run_id"))
 		if perr != nil {
 			err = fmt.Errorf("run_id must be a UUID")
 			break
@@ -452,6 +632,27 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 		orig, rerr := s.Store.Run(ctx, id)
 		if rerr != nil {
 			err = rerr
+			break
+		}
+		// failed=true or jobs=[name] re-run the finished run's jobs in
+		// place — gh rerun --failed semantics.
+		failed, _ := mcpArgBool(call.Arguments, "failed")
+		var jobNames []string
+		if raw, ok := mcpArgRaw(call.Arguments, "jobs"); ok {
+			_ = json.Unmarshal(raw, &jobNames)
+		}
+		if failed || len(jobNames) > 0 {
+			n, rjerr := s.Store.RerunJobs(ctx, orig.ID, jobNames)
+			if rjerr != nil {
+				err = rjerr
+				break
+			}
+			s.Store.Audit(ctx, user.OrgID, &user.ID, "run.rerun_jobs", orig.ID.String())
+			var run store.Run
+			run, err = s.Store.Run(ctx, orig.ID)
+			if err == nil {
+				out = map[string]any{"run": run, "jobs": n}
+			}
 			break
 		}
 		var source map[string]any
@@ -468,16 +669,22 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			Actor:             user.Email,
 			TrustLevel:        orig.TrustLevel,
 			Source:            source,
+			ConcurrencyGroup:  orig.ConcurrencyGroup,
 			DispatchTokenID:   dispatchTokenID(c),
 		})
 		if err == nil {
+			// Re-triggering a cancelled run retires the cancelled entry
+			// from the default lists; the row stays reachable by id.
+			if orig.Status == "cancelled" || orig.Conclusion == "cancelled" {
+				_, _ = s.Store.ClearRun(ctx, orig.ID)
+			}
 			s.Store.Audit(ctx, user.OrgID, &user.ID, "run.rerun", orig.ID.String())
 			out = run
 		}
 	case "kern_list_secrets":
 		// Names and scopes only — secret values never leave the store.
 		var projectID, envID *uuid.UUID
-		if slug := mcpArgStringOr(params, "project"); slug != "" {
+		if slug := mcpArgStringOr(call.Arguments, "project"); slug != "" {
 			p, perr := s.Store.Project(ctx, user.OrgID, slug)
 			if perr != nil {
 				err = perr
@@ -485,7 +692,7 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			}
 			projectID = &p.ID
 		}
-		if envName := mcpArgStringOr(params, "environment"); envName != "" {
+		if envName := mcpArgStringOr(call.Arguments, "environment"); envName != "" {
 			if projectID == nil {
 				err = fmt.Errorf("environment scope requires project")
 				break
@@ -512,8 +719,8 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			err = fmt.Errorf("requires the admin role")
 			break
 		}
-		name := mcpArgStringOr(params, "runner")
-		draining, dok := mcpArgBool(params, "draining")
+		name := mcpArgStringOr(call.Arguments, "runner")
+		draining, dok := mcpArgBool(call.Arguments, "draining")
 		if name == "" || !dok {
 			err = fmt.Errorf("runner and draining are required")
 			break
@@ -552,7 +759,7 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			err = fmt.Errorf("token requires the %s scope", need)
 			break
 		}
-		id, perr := uuid.Parse(mcpArgStringOr(params, "run_id"))
+		id, perr := uuid.Parse(mcpArgStringOr(call.Arguments, "run_id"))
 		if perr != nil {
 			err = fmt.Errorf("run_id must be a UUID")
 			break
@@ -576,19 +783,19 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			}
 		}
 	default:
-		c.JSON(http.StatusOK, rpcErr(req.ID, -32602, "unknown tool "+call.Name))
-		return
+		r := rpcErr(req.ID, -32602, "unknown tool "+call.Name)
+		return &r
 	}
 	if err != nil {
 		msg := err.Error()
-		if strings.Contains(msg, "no rows") {
+		if errors.Is(err, store.ErrNotFound) || strings.Contains(msg, "no rows") {
 			msg = "not found"
 		}
-		c.JSON(http.StatusOK, rpcOK(req.ID, map[string]any{
+		r := rpcOK(req.ID, map[string]any{
 			"isError": true,
 			"content": []map[string]any{{"type": "text", "text": msg}},
-		}))
-		return
+		})
+		return &r
 	}
 	var env map[string]any
 	if m, ok := out.(map[string]any); ok && m["content"] != nil {
@@ -596,32 +803,89 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 	} else {
 		env, err = mcpJSON(out)
 		if err != nil {
-			c.JSON(http.StatusOK, rpcErr(req.ID, -32603, "encode result"))
-			return
+			r := rpcErr(req.ID, -32603, "encode result")
+			return &r
 		}
 	}
-	c.JSON(http.StatusOK, rpcOK(req.ID, env))
+	r := rpcOK(req.ID, env)
+	return &r
 }
 
-func mcpArgStringOr(params json.RawMessage, key string) string {
-	s, _ := mcpArgString(params, key)
+// mcpToolAllowed confines a project-scoped token to its projects — the same
+// boundary constrainGrant draws on the REST surface. Unscoped tokens pass.
+func (s *Server) mcpToolAllowed(c *gin.Context, name string, args map[string]json.RawMessage) error {
+	granted := tokenProjects(c)
+	if len(granted) == 0 {
+		return nil
+	}
+	ctx := c.Request.Context()
+	runProjectSlug := func(runID uuid.UUID) (string, bool) {
+		run, err := s.Store.Run(ctx, runID)
+		if err != nil {
+			return "", false
+		}
+		p, err := s.Store.ProjectByID(ctx, run.ProjectID)
+		if err != nil {
+			return "", false
+		}
+		return p.Slug, true
+	}
+	runAllowed := func(key string) bool {
+		id, err := uuid.Parse(mcpArgStringOr(args, key))
+		if err != nil {
+			return false
+		}
+		slug, ok := runProjectSlug(id)
+		return ok && grantHas(granted, slug)
+	}
+	projectDenied := fmt.Errorf("project must be one of this token's projects")
+	switch name {
+	case "kern_list_projects":
+		// Result rows are filtered to granted slugs in the handler.
+	case "kern_list_runs", "kern_get_project", "kern_trigger_run":
+		if !grantHas(granted, mcpArgStringOr(args, "project")) {
+			return projectDenied
+		}
+	case "kern_get_run", "kern_rerun_run", "kern_approve_run", "kern_cancel_run":
+		if !runAllowed("run_id") {
+			return fmt.Errorf("run is outside this token's projects")
+		}
+	case "kern_step_log":
+		jobID, perr := uuid.Parse(mcpArgStringOr(args, "job_id"))
+		if perr != nil {
+			return fmt.Errorf("job_id must be a UUID")
+		}
+		job, jerr := s.Store.Job(ctx, jobID)
+		if jerr != nil {
+			return fmt.Errorf("job is outside this token's projects")
+		}
+		slug, ok := runProjectSlug(job.RunID)
+		if !ok || !grantHas(granted, slug) {
+			return fmt.Errorf("job is outside this token's projects")
+		}
+	case "kern_list_secrets":
+		if slug := mcpArgStringOr(args, "project"); slug == "" || !grantHas(granted, slug) {
+			return projectDenied
+		}
+	default:
+		return fmt.Errorf("tool %q is not available to project-scoped tokens", name)
+	}
+	return nil
+}
+
+func mcpArgStringOr(args map[string]json.RawMessage, key string) string {
+	s, _ := mcpArgString(args, key)
 	return s
 }
 
 // mcpArgRaw returns the raw JSON value of one tool argument.
-func mcpArgRaw(params json.RawMessage, key string) (json.RawMessage, bool) {
-	var call struct {
-		Arguments map[string]json.RawMessage `json:"arguments"`
-	}
-	if json.Unmarshal(params, &call) != nil || call.Arguments == nil {
-		return nil, false
-	}
-	raw, ok := call.Arguments[key]
+func mcpArgRaw(args map[string]json.RawMessage, key string) (json.RawMessage, bool) {
+	raw, ok := args[key]
 	return raw, ok
 }
 
-func mcpArgBool(params json.RawMessage, key string) (bool, bool) {
-	raw, ok := mcpArgRaw(params, key)
+func mcpArgBool(args map[string]json.RawMessage, key string) (bool, bool) {
+	raw, ok := mcpArgRaw(args, key)
 	if !ok {
 		return false, false
 	}

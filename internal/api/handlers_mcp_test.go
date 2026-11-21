@@ -14,22 +14,29 @@ import (
 
 func TestMCPArgHelpers(t *testing.T) {
 	params := json.RawMessage(`{"name":"kern_trigger_run","arguments":{"project":"p1","limit":5,"inputs":{"a":1},"flag":true}}`)
-	if got := mcpArgStringOr(params, "project"); got != "p1" {
+	var call struct {
+		Arguments map[string]json.RawMessage `json:"arguments"`
+	}
+	if err := json.Unmarshal(params, &call); err != nil {
+		t.Fatalf("unmarshal params: %v", err)
+	}
+	args := call.Arguments
+	if got := mcpArgStringOr(args, "project"); got != "p1" {
 		t.Fatalf("string arg = %q", got)
 	}
-	if got := mcpArgInt(params, "limit", 20); got != 5 {
+	if got := mcpArgInt(args, "limit", 20); got != 5 {
 		t.Fatalf("int arg = %d", got)
 	}
-	if got := mcpArgInt(params, "missing", 7); got != 7 {
+	if got := mcpArgInt(args, "missing", 7); got != 7 {
 		t.Fatalf("default int = %d", got)
 	}
-	if b, ok := mcpArgBool(params, "flag"); !ok || !b {
+	if b, ok := mcpArgBool(args, "flag"); !ok || !b {
 		t.Fatalf("bool arg = %v,%v", b, ok)
 	}
-	if _, ok := mcpArgBool(params, "project"); ok {
+	if _, ok := mcpArgBool(args, "project"); ok {
 		t.Fatal("string arg must not parse as bool")
 	}
-	raw, ok := mcpArgRaw(params, "inputs")
+	raw, ok := mcpArgRaw(args, "inputs")
 	if !ok {
 		t.Fatal("inputs raw missing")
 	}
