@@ -50,6 +50,8 @@ type ghUpload struct {
 	scope   string
 	path    string
 	file    *os.File
+	created time.Time
+	mu      sync.Mutex // serializes PATCH+commit against concurrent chunks (#369)
 }
 
 // ghCacheState tracks pending uploads. Single-process is enough: the API
@@ -156,13 +158,11 @@ func (s *Server) parseKc1Token(parts []string) (uuid.UUID, bool) {
 // archiveLocation must be fetchable from inside the job container, which
 // may sit on a LAN address PublicBaseURL does not cover.
 func requestBaseURL(c *gin.Context, fallback string) string {
-	scheme := c.GetHeader("X-Forwarded-Proto")
-	if scheme == "" {
-		if c.Request.TLS != nil {
-			scheme = "https"
-		} else {
-			scheme = "http"
-		}
+	// X-Forwarded-Proto is client-supplied and unvalidated here — trusting it
+	// let a request mint an attacker-controlled archiveLocation (#369).
+	scheme := "http"
+	if c.Request.TLS != nil {
+		scheme = "https"
 	}
 	host := c.Request.Host
 	if host == "" {
@@ -237,6 +237,12 @@ func (s *Server) ghCacheContext(c *gin.Context) (store.Job, store.Run, bool) {
 	run, err := s.Store.Run(c.Request.Context(), job.RunID)
 	if err != nil {
 		s.internalError(c, err)
+		return store.Job{}, store.Run{}, false
+	}
+	// A finished/cancelled job must not keep writing caches — its token is
+	// still valid until expiry but the window has closed (#369).
+	if job.Status != "in_progress" {
+		fail(c, http.StatusConflict, "job_not_running", "job is no longer in progress")
 		return store.Job{}, store.Run{}, false
 	}
 	return job, run, true
@@ -356,6 +362,7 @@ func (s *Server) ghCacheReserve(c *gin.Context) {
 	s.ghCache.uploads[id] = &ghUpload{
 		id: id, jobID: job.ID, key: req.Key,
 		version: req.Version, scope: scope, path: path, file: f,
+		created: time.Now(),
 	}
 	s.ghCache.mu.Unlock()
 	c.JSON(http.StatusOK, gin.H{"cacheId": id})
@@ -376,16 +383,27 @@ func (s *Server) ghCacheUpload(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_range", "Content-Range must be 'bytes start-end/*'")
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(c.Request.Body, 256<<20))
-	if err != nil {
-		s.internalError(c, err)
+	// Bound the range before touching the file: an unchecked WriteAt at a
+	// huge offset grows a sparse file on disk (#369).
+	limit := s.Cfg.CacheMaxBytes
+	if limit <= 0 {
+		limit = 4 << 30
+	}
+	if end+1 > limit {
+		fail(c, http.StatusRequestEntityTooLarge, "cache_too_large",
+			"cache archive exceeds KERN_CACHE_MAX_BYTES")
 		return
 	}
-	if int64(len(body)) != end-start+1 {
-		fail(c, http.StatusBadRequest, "invalid_range", "chunk size does not match Content-Range")
-		return
-	}
-	if _, err := up.file.WriteAt(body, start); err != nil {
+	// Serialize with other chunks and commit; stream instead of buffering
+	// the patch in heap (#369).
+	up.mu.Lock()
+	defer up.mu.Unlock()
+	w := io.NewOffsetWriter(up.file, start)
+	if _, err := io.CopyN(w, c.Request.Body, end-start+1); err != nil {
+		if errors.Is(err, io.EOF) { // body shorter than the declared range
+			fail(c, http.StatusBadRequest, "invalid_range", "chunk size does not match Content-Range")
+			return
+		}
 		s.internalError(c, err)
 		return
 	}
@@ -408,6 +426,8 @@ func (s *Server) ghCacheCommit(c *gin.Context) {
 		Size int64 `json:"size"`
 	}
 	_ = c.ShouldBindJSON(&req)
+	up.mu.Lock()
+	defer up.mu.Unlock()
 	_ = up.file.Sync()
 	fi, err := up.file.Stat()
 	if err != nil {
@@ -416,6 +436,12 @@ func (s *Server) ghCacheCommit(c *gin.Context) {
 		return
 	}
 	size := fi.Size()
+	if req.Size > 0 && req.Size != size {
+		s.failUpload(up)
+		fail(c, http.StatusBadRequest, "size_mismatch",
+			"declared size does not match uploaded bytes")
+		return
+	}
 	max := s.Cfg.CacheMaxBytes
 	if max > 0 && size > max {
 		s.failUpload(up)
@@ -508,9 +534,23 @@ func (s *Server) ghCacheDownload(c *gin.Context) {
 	c.DataFromReader(http.StatusOK, size, "application/gzip", rc, nil)
 }
 
-// sweepGHCacheUploads removes temp dirs orphaned by a crash or abandoned
-// reservation. Called once at startup; ages out anything older than an hour.
+// sweepGHCacheUploads reclaims abandoned reservations: open handles and map
+// entries for uploads reserved over an hour ago, plus temp dirs orphaned by a
+// crash. Runs at startup and on the 10-minute background ticker (#369).
 func (s *Server) sweepGHCacheUploads() {
+	s.ghCache.mu.Lock()
+	var stale []*ghUpload
+	for id, up := range s.ghCache.uploads {
+		if time.Since(up.created) > time.Hour {
+			delete(s.ghCache.uploads, id)
+			stale = append(stale, up)
+		}
+	}
+	s.ghCache.mu.Unlock()
+	for _, up := range stale {
+		_ = up.file.Close()
+		_ = os.RemoveAll(filepath.Dir(up.path))
+	}
 	matches, _ := filepath.Glob(filepath.Join(os.TempDir(), "kern-ghcache-*"))
 	for _, dir := range matches {
 		if fi, err := os.Stat(dir); err == nil && time.Since(fi.ModTime()) > time.Hour {
