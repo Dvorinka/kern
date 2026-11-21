@@ -109,7 +109,9 @@ func (c *cli) cmdLogin(ctx context.Context, args []string) error {
 	if err := saveConfig(c.cfg); err != nil {
 		return fmt.Errorf("token issued but config write failed: %w", err)
 	}
-	fmt.Printf("logged in as %s; token %s… saved to %s\n", out.User.Email, out.Record.Prefix, configPath())
+	c.orJSON(map[string]any{"email": out.User.Email, "token_prefix": out.Record.Prefix, "config": configPath()}, func() {
+		fmt.Printf("logged in as %s; token %s… saved to %s\n", out.User.Email, out.Record.Prefix, configPath())
+	})
 	return nil
 }
 
@@ -122,7 +124,9 @@ func (c *cli) cmdLogout(ctx context.Context) error {
 	if err := saveConfig(c.cfg); err != nil {
 		return err
 	}
-	fmt.Println("logged out; local credentials cleared")
+	c.orJSON(map[string]any{"ok": true}, func() {
+		fmt.Println("logged out; local credentials cleared")
+	})
 	return nil
 }
 
@@ -217,7 +221,9 @@ func (c *cli) cmdToken(ctx context.Context, args []string) error {
 		if err := c.api().del(ctx, "/auth/tokens/"+id); err != nil {
 			return err
 		}
-		fmt.Println("token deleted")
+		c.orJSON(map[string]any{"deleted": true, "id": id}, func() {
+			fmt.Println("token deleted")
+		})
 	default:
 		return fmt.Errorf("unknown token subcommand %q", args[0])
 	}
@@ -231,29 +237,38 @@ func (c *cli) cmdConfig(args []string) error {
 	keys := map[string]*string{
 		"server": &c.cfg.Server, "token": &c.cfg.Token, "project": &c.cfg.Project,
 	}
+	mask := func(k, v string) string {
+		if k == "token" && len(v) > 12 {
+			return v[:12] + "…"
+		}
+		return v
+	}
 	switch args[0] {
 	case "list", "get":
 		if len(args) == 1 {
-			rows := [][]string{}
-			for _, k := range []string{"server", "token", "project"} {
-				v := *keys[k]
-				if k == "token" && len(v) > 12 {
-					v = v[:12] + "…"
-				}
-				rows = append(rows, []string{k, v})
+			m := map[string]string{
+				"server":  c.cfg.Server,
+				"token":   mask("token", c.cfg.Token),
+				"project": c.cfg.Project,
 			}
-			table([]string{"KEY", "VALUE"}, rows)
+			c.orJSON(m, func() {
+				rows := [][]string{
+					{"project", m["project"]},
+					{"server", m["server"]},
+					{"token", m["token"]},
+				}
+				table([]string{"KEY", "VALUE"}, rows)
+			})
 			return nil
 		}
 		p, ok := keys[args[1]]
 		if !ok {
 			return fmt.Errorf("unknown config key %q", args[1])
 		}
-		v := *p
-		if args[1] == "token" && len(v) > 12 {
-			v = v[:12] + "…"
-		}
-		fmt.Println(v)
+		v := mask(args[1], *p)
+		c.orJSON(map[string]string{"key": args[1], "value": v}, func() {
+			fmt.Println(v)
+		})
 	case "set":
 		if len(args) < 3 {
 			return fmt.Errorf("usage: kern config set <key> <value>")
@@ -271,6 +286,7 @@ func (c *cli) cmdConfig(args []string) error {
 		if err := saveConfig(c.cfg); err != nil {
 			return err
 		}
+		c.orJSON(map[string]any{"ok": true, "key": args[1]}, func() {})
 	case "unset":
 		if len(args) < 2 {
 			return fmt.Errorf("usage: kern config unset <key>")
@@ -283,6 +299,7 @@ func (c *cli) cmdConfig(args []string) error {
 		if err := saveConfig(c.cfg); err != nil {
 			return err
 		}
+		c.orJSON(map[string]any{"ok": true, "key": args[1]}, func() {})
 	default:
 		return fmt.Errorf("unknown config subcommand %q", args[0])
 	}

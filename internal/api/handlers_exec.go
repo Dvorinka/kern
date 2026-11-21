@@ -20,9 +20,8 @@ import (
 // commands. Fork/pull_request runs never get a shell — untrusted code
 // must not invite the operator into its own sandbox.
 func (s *Server) createExec(c *gin.Context) {
-	id, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		fail(c, http.StatusBadRequest, "invalid_id", "job id must be a uuid")
+	id, ok := s.jobIDParam(c)
+	if !ok {
 		return
 	}
 	var req struct {
@@ -138,6 +137,7 @@ func (s *Server) getExec(c *gin.Context) {
 		}
 		resp["data"] = base64.StdEncoding.EncodeToString(chunk)
 		resp["size"] = size
+		resp["next_offset"] = after + int64(len(chunk))
 	}
 	c.JSON(http.StatusOK, resp)
 }
@@ -286,10 +286,11 @@ func (s *Server) execStdinFeed(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"data":      base64.StdEncoding.EncodeToString(chunk),
-		"size":      size,
-		"closed":    ex.StdinClosed,
-		"cancelled": ex.State == "cancelled",
+		"data":        base64.StdEncoding.EncodeToString(chunk),
+		"size":        size,
+		"next_offset": after + int64(len(chunk)),
+		"closed":      ex.StdinClosed,
+		"cancelled":   ex.State == "cancelled",
 	})
 }
 

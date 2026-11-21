@@ -129,6 +129,8 @@ func (a *Agent) finishExec(execID string, code *int, errText string) {
 
 // pumpExecStdin feeds the session's stdin blob into the docker exec pipe and
 // cancels the exec process when the control plane marks the session cancelled.
+// Advances offset by len(data) (never total blob size) so >64 KiB bursts do
+// not drop bytes, and tolerates transient HTTP hiccups before bailing.
 // ponytail: half-second poll, no PTY framing — a line-mode shell; upgrade
 // to TTY framing when interactive exec needs full-screen programs.
 func (a *Agent) pumpExecStdin(ctx context.Context, cancel context.CancelFunc, execID string, stdin io.WriteCloser) {
@@ -136,16 +138,22 @@ func (a *Agent) pumpExecStdin(ctx context.Context, cancel context.CancelFunc, ex
 	t := time.NewTicker(500 * time.Millisecond)
 	defer t.Stop()
 	var off int64
+	consecErrs := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 		}
-		data, size, closed, cancelled, err := a.c.execStdin(ctx, execID, off)
+		data, _, closed, cancelled, err := a.c.execStdin(ctx, execID, off)
 		if err != nil {
-			return // control plane unreachable or session finished — cmd.Wait ends us
+			consecErrs++
+			if consecErrs >= 5 || ctx.Err() != nil {
+				return
+			}
+			continue
 		}
+		consecErrs = 0
 		if cancelled {
 			cancel()
 			return
@@ -154,8 +162,8 @@ func (a *Agent) pumpExecStdin(ctx context.Context, cancel context.CancelFunc, ex
 			if _, err := stdin.Write(data); err != nil {
 				return
 			}
+			off += int64(len(data))
 		}
-		off = size
 		if closed {
 			return
 		}
@@ -163,40 +171,54 @@ func (a *Agent) pumpExecStdin(ctx context.Context, cancel context.CancelFunc, ex
 }
 
 // execPoster batches docker exec output into append posts against the
-// session blob. Failed posts drop the chunk — a wedged control plane must
-// not grow this buffer without bound; the finish call reports the session
-// outcome regardless.
+// session blob. Serializes flushes without holding p.mu across network I/O,
+// retaining failed chunks up to a 2 MiB cap for retry on the next tick.
 type execPoster struct {
-	ctx context.Context
-	c   *client
-	id  string
-	log *zap.Logger
-	mu  sync.Mutex
-	buf []byte
+	ctx     context.Context
+	c       *client
+	id      string
+	log     *zap.Logger
+	mu      sync.Mutex
+	flushMu sync.Mutex
+	buf     []byte
 }
+
+const execPosterMaxRetain = 2 << 20
 
 func (p *execPoster) Write(b []byte) (int, error) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.buf = append(p.buf, b...)
-	if len(p.buf) >= 16<<10 {
-		p.flushLocked()
+	shouldFlush := len(p.buf) >= 16<<10
+	p.mu.Unlock()
+	if shouldFlush {
+		p.flush()
 	}
 	return len(b), nil
 }
 
 func (p *execPoster) flush() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.flushLocked()
-}
-
-func (p *execPoster) flushLocked() {
-	for len(p.buf) > 0 {
-		n := min(len(p.buf), 512<<10)
-		if err := p.c.execOutput(p.ctx, p.id, p.buf[:n]); err != nil {
-			p.log.Warn("exec output post failed; dropping chunk", zap.Error(err))
+	p.flushMu.Lock()
+	defer p.flushMu.Unlock()
+	for {
+		p.mu.Lock()
+		if len(p.buf) == 0 {
+			p.mu.Unlock()
+			return
 		}
+		n := min(len(p.buf), 512<<10)
+		chunk := make([]byte, n)
+		copy(chunk, p.buf[:n])
 		p.buf = p.buf[n:]
+		p.mu.Unlock()
+
+		if err := p.c.execOutput(p.ctx, p.id, chunk); err != nil {
+			p.log.Warn("exec output post failed; retaining chunk for retry", zap.Error(err))
+			p.mu.Lock()
+			if len(chunk)+len(p.buf) <= execPosterMaxRetain {
+				p.buf = append(chunk, p.buf...)
+			}
+			p.mu.Unlock()
+			return
+		}
 	}
 }
