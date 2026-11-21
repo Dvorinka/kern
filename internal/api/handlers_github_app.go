@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -21,6 +23,19 @@ import (
 // one-time conversion code.
 func (s *Server) githubAppManifest(c *gin.Context) {
 	user, _ := currentUser(c)
+	// CSRF nonce for the manifest callback: the browser returns from GitHub's
+	// app-creation page via a top-level GET, so a SameSite=Lax cookie rides
+	// along and proves the flow was started by this user (#368).
+	nonce, err := randomHex(16)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	s.ghAppsMu.Lock()
+	s.ghAppStates[user.ID] = ghAppState{nonce: nonce, expiry: time.Now().Add(10 * time.Minute)}
+	s.ghAppsMu.Unlock()
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie("kern_gh_app_state", nonce, 600, "/", "", s.Cfg.Env == "production", true)
 	base := s.Cfg.PublicBaseURL
 	// GitHub app names are globally unique; a fixed name fails the manifest
 	// POST once an app with that name exists on the account.
@@ -101,6 +116,16 @@ func (s *Server) deleteGitHubApp(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
+	// Evict the in-memory app and every repo→app probe that resolved to it —
+	// a deleted app must stop serving credentials immediately (#368).
+	s.ghAppsMu.Lock()
+	delete(s.ghApps, id)
+	for key, appID := range s.ghRepoApp {
+		if appID == id {
+			delete(s.ghRepoApp, key)
+		}
+	}
+	s.ghAppsMu.Unlock()
 	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "github_app.remove", id.String())
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
@@ -110,6 +135,18 @@ func (s *Server) deleteGitHubApp(c *gin.Context) {
 // install flow so the user picks which repos the app can see.
 func (s *Server) githubAppCallback(c *gin.Context) {
 	user, _ := currentUser(c)
+	// The callback is a GET GitHub redirects the browser to — without the
+	// manifest-issued nonce an attacker could bind their own app's
+	// credentials to a victim org (#368). The nonce is single-use.
+	stateCookie, _ := c.Cookie("kern_gh_app_state")
+	s.ghAppsMu.Lock()
+	st, pending := s.ghAppStates[user.ID]
+	delete(s.ghAppStates, user.ID)
+	s.ghAppsMu.Unlock()
+	if !pending || time.Now().After(st.expiry) || stateCookie == "" || stateCookie != st.nonce {
+		fail(c, http.StatusForbidden, "bad_state", "github app manifest state mismatch or expired; restart the flow")
+		return
+	}
 	code := c.Query("code")
 	if code == "" {
 		fail(c, http.StatusBadRequest, "missing_code", "GitHub returned no conversion code")
@@ -145,15 +182,24 @@ func (s *Server) githubAppCallback(c *gin.Context) {
 	c.Redirect(http.StatusFound, fmt.Sprintf("https://github.com/apps/%s/installations/new", stored.Slug))
 }
 
-// githubClient resolves a repo to an API client: the env-configured app when
-// installed, then any registered org app, then the PAT.
+// githubClient resolves a repo to an API client without org preference —
+// used by org-less internal callers (webhook ref resolution, reusable
+// workflow fetches for foreign repos). Prefer githubClientForOrg.
 func (s *Server) githubClient(ctx context.Context, repo string) (*github.Client, error) {
+	return s.githubClientForOrg(ctx, uuid.Nil, repo)
+}
+
+// githubClientForOrg resolves a repo to an API client: the env-configured
+// app when installed, then a GitHub App registered by orgID, then the PAT.
+// orgID Nil falls back to any registered app (webhook resolution happens
+// before tenant binding).
+func (s *Server) githubClientForOrg(ctx context.Context, orgID uuid.UUID, repo string) (*github.Client, error) {
 	if s.GH.App != nil {
 		if cl, err := s.GH.App.Client(ctx, repo); err == nil {
 			return cl, nil
 		}
 	}
-	if cl, err := s.dbAppClient(ctx, repo); cl != nil || err != nil {
+	if cl, err := s.dbAppClient(ctx, orgID, repo); cl != nil || err != nil {
 		return cl, err
 	}
 	if s.GH.PAT != nil {
@@ -162,20 +208,55 @@ func (s *Server) githubClient(ctx context.Context, repo string) (*github.Client,
 	return nil, fmt.Errorf("no github credentials configured")
 }
 
-// dbAppClient finds a registered org app installed on repo. Successful
-// repo → app resolutions are cached for the process lifetime.
-func (s *Server) dbAppClient(ctx context.Context, repo string) (*github.Client, error) {
+// githubAppForOrg returns the GitHub App able to mint repo tokens for orgID:
+// the env-configured app when installed on the repo, else an app the org
+// registered through the manifest flow. Nil when nothing authenticates —
+// callers then mint no token rather than falling back to wider credentials.
+func (s *Server) githubAppForOrg(ctx context.Context, orgID uuid.UUID, repo string) *github.App {
+	if s.GH.App != nil {
+		if _, err := s.GH.App.InstallationID(ctx, repo); err == nil {
+			return s.GH.App
+		}
+	}
+	app, err := s.dbAppForRepo(ctx, orgID, repo)
+	if err != nil {
+		s.Log.Warn("github app lookup failed", zap.String("repo", repo), zap.Error(err))
+		return nil
+	}
+	return app
+}
+
+// dbAppClient finds a registered org app installed on repo.
+func (s *Server) dbAppClient(ctx context.Context, orgID uuid.UUID, repo string) (*github.Client, error) {
+	app, err := s.dbAppForRepo(ctx, orgID, repo)
+	if app == nil || err != nil {
+		return nil, err
+	}
+	return app.Client(ctx, repo)
+}
+
+// dbAppForRepo finds a GitHub App registered by orgID that is installed on
+// repo. Successful resolutions are cached per org+repo so one tenant's app
+// can never be selected for another tenant's repository (#368).
+func (s *Server) dbAppForRepo(ctx context.Context, orgID uuid.UUID, repo string) (*github.App, error) {
+	key := orgID.String() + "|" + repo
 	s.ghAppsMu.Lock()
-	if id, ok := s.ghRepoApp[repo]; ok {
+	if id, ok := s.ghRepoApp[key]; ok {
 		app := s.ghApps[id]
 		s.ghAppsMu.Unlock()
 		if app != nil {
-			return app.Client(ctx, repo)
+			return app, nil
 		}
 	} else {
 		s.ghAppsMu.Unlock()
 	}
-	rows, err := s.Store.AllGitHubApps(ctx)
+	var rows []store.GitHubApp
+	var err error
+	if orgID == uuid.Nil {
+		rows, err = s.Store.AllGitHubApps(ctx)
+	} else {
+		rows, err = s.Store.GitHubApps(ctx, orgID)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -189,11 +270,20 @@ func (s *Server) dbAppClient(ctx context.Context, repo string) (*github.Client, 
 			continue
 		}
 		s.ghAppsMu.Lock()
-		s.ghRepoApp[repo] = row.ID
+		s.ghRepoApp[key] = row.ID
 		s.ghAppsMu.Unlock()
-		return app.Client(ctx, repo)
+		return app, nil
 	}
 	return nil, nil
+}
+
+// randomHex returns n crypto-random bytes hex-encoded.
+func randomHex(n int) (string, error) {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 // appForRow lazily builds and caches a github.App from its encrypted pem.

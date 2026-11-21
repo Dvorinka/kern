@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/dvorinka/kern/internal/store"
@@ -138,8 +139,8 @@ func discoverLocalIcons(root string) ([]string, error) {
 }
 
 // discoverGitHubIcons lists image candidates from the repo's git tree.
-func (s *Server) discoverGitHubIcons(ctx context.Context, repo, ref string) ([]string, error) {
-	gh, err := s.githubClient(ctx, repo)
+func (s *Server) discoverGitHubIcons(ctx context.Context, orgID uuid.UUID, repo, ref string) ([]string, error) {
+	gh, err := s.githubClientForOrg(ctx, orgID, repo)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +171,7 @@ func (s *Server) iconCandidates(ctx context.Context, p store.Project, ref string
 		if ref == "" {
 			ref = firstNonEmpty(p.DefaultBranch, "main")
 		}
-		paths, err := s.discoverGitHubIcons(ctx, p.RepoFullName, ref)
+		paths, err := s.discoverGitHubIcons(ctx, p.OrgID, p.RepoFullName, ref)
 		if err != nil {
 			return nil, err
 		}

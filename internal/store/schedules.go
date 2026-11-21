@@ -27,7 +27,7 @@ func (s *Store) ScheduledWorkflows(ctx context.Context) ([]ScheduledWorkflow, er
 		       p.id, p.org_id, p.slug, p.name, p.provider, p.repo_full_name, p.repo_url,
 		       p.default_branch, p.local_path, p.created_at, p.updated_at
 		FROM workflows w
-		JOIN workflow_versions v ON v.workflow_id = w.id AND v.valid
+		JOIN workflow_versions v ON v.workflow_id = w.id AND v.valid AND v.trusted
 		JOIN projects p ON p.id = w.project_id
 		WHERE v.parsed->'triggers' ? 'schedule' AND NOT w.disabled
 		ORDER BY w.id, v.created_at DESC`)

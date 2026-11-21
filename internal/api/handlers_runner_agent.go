@@ -20,6 +20,7 @@ import (
 	"github.com/dvorinka/kern/internal/auth"
 	"github.com/dvorinka/kern/internal/blobs"
 	"github.com/dvorinka/kern/internal/expressions"
+	"github.com/dvorinka/kern/internal/github"
 	"github.com/dvorinka/kern/internal/orchestrator"
 	"github.com/dvorinka/kern/internal/secrets"
 	"github.com/dvorinka/kern/internal/store"
@@ -396,42 +397,50 @@ func (s *Server) respondWithClaim(c *gin.Context, claimed *store.ClaimedJob, run
 	remediations, _ := s.Store.ApprovedFixes(c.Request.Context(), claimed.Job.ID)
 	policy, _ := s.Store.SelfHealPolicy(c.Request.Context(), claimed.Run.ID)
 	s.postJobCheck(c.Request.Context(), claimed.Run, claimed.Job, "in_progress")
-	// Private repos clone with a short-lived installation token minted at claim
-	// time. It rides the claim payload only — never the stored run source.
-	var cloneToken string
-	if s.GH.App != nil {
-		if full, ok := claimed.Source["repo_full_name"].(string); ok && full != "" {
-			if tok, err := s.GH.App.CloneToken(c.Request.Context(), full); err == nil {
-				cloneToken = tok
-			} else {
-				s.Log.Warn("clone token mint failed; public clones unaffected",
-					zap.String("repo", full), zap.Error(err))
+	// Private repos clone with a short-lived installation token minted at
+	// claim time, scoped to the clone target repo with contents:read only.
+	// GITHUB_TOKEN is a per-run token scoped to the base repo and narrowed by
+	// the workflow's permissions: ceiling. Untrusted runs still get a token —
+	// GitHub parity gives fork PRs a read-only GITHUB_TOKEN so API-backed
+	// actions (paths-filter, github-script) work — but the ceiling is forced
+	// read-only and the workflow's permissions: block is ignored. Repository
+	// secrets remain eligible-trust only. Both tokens come from an App
+	// installed for the runner's org (env app or org-registered), never a
+	// wider credential (#368).
+	var cloneToken, githubToken string
+	full, _ := claimed.Source["repo_full_name"].(string)
+	var ghApp *github.App
+	if full != "" {
+		ghApp = s.githubAppForOrg(c.Request.Context(), runner.OrgID, full)
+	}
+	if ghApp != nil {
+		// pull_request clones the head repo (the fork for cross-repo PRs);
+		// every other event clones the base repo.
+		cloneRepo := full
+		if claimed.Run.Event == "pull_request" {
+			if hr, ok := claimed.Source["head_repo"].(string); ok && hr != "" {
+				cloneRepo = hr
 			}
 		}
-	}
-	// GITHUB_TOKEN: a per-run installation token scoped to this repository and
-	// narrowed by the workflow's permissions: ceiling. Untrusted runs still
-	// get a token — GitHub parity gives fork PRs a read-only GITHUB_TOKEN so
-	// API-backed actions (paths-filter, github-script) work — but the ceiling
-	// is forced read-only and the workflow's permissions: block is ignored.
-	// Repository secrets remain eligible-trust only.
-	var githubToken string
-	if s.GH.App != nil {
-		if full, ok := claimed.Source["repo_full_name"].(string); ok && full != "" {
-			var perms map[string]string
-			if secretsEligibleTrust(claimed.Run.TrustLevel) {
-				if len(claimed.Job.Permissions) > 0 && string(claimed.Job.Permissions) != "null" {
-					_ = json.Unmarshal(claimed.Job.Permissions, &perms)
-				}
-			} else {
-				perms = forkTokenPermissions
+		if tok, err := ghApp.CloneToken(c.Request.Context(), cloneRepo); err == nil {
+			cloneToken = tok
+		} else {
+			s.Log.Warn("clone token mint failed; public clones unaffected",
+				zap.String("repo", cloneRepo), zap.Error(err))
+		}
+		var perms map[string]string
+		if secretsEligibleTrust(claimed.Run.TrustLevel) {
+			if len(claimed.Job.Permissions) > 0 && string(claimed.Job.Permissions) != "null" {
+				_ = json.Unmarshal(claimed.Job.Permissions, &perms)
 			}
-			if tok, _, err := s.GH.App.RunToken(c.Request.Context(), full, perms); err == nil {
-				githubToken = tok
-			} else {
-				s.Log.Warn("github token mint failed; steps run without GITHUB_TOKEN",
-					zap.String("repo", full), zap.String("job", claimed.Job.Key), zap.Error(err))
-			}
+		} else {
+			perms = forkTokenPermissions
+		}
+		if tok, _, err := ghApp.RunToken(c.Request.Context(), full, perms); err == nil {
+			githubToken = tok
+		} else {
+			s.Log.Warn("github token mint failed; steps run without GITHUB_TOKEN",
+				zap.String("repo", full), zap.String("job", claimed.Job.Key), zap.Error(err))
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -878,10 +887,11 @@ func (s *Server) cancelCheck(c *gin.Context) {
 
 // forkTokenPermissions is the forced GITHUB_TOKEN ceiling for untrusted
 // (fork/pull_request) runs. Read-only scopes let API-backed actions work
-// without letting untrusted code write to the repository.
+// without letting untrusted code write to the repository. Keys use the
+// GitHub REST spelling — RunToken also accepts Actions hyphenated names.
 var forkTokenPermissions = map[string]string{
 	"contents":      "read",
-	"pull-requests": "read",
+	"pull_requests": "read",
 	"issues":        "read",
 }
 

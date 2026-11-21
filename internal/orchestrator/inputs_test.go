@@ -36,7 +36,7 @@ func dispatchFixture(t *testing.T, ctx context.Context, s *store.Store) store.Cr
 	if err != nil {
 		t.Fatalf("workflow: %v", err)
 	}
-	v, err := s.PutWorkflowVersion(ctx, wf.ID, "deadbeef", dispatchInputsWf, map[string]any{}, true, nil, nil)
+	v, err := s.PutWorkflowVersion(ctx, wf.ID, "deadbeef", dispatchInputsWf, map[string]any{}, true, nil, nil, true)
 	if err != nil {
 		t.Fatalf("version: %v", err)
 	}
@@ -96,7 +96,7 @@ jobs:
         ro: [[], []]
     steps:
       - run: echo hi
-`, map[string]any{}, true, nil, nil)
+`, map[string]any{}, true, nil, nil, true)
 	if err != nil {
 		t.Fatalf("version: %v", err)
 	}

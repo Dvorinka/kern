@@ -30,7 +30,7 @@ func secondOrg(t testing.TB, ctx context.Context, s *Store) (uuid.UUID, uuid.UUI
 	if err != nil {
 		t.Fatalf("workflow B: %v", err)
 	}
-	v, err := s.PutWorkflowVersion(ctx, wf.ID, "beef", "name: CI", map[string]any{}, true, nil, nil)
+	v, err := s.PutWorkflowVersion(ctx, wf.ID, "beef", "name: CI", map[string]any{}, true, nil, nil, true)
 	if err != nil {
 		t.Fatalf("version B: %v", err)
 	}
