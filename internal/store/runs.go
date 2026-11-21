@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // JobSeed is a compiled job ready to be persisted.
@@ -103,13 +104,17 @@ func releaseClassRun(event, ref string) bool {
 }
 
 // CreateRun persists a run and its compiled jobs atomically. Run numbers are allocated
-// per workflow; a unique violation (concurrent insert) is retried.
+// per workflow; a unique violation (SQLSTATE 23505 on concurrent insert) is retried.
 func (s *Store) CreateRun(ctx context.Context, p CreateRunParams, jobs []JobSeed) (Run, error) {
 	var lastErr error
 	for attempt := 0; attempt < 5; attempt++ {
 		run, err := s.createRunOnce(ctx, p, jobs)
 		if err == nil {
 			return run, nil
+		}
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) || pgErr.Code != "23505" {
+			return Run{}, fmt.Errorf("create run: %w", err)
 		}
 		lastErr = err
 	}
@@ -696,8 +701,11 @@ func (s *Store) RerunJobs(ctx context.Context, runID uuid.UUID, keys []string) (
 	defer tx.Rollback(ctx)
 
 	tag, err := tx.Exec(ctx, `
-		UPDATE workflow_runs SET status = 'in_progress', conclusion = '',
-			completed_at = NULL, started_at = COALESCE(started_at, now())
+		UPDATE workflow_runs SET
+			status = CASE WHEN concurrency_group <> '' THEN 'queued' ELSE 'in_progress' END,
+			conclusion = '',
+			completed_at = NULL,
+			started_at = CASE WHEN concurrency_group <> '' THEN NULL ELSE COALESCE(started_at, now()) END
 		WHERE id = $1 AND status IN ('completed', 'cancelled')`, runID)
 	if err != nil {
 		return 0, err
@@ -736,6 +744,7 @@ func (s *Store) RerunJobs(ctx context.Context, runID uuid.UUID, keys []string) (
 
 	if _, err := tx.Exec(ctx, `
 		UPDATE jobs SET status = 'waiting', conclusion = '', error = '',
+			classification = '', metrics = '{}'::jsonb,
 			runner_id = NULL, lease_expires_at = NULL, started_at = NULL,
 			completed_at = NULL, attempt = 0, outputs = '{}'::jsonb
 		WHERE id = ANY($1)`, ids); err != nil {
@@ -760,10 +769,28 @@ func (s *Store) RerunJobs(ctx context.Context, runID uuid.UUID, keys []string) (
 }
 
 // PromoteQueuedRuns moves serialized runs (concurrency groups) forward when the
-// group is free. When a newer queued run shares a group with an in-progress run
-// that opted into cancel-in-progress, the older run is cancelled first.
+// group is free. See PromoteQueuedRunsDetail for full concurrency semantics.
 func (s *Store) PromoteQueuedRuns(ctx context.Context) (int, error) {
-	dead, err := s.pool.Query(ctx, `
+	n, _, err := s.PromoteQueuedRunsDetail(ctx)
+	return n, err
+}
+
+// PromoteQueuedRunsDetail atomically enforces GitHub Actions concurrency-group
+// rules and promotes eligible queued runs:
+//   - Any queued run superseded by a newer queued run in the same group is
+//     cancelled (pending-queue depth cap of 1, even when cancel-in-progress=false).
+//   - An in-progress run is cancelled when a newer queued run in the same group
+//     declares cancel-in-progress=true (n.cancel_in_progress, not o.cancel_in_progress).
+//   - Cancelled runs also cancel their jobs, steps, open deployments, and leases,
+//     and return their IDs so the orchestrator posts terminal statuses/notifications.
+func (s *Store) PromoteQueuedRunsDetail(ctx context.Context) (int, []uuid.UUID, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	dead, err := tx.Query(ctx, `
 		UPDATE workflow_runs SET status = 'cancelled', conclusion = 'cancelled', completed_at = now()
 		WHERE id IN (
 			SELECT o.id FROM workflow_runs o
@@ -772,45 +799,50 @@ func (s *Store) PromoteQueuedRuns(ctx context.Context) (int, error) {
 				AND o.concurrency_group <> ''
 				AND n.status = 'queued'
 				AND (n.created_at, n.id) > (o.created_at, o.id)
-			WHERE o.status IN ('queued', 'in_progress')
-			  AND o.cancel_in_progress)
+			WHERE o.status = 'queued'
+			   OR (o.status = 'in_progress' AND n.cancel_in_progress))
 		RETURNING id`)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	var deadIDs []uuid.UUID
 	for dead.Next() {
 		var id uuid.UUID
 		if err := dead.Scan(&id); err != nil {
 			dead.Close()
-			return 0, err
+			return 0, nil, err
 		}
 		deadIDs = append(deadIDs, id)
 	}
 	dead.Close()
 	if err := dead.Err(); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
-	for _, runID := range deadIDs {
-		// Jobs of a superseded run were previously left dangling; cancel them
-		// and their open deployments alongside the run.
-		if _, err := s.pool.Exec(ctx, `
-			UPDATE jobs SET status = 'cancelled', conclusion = 'cancelled', completed_at = now()
-			WHERE run_id = $1 AND status IN ('queued', 'waiting', 'waiting_approval', 'in_progress')`, runID); err != nil {
-			return 0, err
+	if len(deadIDs) > 0 {
+		if _, err := tx.Exec(ctx, `
+			UPDATE jobs SET status = 'cancelled', conclusion = 'cancelled', completed_at = now(),
+				runner_id = NULL, lease_expires_at = NULL
+			WHERE run_id = ANY($1) AND status IN ('queued', 'waiting', 'waiting_approval', 'in_progress')`, deadIDs); err != nil {
+			return 0, nil, err
 		}
-		if _, err := s.pool.Exec(ctx, `
+		if _, err := tx.Exec(ctx, `
+			UPDATE steps SET status = 'cancelled', conclusion = 'cancelled', completed_at = now()
+			WHERE job_id IN (SELECT id FROM jobs WHERE run_id = ANY($1))
+			  AND status IN ('queued', 'running')`, deadIDs); err != nil {
+			return 0, nil, err
+		}
+		if _, err := tx.Exec(ctx, `
 			UPDATE deployments SET status = 'failure', completed_at = now()
-			WHERE run_id = $1 AND status IN ('queued', 'in_progress')`, runID); err != nil {
-			return 0, err
+			WHERE run_id = ANY($1) AND status IN ('queued', 'in_progress')`, deadIDs); err != nil {
+			return 0, nil, err
 		}
-		if _, err := s.pool.Exec(ctx, `
+		if _, err := tx.Exec(ctx, `
 			UPDATE job_leases SET released_at = now() WHERE released_at IS NULL
-			  AND job_id IN (SELECT id FROM jobs WHERE run_id = $1)`, runID); err != nil {
-			return 0, err
+			  AND job_id IN (SELECT id FROM jobs WHERE run_id = ANY($1))`, deadIDs); err != nil {
+			return 0, nil, err
 		}
 	}
-	tag, err := s.pool.Exec(ctx, `
+	tag, err := tx.Exec(ctx, `
 		UPDATE workflow_runs r SET status = 'in_progress', started_at = now()
 		WHERE r.status = 'queued'
 		  AND NOT EXISTS (
@@ -823,9 +855,12 @@ func (s *Store) PromoteQueuedRuns(ctx context.Context) (int, error) {
 			  AND (o.created_at, o.id) < (r.created_at, r.id)
 		  )`)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
-	return int(tag.RowsAffected()), nil
+	if err := tx.Commit(ctx); err != nil {
+		return 0, nil, err
+	}
+	return int(tag.RowsAffected()), deadIDs, nil
 }
 
 // ApproveRunHold releases a run parked in awaiting_approval back to queued;
@@ -850,10 +885,13 @@ func (s *Store) ActiveRuns(ctx context.Context) (int, error) {
 	return n, err
 }
 
-func (s *Store) FinishRunIfDone(ctx context.Context, runID uuid.UUID) error {
+// FinishRunIfDone transitions an in_progress run to completed once no open jobs
+// remain. Returns transitioned=true strictly on the call that won the UPDATE,
+// preventing duplicate status posts and notifications under concurrent AdvanceRun.
+func (s *Store) FinishRunIfDone(ctx context.Context, runID uuid.UUID) (bool, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer tx.Rollback(ctx)
 
@@ -861,16 +899,16 @@ func (s *Store) FinishRunIfDone(ctx context.Context, runID uuid.UUID) error {
 	if err := tx.QueryRow(ctx, `
 		SELECT count(*) FROM jobs WHERE run_id = $1 AND status IN ('queued','waiting','waiting_approval','in_progress')`,
 		runID).Scan(&pending); err != nil {
-		return err
+		return false, err
 	}
 	if pending > 0 {
-		return nil
+		return false, nil
 	}
 	// Conclusion: failure wins, then cancelled, then success. Skipped-only runs
 	// are reported skipped. A failed continue-on-error job keeps its stored
 	// conclusion (the UI shows it failed) but, per GitHub semantics, must not
 	// fail the run.
-	if _, err := tx.Exec(ctx, `
+	tag, err := tx.Exec(ctx, `
 		UPDATE workflow_runs SET
 			status = 'completed',
 			conclusion = CASE
@@ -882,8 +920,12 @@ func (s *Store) FinishRunIfDone(ctx context.Context, runID uuid.UUID) error {
 				ELSE 'success'
 			END,
 			completed_at = now()
-		WHERE id = $1 AND status = 'in_progress'`, runID); err != nil {
-		return err
+		WHERE id = $1 AND status = 'in_progress'`, runID)
+	if err != nil {
+		return false, err
+	}
+	if tag.RowsAffected() == 0 {
+		return false, nil
 	}
 	// A completed run can never consume an approved remediation — withdraw
 	// outstanding proposals so they stop asking for a decision that cannot
@@ -896,9 +938,12 @@ func (s *Store) FinishRunIfDone(ctx context.Context, runID uuid.UUID) error {
 		  AND coalesce(s.diagnosis->'remediation'->>'approved', 'false') = 'false'
 		  AND coalesce(s.diagnosis->'remediation'->>'applied', 'false') = 'false'
 		  AND coalesce(s.diagnosis->'remediation'->>'dismissed', 'false') = 'false'`, runID); err != nil {
-		return err
+		return false, err
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // NextRunNumber is exposed for tests and run planning.
