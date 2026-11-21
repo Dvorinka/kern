@@ -142,7 +142,14 @@ export function RunsPage() {
 						{TABS.map((t) => (
 							<button
 								key={t.key || "all"}
-								onClick={() => setParams(t.key ? { tab: t.key } : {})}
+								onClick={() =>
+									setParams((p) => {
+										const n = new URLSearchParams(p);
+										if (t.key) n.set("tab", t.key);
+										else n.delete("tab");
+										return n;
+									})
+								}
 								className={cn(tab === t.key && "on")}
 							>
 								{t.label}

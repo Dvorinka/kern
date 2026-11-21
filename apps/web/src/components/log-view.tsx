@@ -110,6 +110,7 @@ export function LogView({
 }) {
 	const [text, setText] = useState("");
 	const [err, setErr] = useState("");
+	const [trunc, setTrunc] = useState<{ next: number; size: number } | null>(null);
 	const [wrap, setWrap] = useState(true);
 	const [follow, setFollow] = useState(true);
 	const [q, setQ] = useState("");
@@ -122,6 +123,7 @@ export function LogView({
 	useEffect(() => {
 		setText("");
 		setErr("");
+		setTrunc(null);
 		setQ("");
 		setLvl("");
 		setSelLine(null);
@@ -135,34 +137,59 @@ export function LogView({
 				if (res.ok) {
 					const d = await res.json();
 					setText(d.text ?? "");
+					// The endpoint caps at 256 KiB — flag truncation and offer
+					// paged continuation instead of silently dropping the rest.
+					if ((d.size ?? 0) > (d.next_offset ?? 0)) {
+						setTrunc({ next: d.next_offset, size: d.size });
+					}
+				} else {
+					setErr(`log load failed (${res.status})`);
 				}
 				return;
 			}
-			es = new EventSource(`/api/v1/steps/${stepId}/logs/stream`);
-			const chunk = (ev: MessageEvent): LogChunk | null => {
-				try {
-					return JSON.parse(ev.data);
-				} catch {
-					return null;
-				}
+			let retries = 0;
+			let ended = false;
+			const open = (offset: number) => {
+				let lastOff = offset;
+				es = new EventSource(`/api/v1/steps/${stepId}/logs/stream?offset=${offset}`);
+				const chunk = (ev: MessageEvent): LogChunk | null => {
+					try {
+						return JSON.parse(ev.data);
+					} catch {
+						return null;
+					}
+				};
+				es.addEventListener("log", (ev) => {
+					if (cancelled) return;
+					const c = chunk(ev as MessageEvent);
+					if (!c) return;
+					lastOff = c.offset + new TextEncoder().encode(c.text ?? "").length;
+					setText((t) => t + (c.text ?? ""));
+					retries = 0;
+				});
+				es.addEventListener("end", () => {
+					ended = true;
+					es?.close();
+				});
+				// Server-sent error events are application errors — show them;
+				// transport errors are transient and reconnect from lastOff.
+				es.addEventListener("error", (ev) => {
+					if (ev instanceof MessageEvent) {
+						const c = chunk(ev);
+						setErr(c?.message ?? "log read failed");
+						es?.close();
+					}
+				});
+				es.onerror = () => {
+					es?.close();
+					if (cancelled || ended) return;
+					const delay = Math.min(8000, 500 * 2 ** retries++);
+					setTimeout(() => {
+						if (!cancelled && !ended) open(lastOff);
+					}, delay);
+				};
 			};
-			es.addEventListener("log", (ev) => {
-				if (cancelled) return;
-				const c = chunk(ev as MessageEvent);
-				if (c) setText((t) => t + (c.text ?? ""));
-			});
-			es.addEventListener("end", () => {
-				es?.close();
-			});
-			es.addEventListener("error", (ev) => {
-				if (ev instanceof MessageEvent) {
-					const c = chunk(ev);
-					setErr(c?.message ?? "log read failed");
-				}
-			});
-			es.onerror = () => {
-				es?.close();
-			};
+			open(0);
 		};
 		void load();
 		return () => {
@@ -229,6 +256,26 @@ export function LogView({
 		URL.revokeObjectURL(a.href);
 	};
 
+	// Page forward through a truncated finished-step log — each click
+	// appends the next server-side window until the log is complete.
+	const loadMore = async () => {
+		if (!trunc) return;
+		const res = await fetch(`/api/v1/steps/${stepId}/logs?offset=${trunc.next}`, {
+			credentials: "same-origin",
+		});
+		if (!res.ok) {
+			setErr(`log load failed (${res.status})`);
+			return;
+		}
+		const d = await res.json();
+		setText((t) => t + (d.text ?? ""));
+		setTrunc(
+			(d.size ?? 0) > (d.next_offset ?? 0)
+				? { next: d.next_offset, size: d.size }
+				: null,
+		);
+	};
+
 	return (
 		<div className="slog">
 			<div className="lh">
@@ -286,6 +333,15 @@ export function LogView({
 					</button>
 				</span>
 			</div>
+			{trunc && (
+				<div className="ltrunc" style={{ padding: "4px 10px", color: "#a80", fontSize: 12 }}>
+					log truncated — showing {trunc.next.toLocaleString()} of{" "}
+					{trunc.size.toLocaleString()} bytes{" "}
+					<button onClick={loadMore} style={{ marginLeft: 8 }}>
+						load more
+					</button>
+				</div>
+			)}
 			<div
 				className={cn("log", !wrap && "raw")}
 				ref={logRef}

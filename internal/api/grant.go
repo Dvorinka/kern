@@ -163,7 +163,7 @@ func grantRouteAllowed(path string) bool {
 	case "/api/v1/auth/me", "/api/v1/auth/logout",
 		"/api/v1/auth/tokens", "/api/v1/auth/tokens/:id",
 		"/api/v1/projects",
-		"/api/v1/runs", "/api/v1/runs/:id", "/api/v1/runs/:id/cancel", "/api/v1/runs/:id/rerun",
+		"/api/v1/runs", "/api/v1/runs/jobs", "/api/v1/runs/:id", "/api/v1/runs/:id/cancel", "/api/v1/runs/:id/rerun",
 		"/api/v1/artifacts", "/api/v1/artifacts/:id", "/api/v1/artifacts/:id/download",
 		"/api/v1/steps/:stepID/logs", "/api/v1/steps/:stepID/logs/stream", "/api/v1/steps/:stepID/summary":
 		return true
@@ -210,6 +210,31 @@ func (s *Server) enforceGrantIDs(c *gin.Context, path string) bool {
 		if !grantHas(tokenProjects(c), slug) {
 			fail(c, http.StatusForbidden, "project_denied", "token cannot access project "+slug)
 			return false
+		}
+		return true
+	case "/api/v1/runs/jobs":
+		// Every requested run must sit inside the token's projects.
+		raw := strings.Split(c.Query("ids"), ",")
+		ids := make([]uuid.UUID, 0, len(raw))
+		for _, v := range raw {
+			if id, err := uuid.Parse(strings.TrimSpace(v)); err == nil {
+				ids = append(ids, id)
+			}
+		}
+		projects, err := s.Store.RunProjects(c.Request.Context(), ids)
+		if err != nil {
+			s.internalError(c, err)
+			return false
+		}
+		for _, pid := range projects {
+			p, err := s.Store.ProjectByID(c.Request.Context(), pid)
+			if err != nil {
+				continue
+			}
+			if !grantHas(tokenProjects(c), p.Slug) {
+				fail(c, http.StatusNotFound, "not_found", "resource not found")
+				return false
+			}
 		}
 		return true
 	case "/api/v1/artifacts":

@@ -3,8 +3,10 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -260,4 +262,45 @@ func (s *Server) patchControlGeo(c *gin.Context) {
 	}
 	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "settings.map_geo", "manual")
 	c.JSON(http.StatusOK, gin.H{"ok": true, "source": "manual"})
+}
+
+// geoReverse proxies nominatim reverse-geocoding server-side (#378): the
+// fleet map used to call the public API straight from the browser, leaking
+// the operator's IP and breaking on air-gapped / strict-CSP deployments.
+// The upstream is pinned; only lat/lon pass through.
+var geoHTTP = &http.Client{Timeout: 5 * time.Second}
+
+func (s *Server) geoReverse(c *gin.Context) {
+	lat, lerr := strconv.ParseFloat(c.Query("lat"), 64)
+	lng, lngerr := strconv.ParseFloat(c.Query("lon"), 64)
+	if lerr != nil || lngerr != nil || !validLatLng(lat, lng) {
+		fail(c, http.StatusBadRequest, "invalid_coords", "lat/lon out of range")
+		return
+	}
+	u := "https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=10" +
+		"&lat=" + url.QueryEscape(c.Query("lat")) + "&lon=" + url.QueryEscape(c.Query("lon"))
+	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, u, nil)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	// Nominatim's usage policy requires an identifying UA.
+	req.Header.Set("User-Agent", "kern-ci/1.0")
+	req.Header.Set("Accept", "application/json")
+	resp, err := geoHTTP.Do(req)
+	if err != nil {
+		// Air-gapped or upstream down — the UI falls back to coordinates.
+		c.JSON(http.StatusOK, gin.H{"address": gin.H{}})
+		return
+	}
+	defer resp.Body.Close()
+	var out struct {
+		Address map[string]string `json:"address"`
+	}
+	if resp.StatusCode != http.StatusOK ||
+		json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&out) != nil {
+		c.JSON(http.StatusOK, gin.H{"address": gin.H{}})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"address": out.Address})
 }

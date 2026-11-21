@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
@@ -17,6 +17,7 @@ import { bytes, catColor, duration, projectColor, refName, relTime, shortSha } f
 export function RunDetailPage() {
 	const { id } = useParams<{ id: string }>();
 		const qc = useQueryClient();
+	const nav = useNavigate();
 	const { data, isLoading } = useQuery({
 		queryKey: ["run", id],
 		queryFn: () => api.get<RunDetail>(`/runs/${id}`),
@@ -39,7 +40,15 @@ export function RunDetailPage() {
 		onSuccess: () => qc.invalidateQueries({ queryKey: ["run", id] }),
 	});
 	const rerun = useMutation({
-		mutationFn: () => api.post(`/runs/${id}/rerun`),
+		mutationFn: (body?: { failed?: boolean }) =>
+			api.post<{ run: { id: string } }>(`/runs/${id}/rerun`, body),
+		onSuccess: (res, body) => {
+			qc.invalidateQueries({ queryKey: ["run", id] });
+			qc.invalidateQueries({ queryKey: ["runs"] });
+			// A fresh run navigates to it; an in-place failed-jobs rerun
+			// stays on this run.
+			if (!body?.failed && res.run?.id && res.run.id !== id) nav(`/runs/${res.run.id}`);
+		},
 	});
 	const approve = useMutation({
 		mutationFn: () => api.post(`/runs/${id}/approve`),
@@ -66,7 +75,10 @@ export function RunDetailPage() {
 		run.status === "in_progress" || run.status === "queued" || run.status === "awaiting_approval";
 	const title = run.commit_message?.split("\n")[0] || `${run.workflow_name} #${run.run_number}`;
 	const job =
-		jobs.find((j) => j.id === jobId) ?? jobs.find((j) => j.status === "in_progress") ?? jobs[0];
+		jobs.find((j) => j.id === jobId) ??
+		jobs.find((j) => j.status === "in_progress") ??
+		jobs.find((j) => j.conclusion === "failure") ??
+		jobs[0];
 
 	return (
 		<div className="page">
@@ -124,12 +136,22 @@ export function RunDetailPage() {
 								Cancel
 							</button>
 						)}
+						{jobs.some((j) => j.conclusion === "failure") && (
+							<button className="pill" onClick={() => rerun.mutate({ failed: true })} disabled={rerun.isPending}>
+								Re-run failed
+							</button>
+						)}
 						<button className="pill solid" onClick={() => rerun.mutate()} disabled={rerun.isPending}>
 							Re-run
 						</button>
 					</span>
 				</span>
 			</div>
+			{(rerun.error || cancel.error) && (
+				<div className="text-xs text-[var(--err)]">
+					{(rerun.error ?? cancel.error)?.message}
+				</div>
+			)}
 			<dl className="rkv">
 				<div>
 					<dt>Trigger</dt>
@@ -211,6 +233,7 @@ function StepsPanel({
 	const sel =
 		steps.find((s) => s.number === stepN) ??
 		steps.find((s) => s.status === "running") ??
+		steps.find((s) => s.conclusion === "failure") ??
 		steps[steps.length - 1];
 	return (
 		<div className="tsec gap">

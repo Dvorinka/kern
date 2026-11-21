@@ -57,6 +57,40 @@ func (s *Server) listRuns(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"runs": runs, "total": total, "counts": counts})
 }
 
+// runsJobs returns jobs grouped by run id for up to 200 runs — the list
+// views need per-row job state and previously issued one /runs/:id request
+// per visible row (a 150-request fan-out on page load).
+func (s *Server) runsJobs(c *gin.Context) {
+	raw := strings.Split(c.Query("ids"), ",")
+	if len(raw) == 0 || raw[0] == "" {
+		fail(c, http.StatusBadRequest, "invalid_ids", "ids is required")
+		return
+	}
+	if len(raw) > 200 {
+		fail(c, http.StatusBadRequest, "too_many", "at most 200 ids")
+		return
+	}
+	ids := make([]uuid.UUID, 0, len(raw))
+	for _, v := range raw {
+		id, err := uuid.Parse(strings.TrimSpace(v))
+		if err != nil {
+			fail(c, http.StatusBadRequest, "invalid_ids", "ids must be uuids")
+			return
+		}
+		ids = append(ids, id)
+	}
+	jobs, err := s.Store.JobsForRuns(c.Request.Context(), ids)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	grouped := make(map[string][]store.Job, len(ids))
+	for _, j := range jobs {
+		grouped[j.RunID.String()] = append(grouped[j.RunID.String()], j)
+	}
+	c.JSON(http.StatusOK, gin.H{"jobs": grouped})
+}
+
 // dayCounts serves the overview charts — per-day per-project totals from
 // the table itself, so a 14-day or 10-week view does not depend on how
 // many runs the paged list happened to return.

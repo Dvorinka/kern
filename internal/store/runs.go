@@ -457,6 +457,56 @@ func (s *Store) JobsForRunNoSteps(ctx context.Context, runID uuid.UUID) ([]Job, 
 	return s.jobsForRun(ctx, runID, false)
 }
 
+// RunProjects maps run ids to their project ids — grant checks on batch
+// run-scoped routes use it to verify every id in one query.
+func (s *Store) RunProjects(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+	out := map[uuid.UUID]uuid.UUID{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, project_id FROM runs WHERE id = ANY($1)`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, pid uuid.UUID
+		if err := rows.Scan(&id, &pid); err != nil {
+			return nil, err
+		}
+		out[id] = pid
+	}
+	return out, rows.Err()
+}
+
+// JobsForRuns loads jobs for many runs in one query — the web list views
+// fetch per-run job state for every visible row.
+func (s *Store) JobsForRuns(ctx context.Context, runIDs []uuid.UUID) ([]Job, error) {
+	if len(runIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, run_id, job_key, key, name, status, conclusion, needs, runs_on, image, matrix, env,
+		       if_condition, timeout_seconds, continue_on_error, fail_fast, priority, attempt, runner_id,
+		       queued_at, started_at, completed_at, lease_expires_at, error, outputs, outputs_spec,
+		       environment, environment_url, inputs, services, permissions, metrics, classification
+		FROM jobs WHERE run_id = ANY($1) ORDER BY run_id, queued_at, key`, runIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Job{}
+	for rows.Next() {
+		j, err := scanJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, j)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) jobsForRun(ctx context.Context, runID uuid.UUID, withSteps bool) ([]Job, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, run_id, job_key, key, name, status, conclusion, needs, runs_on, image, matrix, env,

@@ -215,6 +215,7 @@ func (s *Server) buildRouter() *gin.Engine {
 
 		auth.GET("/logs/search", s.searchLogs)
 		auth.GET("/runs", s.listRuns)
+		auth.GET("/runs/jobs", s.runsJobs)
 		auth.GET("/runs/day-counts", s.dayCounts)
 		auth.GET("/runs/:id", s.getRun)
 		auth.GET("/jobs", s.queuedJobs)
@@ -263,6 +264,7 @@ func (s *Server) buildRouter() *gin.Engine {
 		admin.GET("/audit", s.listAudit)
 		admin.GET("/audit/export", s.exportAudit)
 		auth.GET("/instance/update", s.updateCheck)
+		auth.GET("/geo/reverse", s.geoReverse)
 		auth.GET("/metrics", s.prometheus)
 		auth.POST("/mcp", s.mcp)
 		auth.GET("/projects/:project/settings", s.getProjectSettings)
