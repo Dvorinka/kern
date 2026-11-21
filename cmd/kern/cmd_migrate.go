@@ -99,7 +99,7 @@ func (c *cli) cmdMigrate(ctx context.Context, args []string) error {
 		}
 	}
 	table([]string{"PATH", "NAME", "STATUS", "DIAGS"}, rows)
-	fmt.Println("note: GitHub secrets are write-only — recreate them with `kern secrets set " + slug + " NAME`")
+	fmt.Println("note: GitHub secrets are write-only — recreate them with `kern secrets set NAME --project " + slug + "`")
 	return nil
 }
 

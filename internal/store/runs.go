@@ -369,16 +369,20 @@ func (s *Store) Runs(ctx context.Context, f RunFilter) ([]Run, int, error) {
 	var total int
 	if err := s.pool.QueryRow(ctx, `
 		SELECT count(*) FROM workflow_runs r
+		JOIN workflows w ON w.id = r.workflow_id
 		WHERE ($1::uuid IS NULL OR r.project_id = $1)
 		  AND ($2::text[] IS NULL OR r.status = ANY($2))
 		  AND ($3 = '' OR r.conclusion = $3)
 		  AND ($4::bool OR r.cleared_at IS NULL)
-		  AND ($5::timestamptz IS NULL OR r.created_at >= $5)
-		  AND ($6::timestamptz IS NULL OR r.created_at < $6)
-		  AND ($7 = '' OR EXISTS (
-		    SELECT 1 FROM jobs jc WHERE jc.run_id = r.id AND jc.classification = $7))`,
+		  AND ($5 = '' OR r.ref = $5 OR r.ref = 'refs/heads/' || $5)
+		  AND ($6 = '' OR r.source->>'pr_number' = $6)
+		  AND ($7 = '' OR w.name = $7 OR w.path = $7 OR w.path LIKE '%/' || $7)
+		  AND ($8::timestamptz IS NULL OR r.created_at >= $8)
+		  AND ($9::timestamptz IS NULL OR r.created_at < $9)
+		  AND ($10 = '' OR EXISTS (
+		    SELECT 1 FROM jobs jc WHERE jc.run_id = r.id AND jc.classification = $10))`,
 		f.ProjectID, statuses, f.Conclusion, f.IncludeCleared,
-		nilTime(f.Since), nilTime(f.Until), f.Classification).Scan(&total); err != nil {
+		f.Ref, f.PR, f.Workflow, nilTime(f.Since), nilTime(f.Until), f.Classification).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	return out, total, rows.Err()
