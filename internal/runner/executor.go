@@ -11,7 +11,9 @@ package runner
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -543,6 +545,12 @@ func (e *executor) pull(ctx context.Context) error {
 	if _, err := exec.LookPath("docker"); err != nil {
 		return fmt.Errorf("docker binary not found on runner host")
 	}
+	// Digest-pinned refs are immutable — a local copy is definitionally
+	// fresh, so skip the registry round-trip entirely (#372). Mutable
+	// tags still pull to pick up repushed images.
+	if strings.Contains(e.claim.Job.Image, "@sha256:") && e.imageExists(ctx, e.claim.Job.Image) {
+		return nil
+	}
 	if err := e.docker(ctx, "pull", "-q", e.claim.Job.Image); err != nil {
 		// A registry hiccup or an unauthenticated private ref must not kill a
 		// job whose image is already on the host; the daemon resolves the local
@@ -579,12 +587,22 @@ func (e *executor) imageEnvPath(ctx context.Context) string {
 	return ""
 }
 
+// imageHomeCache memoizes imageUserHome across jobs on this runner —
+// an image's uid-1000 home is fixed per tag fetch, and the throwaway
+// `docker run --rm` probe cost a container lifecycle on every job (#372).
+// Keyed by image ref; a repushed tag re-probes on runner restart, an
+// acceptable staleness bound.
+var imageHomeCache sync.Map // image ref -> uid-1000 home ("" = none)
+
 // imageUserHome reports the home directory of uid 1000 in the job image's
 // /etc/passwd — what getpwuid(3) returns inside the container. JVM tools
 // (Gradle, Maven, Java itself) resolve user.home this way and ignore $HOME.
 // Returns "" when the image has no uid-1000 entry or the probe fails; the
 // caller then skips the extra home mount.
 func (e *executor) imageUserHome(ctx context.Context) string {
+	if home, ok := imageHomeCache.Load(e.claim.Job.Image); ok {
+		return home.(string)
+	}
 	out, err := exec.CommandContext(ctx, "docker", "run", "--rm", "--network", "none",
 		"--entrypoint", "sh", e.claim.Job.Image, "-c",
 		`awk -F: '$3==1000 {print $6; exit}' /etc/passwd 2>/dev/null || true`).Output()
@@ -596,8 +614,9 @@ func (e *executor) imageUserHome(ctx context.Context) string {
 	// a missing entry) skips the extra mount rather than shadowing system
 	// directories in the job container.
 	if !strings.HasPrefix(home, "/home/") || strings.ContainsAny(home, " \t\n\r") {
-		return ""
+		home = ""
 	}
+	imageHomeCache.Store(e.claim.Job.Image, home)
 	return home
 }
 
@@ -605,6 +624,9 @@ func (e *executor) imageUserHome(ctx context.Context) string {
 func (e *executor) startContainer(ctx context.Context) error {
 	if !e.cfg.Local && e.cfg.Concurrency <= 1 {
 		e.preJobContainers = containerIDs(ctx)
+	}
+	if e.privileged() {
+		e.ensureBuildxBuilder(ctx)
 	}
 	workRoot := e.workRoot()
 	// GITHUB_EVENT_PATH: third-party actions read github.event.* from this
@@ -627,7 +649,15 @@ func (e *executor) startContainer(ctx context.Context) error {
 	// job's localhost can reach it — the VM-runner model GitHub-hosted jobs
 	// get for free. Untrusted jobs keep the isolated bridge.
 	hostNet := e.privileged()
-	if hostNet {
+	if e.serviceBridgeJob() {
+		// Privileged + services: per-job bridge so ported services share
+		// the job netns instead of serializing on hostPortLocks (#372).
+		// host-gateway keeps step-level `docker run -p` (which binds the
+		// daemon's host netns) reachable as host.docker.internal:port.
+		hostNet = false
+		args = append(args, "--network", e.serviceNet(),
+			"--add-host", "host.docker.internal:host-gateway")
+	} else if hostNet {
 		args = append(args, "--network", "host")
 	} else if e.egressRestricted() {
 		args = append(args, "--network", e.egressNet())
@@ -824,6 +854,18 @@ func (e *executor) jobEnv() map[string]string {
 		// host executors. Pin the cache to the shared uuid-free _cache
 		// dir; it doubles as a warm cross-job store.
 		"npm_config_cache": e.cachePath() + "/npm",
+		// Language toolchains default to $HOME — which is the per-job
+		// ephemeral actionHome — so without these every job rebuilds
+		// cold (#372). Dir names match the gc.go eviction units so the
+		// cache sweeper already bounds them.
+		"GOMODCACHE":          e.cachePath() + "/gomod",
+		"GOCACHE":             e.cachePath() + "/gocache",
+		"GOLANGCI_LINT_CACHE": e.cachePath() + "/golangci-lint",
+		"PIP_CACHE_DIR":       e.cachePath() + "/pip",
+		"UV_CACHE_DIR":        e.cachePath() + "/uv",
+		"YARN_CACHE_FOLDER":   e.cachePath() + "/yarn",
+		"RUSTUP_HOME":         e.cachePath() + "/rustup",
+		"SCCACHE_DIR":         e.cachePath() + "/sccache",
 		// The provisioned node bin dir leads PATH so its bundled yarn,
 		// yarnpkg and corepack shims resolve inside JS actions too —
 		// setup-node@v4 runs `yarn --version` on seeing a lockfile and
@@ -885,6 +927,14 @@ func (e *executor) jobEnv() map[string]string {
 		"GIT_CONFIG_COUNT":   "1",
 		"GIT_CONFIG_KEY_0":   "safe.directory",
 		"GIT_CONFIG_VALUE_0": "*",
+	}
+	if e.privileged() {
+		// Persistent BuildKit: jobs reuse one docker-container builder and
+		// its cache instead of paying for an isolated buildx_* builder per
+		// job (#372). Only privileged tiers carry the docker socket these
+		// variables can reach.
+		env["DOCKER_BUILDKIT"] = "1"
+		env["BUILDX_BUILDER"] = "kern"
 	}
 	// Host steps inherit os.Environ (hostStepCmd) plus PATH_LINES; a fixed
 	// PATH here would drop toolchain dirs the runner image doesn't control
@@ -1022,6 +1072,15 @@ func (e *executor) checkout(ctx context.Context) error {
 	if run.RepoURL == "" {
 		return fmt.Errorf("run has neither repo_url nor local_path; there is nothing to check out")
 	}
+	if os.Getenv("KERN_GIT_MIRRORS") != "0" {
+		if err := e.checkoutViaMirror(ctx, run, ws); err == nil {
+			e.persistGitPushAuth(ctx, ws)
+			return nil
+		} else {
+			e.log.Warn("mirror checkout failed; falling back to direct clone",
+				zap.String("repo", run.RepoURL), zap.Error(err))
+		}
+	}
 	args := cloneArgs(run, ws)
 	if out, err := exec.CommandContext(ctx, "git", args...).CombinedOutput(); err != nil {
 		return fmt.Errorf("clone %s: %w (%s)", run.RepoURL, err, tailStr(string(out), 400))
@@ -1043,6 +1102,74 @@ func (e *executor) checkout(ctx context.Context) error {
 		_ = exec.CommandContext(ctx, "git", "-C", ws, "checkout", "--force", branch).Run()
 	}
 	e.persistGitPushAuth(ctx, ws)
+	return nil
+}
+
+// mirrorMu serializes mirror fetch/checkout across concurrent jobs — a
+// fetch pruning refs must not race a worktree add reading them.
+// ponytail: one global mirror lock; per-repo granularity if cross-repo
+// fetch contention shows up.
+var mirrorMu sync.Mutex
+
+// checkoutViaMirror keeps a bare mirror per repo under _cache/_repos,
+// fetches just the target ref/SHA into it, and materializes the workspace
+// as a detached worktree — objects hardlink into the mirror, so no
+// full-history network clone and no object copy at all (#372).
+func (e *executor) checkoutViaMirror(ctx context.Context, run ClaimRun, ws string) error {
+	target := run.Ref
+	if run.SHA != "" {
+		target = run.SHA
+	}
+	if target == "" {
+		return fmt.Errorf("no ref or sha to mirror")
+	}
+	sum := sha256.Sum256([]byte(run.RepoURL))
+	mirror := filepath.Join(e.cachePath(), "_repos", hex.EncodeToString(sum[:8])+".git")
+
+	mirrorMu.Lock()
+	defer mirrorMu.Unlock()
+	if fi, err := os.Stat(mirror); err != nil || !fi.IsDir() {
+		if err := os.MkdirAll(filepath.Dir(mirror), 0o755); err != nil {
+			return err
+		}
+		if out, err := exec.CommandContext(ctx, "git", "init", "--bare", "--quiet", mirror).CombinedOutput(); err != nil {
+			return fmt.Errorf("init mirror: %w (%s)", err, tailStr(string(out), 300))
+		}
+		if out, err := exec.CommandContext(ctx, "git", "-C", mirror, "remote", "add", "origin", run.RepoURL).CombinedOutput(); err != nil {
+			return fmt.Errorf("mirror remote: %w (%s)", err, tailStr(string(out), 300))
+		}
+	}
+	fetch := []string{"-C", mirror}
+	if run.CloneToken != "" {
+		// Same header scheme as cloneArgs — never written to config.
+		basic := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + run.CloneToken))
+		fetch = append(fetch, "-c", "http.extraHeader=Authorization: Basic "+basic)
+	}
+	fetch = append(fetch, "fetch", "--filter=blob:none", "--prune", "origin", target)
+	if out, err := exec.CommandContext(ctx, "git", fetch...).CombinedOutput(); err != nil {
+		// Hosts without partial-clone support reject --filter; retry full.
+		full := make([]string, 0, len(fetch))
+		for _, a := range fetch {
+			if a != "--filter=blob:none" {
+				full = append(full, a)
+			}
+		}
+		if out2, err2 := exec.CommandContext(ctx, "git", full...).CombinedOutput(); err2 != nil {
+			return fmt.Errorf("mirror fetch %s: %w (%s)", target, err2, tailStr(string(out)+string(out2), 400))
+		}
+	}
+	// FETCH_HEAD is not a ref — pin it so the worktree can name it, and
+	// drop stale worktree registrations left by reaped job dirs.
+	if out, err := exec.CommandContext(ctx, "git", "-C", mirror, "update-ref", "refs/mirror/head", "FETCH_HEAD").CombinedOutput(); err != nil {
+		return fmt.Errorf("mirror pin: %w (%s)", err, tailStr(string(out), 300))
+	}
+	_ = exec.CommandContext(ctx, "git", "-C", mirror, "worktree", "prune").Run()
+	if out, err := exec.CommandContext(ctx, "git", "-C", mirror, "worktree", "add", "--detach", ws, "refs/mirror/head").CombinedOutput(); err != nil {
+		return fmt.Errorf("mirror worktree: %w (%s)", err, tailStr(string(out), 400))
+	}
+	// The worktree's origin is the local mirror path — restore the real
+	// remote so step git ops and push auth behave like a normal clone.
+	_ = exec.CommandContext(ctx, "git", "-C", ws, "remote", "set-url", "origin", run.RepoURL).Run()
 	return nil
 }
 
@@ -1386,6 +1513,28 @@ func atomicCopyFile(src, dst string, mode os.FileMode) error {
 func dirExists(p string) bool {
 	st, err := os.Stat(p)
 	return err == nil && st.IsDir()
+}
+
+var buildxOnce sync.Once
+
+// ensureBuildxBuilder creates the runner's persistent docker-container
+// builder once per process — every job then shares it (and its BuildKit
+// cache) instead of provisioning isolated buildx_* builders (#372). A
+// missing buildx plugin on the host just skips the shared builder;
+// jobs fall back to their own builders exactly as before.
+func (e *executor) ensureBuildxBuilder(ctx context.Context) {
+	buildxOnce.Do(func() {
+		if err := exec.CommandContext(ctx, "docker", "buildx", "version").Run(); err != nil {
+			return
+		}
+		if err := exec.CommandContext(ctx, "docker", "buildx", "inspect", "kern").Run(); err == nil {
+			return
+		}
+		if err := exec.CommandContext(ctx, "docker", "buildx", "create",
+			"--name", "kern", "--driver", "docker-container").Run(); err != nil {
+			e.log.Warn("shared buildx builder creation failed", zap.Error(err))
+		}
+	})
 }
 
 func pathExists(p string) bool {

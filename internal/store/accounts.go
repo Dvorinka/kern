@@ -451,7 +451,10 @@ func (s *Store) UserByAPIToken(ctx context.Context, hash string) (User, TokenGra
 	if err != nil {
 		return User{}, TokenGrant{}, err
 	}
-	_, _ = s.pool.Exec(ctx, `UPDATE api_tokens SET last_used_at = now() WHERE token_hash = $1`, hash)
+	// last_used_at is informational; throttle the row write to hourly so every
+	// authenticated API request does not churn api_tokens (#374).
+	_, _ = s.pool.Exec(ctx, `UPDATE api_tokens SET last_used_at = now()
+		WHERE token_hash = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '1 hour')`, hash)
 	return u, g, nil
 }
 

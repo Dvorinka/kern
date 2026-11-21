@@ -190,7 +190,7 @@ func (c *cli) cmdRunners(ctx context.Context, args []string) error {
 		}
 		fmt.Printf("enrollment token (shown once, expires %s):\n%s\n\n", out.Record.ExpiresAt, out.Token)
 		fmt.Printf("on the runner host:\n  kern-runner join --control %s --token %s\n\n", c.server, out.Token)
-		fmt.Printf("or one container, everything included:\n  docker run -d --name kern-runner --restart always \\\n    -e KERN_CONTROL_URL=%s -e KERN_RUNNER_JOIN_TOKEN=%s \\\n    -e KERN_RUNNER_UPDATE=1 -e KERN_RUNNER_CONCURRENCY=1 \\\n    -e KERN_WORK_ROOT=/opt/kern/work -e HOME=/root \\\n    -v /var/run/docker.sock:/var/run/docker.sock -v /opt/kern/work:/opt/kern/work \\\n    kern-runner:local\n", c.server, out.Token)
+		fmt.Printf("or one container, everything included:\n  docker run -d --name kern-runner --restart always \\\n    -e KERN_CONTROL_URL=%s -e KERN_RUNNER_JOIN_TOKEN=%s \\\n    -e KERN_RUNNER_UPDATE=1 -e KERN_RUNNER_CONCURRENCY=1 \\\n    -e KERN_WORK_ROOT=/opt/kern/work -e HOME=/root \\\n    -v /var/run/docker.sock:/var/run/docker.sock -v /opt/kern/work:/opt/kern/work \\\n    ghcr.io/dvorinka/kern-runner:latest\n", c.server, out.Token)
 	default:
 		return fmt.Errorf("unknown runners subcommand %q", sub)
 	}
@@ -300,6 +300,7 @@ func (c *cli) cmdArtifacts(ctx context.Context, args []string) error {
 		}
 		defer fh.Close()
 		if err := c.api().download(ctx, "/artifacts/"+id+"/download", fh); err != nil {
+			os.Remove(name) // don't leave a 0-byte/partial file behind
 			return err
 		}
 		c.orJSON(map[string]any{"id": id, "path": name}, func() {

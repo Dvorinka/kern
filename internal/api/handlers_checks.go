@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gin-gonic/gin"
+	"context"
 	"github.com/google/uuid"
 )
 
@@ -33,7 +33,7 @@ type checkEventPayload struct {
 }
 
 // actOnCheckRun handles check_run deliveries; only "rerequested" acts.
-func (s *Server) actOnCheckRun(c *gin.Context, body []byte) (status, detail string) {
+func (s *Server) actOnCheckRun(ctx context.Context, body []byte) (status, detail string) {
 	var p checkEventPayload
 	if err := json.Unmarshal(body, &p); err != nil {
 		return "failed", "payload is not a check_run event: " + err.Error()
@@ -46,7 +46,7 @@ func (s *Server) actOnCheckRun(c *gin.Context, body []byte) (status, detail stri
 	if err != nil {
 		return "ignored", "check run external_id is not a kern run: " + p.CheckRun.ExternalID
 	}
-	run, err := s.Store.Run(c.Request.Context(), runID)
+	run, err := s.Store.Run(ctx, runID)
 	if err != nil {
 		return "ignored", "check run references unknown run " + runPart
 	}
@@ -62,7 +62,7 @@ func (s *Server) actOnCheckRun(c *gin.Context, body []byte) (status, detail stri
 	if jobKey != "" {
 		keys = []string{jobKey}
 	}
-	n, err := s.Store.RerunJobs(c.Request.Context(), runID, keys)
+	n, err := s.Store.RerunJobs(ctx, runID, keys)
 	if err != nil {
 		return "ignored", fmt.Sprintf("rerequest %s #%d: %s", run.WorkflowName, run.RunNumber, err)
 	}
@@ -72,7 +72,7 @@ func (s *Server) actOnCheckRun(c *gin.Context, body []byte) (status, detail stri
 // actOnCheckSuite handles check_suite deliveries; only "rerequested" acts.
 // The payload carries no check runs, so the suite resolves to the newest
 // run per workflow at its head sha.
-func (s *Server) actOnCheckSuite(c *gin.Context, body []byte) (status, detail string) {
+func (s *Server) actOnCheckSuite(ctx context.Context, body []byte) (status, detail string) {
 	var p checkEventPayload
 	if err := json.Unmarshal(body, &p); err != nil {
 		return "failed", "payload is not a check_suite event: " + err.Error()
@@ -80,7 +80,7 @@ func (s *Server) actOnCheckSuite(c *gin.Context, body []byte) (status, detail st
 	if p.Action != "rerequested" {
 		return "ignored", "check_suite action " + p.Action + " is not a rerequest"
 	}
-	runs, err := s.Store.RunsForSHA(c.Request.Context(), p.Repository.FullName, p.CheckSuite.HeadSHA)
+	runs, err := s.Store.RunsForSHA(ctx, p.Repository.FullName, p.CheckSuite.HeadSHA)
 	if err != nil {
 		return "failed", err.Error()
 	}
@@ -89,7 +89,7 @@ func (s *Server) actOnCheckSuite(c *gin.Context, body []byte) (status, detail st
 	}
 	var parts []string
 	for _, run := range runs {
-		n, err := s.Store.RerunJobs(c.Request.Context(), run.ID, nil)
+		n, err := s.Store.RerunJobs(ctx, run.ID, nil)
 		if err != nil {
 			parts = append(parts, fmt.Sprintf("%s #%d (%s)", run.WorkflowName, run.RunNumber, err))
 			continue

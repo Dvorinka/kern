@@ -34,15 +34,17 @@ type RegisterRunnerParams struct {
 	Ephemeral   bool
 	// Executor is "docker" or "host"; empty stores as 'docker'.
 	Executor string
+	// Concurrency is the runner's worker-slot count; values < 1 store 1.
+	Concurrency int
 }
 
 func (s *Store) RegisterRunner(ctx context.Context, p RegisterRunnerParams) (Runner, error) {
 	return scanRunner(s.pool.QueryRow(ctx, `
 		INSERT INTO runners (org_id, name, hostname, os, arch, cpus, memory_bytes, disk_bytes,
 		                     labels, version, status, ephemeral, token_hash, last_heartbeat_at,
-		                     executor)
+		                     executor, concurrency)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'online', $11, $12, now(),
-		        COALESCE(NULLIF($13, ''), 'docker'))
+		        COALESCE(NULLIF($13, ''), 'docker'), GREATEST($14, 1))
 		ON CONFLICT (org_id, name) DO UPDATE SET
 			hostname = EXCLUDED.hostname, os = EXCLUDED.os, arch = EXCLUDED.arch,
 			cpus = EXCLUDED.cpus, memory_bytes = EXCLUDED.memory_bytes,
@@ -50,10 +52,10 @@ func (s *Store) RegisterRunner(ctx context.Context, p RegisterRunnerParams) (Run
 			version = EXCLUDED.version, status = 'online',
 			ephemeral = EXCLUDED.ephemeral,
 			token_hash = EXCLUDED.token_hash, last_heartbeat_at = now(),
-			executor = EXCLUDED.executor
+			executor = EXCLUDED.executor, concurrency = EXCLUDED.concurrency
 		RETURNING `+runnerCols,
 		p.OrgID, p.Name, p.Hostname, p.OS, p.Arch, p.CPUs, p.MemoryBytes, p.DiskBytes,
-		p.Labels, p.Version, p.Ephemeral, p.TokenHash, p.Executor))
+		p.Labels, p.Version, p.Ephemeral, p.TokenHash, p.Executor, p.Concurrency))
 }
 
 // InsertRunner creates a runner row without the (org, name) upsert used by
@@ -63,12 +65,15 @@ func (s *Store) InsertRunner(ctx context.Context, p RegisterRunnerParams) (Runne
 	return scanRunner(s.pool.QueryRow(ctx, `
 		INSERT INTO runners (org_id, name, hostname, os, arch, cpus, memory_bytes, disk_bytes,
 		                     labels, version, status, ephemeral, token_hash, last_heartbeat_at,
-		                     executor)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'online', $11, $12, now(),
-		        COALESCE(NULLIF($13, ''), 'docker'))
+		                     executor, concurrency)
+		-- 'pending': an unbooted JIT runner cannot claim (fleet requires
+		-- status='online') and must not absorb yield either. The first
+		-- heartbeat flips it online (#372).
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', $11, $12, now(),
+		        COALESCE(NULLIF($13, ''), 'docker'), GREATEST($14, 1))
 		RETURNING `+runnerCols,
 		p.OrgID, p.Name, p.Hostname, p.OS, p.Arch, p.CPUs, p.MemoryBytes, p.DiskBytes,
-		p.Labels, p.Version, p.Ephemeral, p.TokenHash, p.Executor))
+		p.Labels, p.Version, p.Ephemeral, p.TokenHash, p.Executor, p.Concurrency))
 }
 
 // runnerCols is the full runners column list; keep scan order in lockstep.
@@ -76,7 +81,7 @@ const runnerCols = `id, org_id, name, hostname, os, arch, cpus, memory_bytes, di
 	version, status, draining, ephemeral, last_heartbeat_at, cpu_percent,
 	mem_used_bytes, disk_free_bytes, metrics_at, geo_lat, geo_lng, geo_city,
 	geo_country, geo_source, geo_ip, geo_updated_at, executor, created_at, icon, auto_update,
-	wake_on_demand, env, disk_alerted, claims_paused, missing_tools`
+	wake_on_demand, env, disk_alerted, claims_paused, missing_tools, concurrency`
 
 func scanRunner(row pgx.Row) (Runner, error) {
 	var r Runner
@@ -86,7 +91,7 @@ func scanRunner(row pgx.Row) (Runner, error) {
 		&r.DiskFreeBytes, &r.MetricsAt, &r.GeoLat, &r.GeoLng, &r.GeoCity,
 		&r.GeoCountry, &r.GeoSource, &r.GeoIP, &r.GeoUpdatedAt, &r.Executor, &r.CreatedAt,
 		&r.Icon, &r.AutoUpdate, &r.WakeOnDemand, &r.Env, &r.DiskAlerted, &r.ClaimsPaused,
-		&r.MissingTools)
+		&r.MissingTools, &r.Concurrency)
 	return r, err
 }
 
@@ -107,21 +112,26 @@ func (s *Store) Runner(ctx context.Context, id uuid.UUID) (Runner, error) {
 	return r, err
 }
 
-// FleetSlots sums CPUs of online, non-draining runners whose labels can run
-// runsOn. A runner with cpus < 1 counts as one. Zero matching runners returns 0.
+// FleetSlots sums free worker slots of online, non-draining runners whose
+// labels can run runsOn — concurrency minus in-progress jobs per runner
+// (#372). Zero matching runners returns 0.
 func (s *Store) FleetSlots(ctx context.Context, orgID uuid.UUID, runsOn []string) (int, error) {
 	if runsOn == nil {
 		runsOn = []string{}
 	}
 	var n int
 	err := s.pool.QueryRow(ctx, `
-		SELECT COALESCE(SUM(GREATEST(cpus, 1)), 0)::int
-		FROM runners
-		WHERE org_id = $1
-		  AND status = 'online'
-		  AND NOT draining
-		  AND claims_paused = ''
-		  AND $2::text[] <@ (labels || ARRAY['self-hosted', 'kern']::text[])`,
+		SELECT COALESCE(SUM(GREATEST(
+			r.concurrency - COALESCE((
+				SELECT count(*) FROM jobs j
+				WHERE j.runner_id = r.id AND j.status = 'in_progress'), 0),
+			0)), 0)::int
+		FROM runners r
+		WHERE r.org_id = $1
+		  AND r.status = 'online'
+		  AND NOT r.draining
+		  AND r.claims_paused = ''
+		  AND $2::text[] <@ (r.labels || ARRAY['self-hosted', 'kern']::text[])`,
 		orgID, runsOn).Scan(&n)
 	return n, err
 }
@@ -331,6 +341,33 @@ func (s *Store) InFlightJobs(ctx context.Context, orgID uuid.UUID) ([]LiveJob, e
 			return nil, err
 		}
 		out = append(out, j)
+	}
+	return out, rows.Err()
+}
+
+// RunnerActiveJobsBatch loads every in-progress job across many runners in one
+// query — the runner listing endpoints fan out per runner otherwise (#374).
+func (s *Store) RunnerActiveJobsBatch(ctx context.Context, runnerIDs []uuid.UUID) (map[uuid.UUID][]Job, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT j.id, j.run_id, j.job_key, j.key, j.name, j.status, j.conclusion, j.needs, j.runs_on,
+		       j.image, j.matrix, j.env, j.if_condition, j.timeout_seconds, j.continue_on_error,
+		       j.fail_fast, j.priority, j.attempt, j.runner_id, j.queued_at, j.started_at, j.completed_at,
+		       j.lease_expires_at, j.error, j.outputs, j.outputs_spec, j.environment, j.environment_url,
+		       j.inputs, j.services, j.permissions, j.metrics, j.classification
+		FROM jobs j WHERE j.runner_id = ANY($1) AND j.status = 'in_progress'`, runnerIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[uuid.UUID][]Job, len(runnerIDs))
+	for rows.Next() {
+		j, err := scanJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		if j.RunnerID != nil {
+			out[*j.RunnerID] = append(out[*j.RunnerID], j)
+		}
 	}
 	return out, rows.Err()
 }

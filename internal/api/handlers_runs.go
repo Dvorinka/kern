@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -254,32 +255,43 @@ func (s *Server) getRun(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
-	// Advisory only: a diagnostic failure must not take the run page down.
-	if unmatched, err := s.Store.UnmatchedQueuedJobs(c.Request.Context(), user.OrgID); err == nil {
-		starved := make(map[uuid.UUID]int, len(unmatched))
-		for _, u := range unmatched {
-			if u.RunID == run.ID {
-				starved[u.JobID] = u.PausedMatches
-			}
+	// Queue diagnostics are fleet-wide scans; only worth running when this run
+	// actually has queued jobs (#374). Advisory only: a diagnostic failure must
+	// not take the run page down.
+	hasQueued := false
+	for i := range jobs {
+		if jobs[i].Status == "queued" {
+			hasQueued = true
+			break
 		}
-		for i := range jobs {
-			if paused, ok := starved[jobs[i].ID]; ok {
-				if paused > 0 {
-					jobs[i].QueueReason = "matching runner(s) paused by claim gate (disk/memory/overload)"
-				} else {
-					jobs[i].QueueReason = "no online runner matches runs-on labels"
+	}
+	if hasQueued {
+		if unmatched, err := s.Store.UnmatchedQueuedJobs(c.Request.Context(), user.OrgID); err == nil {
+			starved := make(map[uuid.UUID]int, len(unmatched))
+			for _, u := range unmatched {
+				if u.RunID == run.ID {
+					starved[u.JobID] = u.PausedMatches
+				}
+			}
+			for i := range jobs {
+				if paused, ok := starved[jobs[i].ID]; ok {
+					if paused > 0 {
+						jobs[i].QueueReason = "matching runner(s) paused by claim gate (disk/memory/overload)"
+					} else {
+						jobs[i].QueueReason = "no online runner matches runs-on labels"
+					}
 				}
 			}
 		}
-	}
-	if capped, err := s.Store.ConcurrencyCappedJobs(c.Request.Context(), user.OrgID); err == nil {
-		set := make(map[uuid.UUID]bool, len(capped))
-		for _, id := range capped {
-			set[id] = true
-		}
-		for i := range jobs {
-			if jobs[i].Status == "queued" && jobs[i].QueueReason == "" && set[jobs[i].ID] {
-				jobs[i].QueueReason = "project concurrency cap reached (max_concurrent_jobs)"
+		if capped, err := s.Store.ConcurrencyCappedJobs(c.Request.Context(), user.OrgID); err == nil {
+			set := make(map[uuid.UUID]bool, len(capped))
+			for _, id := range capped {
+				set[id] = true
+			}
+			for i := range jobs {
+				if jobs[i].Status == "queued" && jobs[i].QueueReason == "" && set[jobs[i].ID] {
+					jobs[i].QueueReason = "project concurrency cap reached (max_concurrent_jobs)"
+				}
 			}
 		}
 	}
@@ -510,6 +522,10 @@ func (s *Server) stepLogStream(c *gin.Context) {
 		return true
 	}
 
+	// LISTEN/NOTIFY wakes the loop on each appended chunk; the 30s fallback
+	// covers notification loss and step status changes (#374).
+	wake, unsubscribe := s.stepLogBus.subscribe(fmt.Sprintf("%s:%d", step.JobID, step.Number))
+	defer unsubscribe()
 	deadline := time.Now().Add(2 * time.Hour)
 	for {
 		if step.LogRef != "" {
@@ -543,7 +559,8 @@ func (s *Server) stepLogStream(c *gin.Context) {
 		select {
 		case <-c.Request.Context().Done():
 			return
-		case <-time.After(400 * time.Millisecond):
+		case <-wake:
+		case <-time.After(30 * time.Second):
 		}
 	}
 }

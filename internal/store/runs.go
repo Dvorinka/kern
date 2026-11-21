@@ -174,6 +174,12 @@ func (s *Store) createRunOnce(ctx context.Context, p CreateRunParams, jobs []Job
 		return Run{}, err
 	}
 
+	// Longest-pole ordering (#372): estimate each job from the workflow's
+	// step medians so the claim query can run slow lanes first within an
+	// equal priority band. A read error just leaves estimates at zero —
+	// ordering falls back to pure FIFO, as before.
+	medians, _ := s.StepMedians(ctx, p.WorkflowID)
+
 	for _, j := range jobs {
 		matrix, err := json.Marshal(j.Matrix)
 		if err != nil {
@@ -209,17 +215,23 @@ func (s *Store) createRunOnce(ctx context.Context, p CreateRunParams, jobs []Job
 		if j.Priority == 0 {
 			j.Priority = boost
 		}
+		var est float64
+		for _, st := range j.Steps {
+			est += medians[j.JobKey][st.Name]
+		}
 		var jobID uuid.UUID
 		err = tx.QueryRow(ctx, `
 			INSERT INTO jobs
 				(run_id, job_key, key, name, status, needs, runs_on, image, matrix, env,
 				 if_condition, timeout_seconds, continue_on_error, fail_fast, priority, outputs_spec,
-				 environment, environment_url, inputs, services, permissions, needs_docker, secrets_map)
-			VALUES ($1, $2, $3, $4, 'waiting', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+				 environment, environment_url, inputs, services, permissions, needs_docker, secrets_map,
+				 est_seconds)
+			VALUES ($1, $2, $3, $4, 'waiting', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
 			RETURNING id`,
 			id, j.JobKey, j.Key, j.Name, j.Needs, j.RunsOn, j.Image, matrix, env,
 			j.IfCondition, j.TimeoutSeconds, j.ContinueOnError, j.FailFast, j.Priority, outputsSpec,
-			j.Environment, j.EnvironmentURL, inputs, services, permissions, j.NeedsDocker, secretsMap).Scan(&jobID)
+			j.Environment, j.EnvironmentURL, inputs, services, permissions, j.NeedsDocker, secretsMap,
+			est).Scan(&jobID)
 		if err != nil {
 			return Run{}, fmt.Errorf("insert job %s: %w", j.Key, err)
 		}
@@ -390,18 +402,22 @@ func (s *Store) Runs(ctx context.Context, f RunFilter) ([]Run, int, error) {
 	var total int
 	if err := s.pool.QueryRow(ctx, `
 		SELECT count(*) FROM workflow_runs r
+		JOIN workflows w ON w.id = r.workflow_id
 		WHERE ($1::uuid IS NULL OR r.project_id = $1)
 		  AND ($2::text[] IS NULL OR r.status = ANY($2))
 		  AND ($3 = '' OR r.conclusion = $3)
 		  AND ($4::bool OR r.cleared_at IS NULL)
-		  AND ($5::timestamptz IS NULL OR r.created_at >= $5)
-		  AND ($6::timestamptz IS NULL OR r.created_at < $6)
-		  AND ($7 = '' OR EXISTS (
-		    SELECT 1 FROM jobs jc WHERE jc.run_id = r.id AND jc.classification = $7))
-		  AND ($8::uuid IS NULL OR EXISTS (
-		    SELECT 1 FROM projects po WHERE po.id = r.project_id AND po.org_id = $8))`,
+		  AND ($5 = '' OR r.ref = $5 OR r.ref = 'refs/heads/' || $5)
+		  AND ($6 = '' OR r.source->>'pr_number' = $6)
+		  AND ($7 = '' OR w.name = $7 OR w.path = $7 OR w.path LIKE '%/' || $7)
+		  AND ($8::timestamptz IS NULL OR r.created_at >= $8)
+		  AND ($9::timestamptz IS NULL OR r.created_at < $9)
+		  AND ($10 = '' OR EXISTS (
+		    SELECT 1 FROM jobs jc WHERE jc.run_id = r.id AND jc.classification = $10))
+		  AND ($11::uuid IS NULL OR EXISTS (
+		    SELECT 1 FROM projects po WHERE po.id = r.project_id AND po.org_id = $11))`,
 		f.ProjectID, statuses, f.Conclusion, f.IncludeCleared,
-		nilTime(f.Since), nilTime(f.Until), f.Classification, nullableUUID(f.OrgID)).Scan(&total); err != nil {
+		f.Ref, f.PR, f.Workflow, nilTime(f.Since), nilTime(f.Until), f.Classification, nullableUUID(f.OrgID)).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	return out, total, rows.Err()
@@ -507,12 +523,16 @@ func (s *Store) jobsForRun(ctx context.Context, runID uuid.UUID, withSteps bool)
 	if !withSteps {
 		return out, nil
 	}
+	ids := make([]uuid.UUID, len(out))
 	for i := range out {
-		steps, err := s.StepsForJob(ctx, out[i].ID)
-		if err != nil {
-			return nil, err
-		}
-		out[i].Steps = steps
+		ids[i] = out[i].ID
+	}
+	steps, err := s.StepsForJobs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].Steps = steps[out[i].ID]
 	}
 	return out, nil
 }
@@ -536,6 +556,31 @@ func (s *Store) StepsForJob(ctx context.Context, jobID uuid.UUID) ([]Step, error
 		}
 		st.HasSummary = st.SummaryRef != ""
 		out = append(out, st)
+	}
+	return out, rows.Err()
+}
+
+// StepsForJobs loads steps for many jobs in one query — the JobsForRun and
+// MCP get_run callers fan out per job otherwise (#374).
+func (s *Store) StepsForJobs(ctx context.Context, jobIDs []uuid.UUID) (map[uuid.UUID][]Step, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, job_id, number, key, name, status, conclusion, exit_code, started_at,
+		       completed_at, spec, log_ref, log_bytes, diagnosis, annotations, summary_ref
+		FROM steps WHERE job_id = ANY($1) ORDER BY job_id, number`, jobIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[uuid.UUID][]Step, len(jobIDs))
+	for rows.Next() {
+		var st Step
+		if err := rows.Scan(&st.ID, &st.JobID, &st.Number, &st.Key, &st.Name, &st.Status,
+			&st.Conclusion, &st.ExitCode, &st.StartedAt, &st.CompletedAt, &st.Spec, &st.LogRef,
+			&st.LogBytes, &st.Diagnosis, &st.Annotations, &st.SummaryRef); err != nil {
+			return nil, err
+		}
+		st.HasSummary = st.SummaryRef != ""
+		out[st.JobID] = append(out[st.JobID], st)
 	}
 	return out, rows.Err()
 }

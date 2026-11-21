@@ -235,6 +235,12 @@ func extractGlobals(args []string, c *cli) []string {
 	}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
+		if a == "--" {
+			// Everything after -- belongs to the subcommand (remote flags,
+			// curl payloads, positional args) — never consume it as globals.
+			rest = append(rest, args[i:]...)
+			break
+		}
 		if a == "--json" {
 			c.json = true
 			continue
@@ -283,6 +289,9 @@ func dispatch(c *cli, args []string) int {
 	// flag parsing with "unknown flag" — the discoverability papercut from
 	// #179. Checked before dispatch so every subcommand inherits it.
 	for _, a := range rest {
+		if a == "--" {
+			break
+		}
 		if a == "--help" || a == "-h" {
 			fmt.Print(commandUsage(name))
 			return 0
@@ -314,10 +323,15 @@ func dispatch(c *cli, args []string) int {
 		err = c.cmdConfig(rest)
 	case "projects":
 		err = c.cmdProjects(ctx, rest)
-	case "runs":
-		err = c.cmdRuns(ctx, rest)
-	case "logs":
-		err = c.cmdRuns(ctx, append([]string{"logs"}, rest...))
+	case "runs", "logs":
+		// wait/logs -f can run for the full --timeout/--follow budget.
+		rctx, rstop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer rstop()
+		if name == "logs" {
+			err = c.cmdRuns(rctx, append([]string{"logs"}, rest...))
+		} else {
+			err = c.cmdRuns(rctx, rest)
+		}
 	case "diagnose":
 		err = c.cmdDiagnose(ctx, rest)
 	case "doctor":
@@ -327,7 +341,10 @@ func dispatch(c *cli, args []string) int {
 	case "runners":
 		err = c.cmdRunners(ctx, rest)
 	case "artifacts":
-		err = c.cmdArtifacts(ctx, rest)
+		// downloads can be large; outlive the default request budget.
+		actx, astop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer astop()
+		err = c.cmdArtifacts(actx, rest)
 	case "cache":
 		err = c.cmdCache(ctx, rest)
 	case "secrets":

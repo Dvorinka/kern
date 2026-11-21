@@ -295,10 +295,14 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 				store.Job
 				Steps []store.Step `json:"steps"`
 			}
+			jobIDs := make([]uuid.UUID, len(jobs))
+			for i := range jobs {
+				jobIDs[i] = jobs[i].ID
+			}
+			stepsByJob, _ := s.Store.StepsForJobs(ctx, jobIDs)
 			views := []jobView{}
 			for _, j := range jobs {
-				steps, _ := s.Store.StepsForJob(ctx, j.ID)
-				views = append(views, jobView{Job: j, Steps: steps})
+				views = append(views, jobView{Job: j, Steps: stepsByJob[j.ID]})
 			}
 			out = map[string]any{"run": run, "jobs": views}
 		}
@@ -349,10 +353,14 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 				store.Runner
 				ActiveJobs []store.Job `json:"active_jobs"`
 			}
+			runnerIDs := make([]uuid.UUID, len(runners))
+			for i := range runners {
+				runnerIDs[i] = runners[i].ID
+			}
+			jobsByRunner, _ := s.Store.RunnerActiveJobsBatch(ctx, runnerIDs)
 			views := []runnerView{}
 			for _, r := range runners {
-				jobs, _ := s.Store.RunnerActiveJobs(ctx, r.ID)
-				views = append(views, runnerView{Runner: r, ActiveJobs: jobs})
+				views = append(views, runnerView{Runner: r, ActiveJobs: jobsByRunner[r.ID]})
 			}
 			out = views
 		}
