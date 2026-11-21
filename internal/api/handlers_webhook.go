@@ -180,7 +180,8 @@ func (s *Server) actOnGithubEvent(c *gin.Context, delivery, event string, body [
 				skipped = append(skipped, wf.Name+" (disabled)")
 				continue
 			}
-			version, plan, err := s.workflowAtSHA(c, t.repoName, proj.ID, wf, t.sha)
+			version, plan, err := s.workflowAtSHA(c, proj.OrgID, t.repoName, proj.ID, wf, t.sha,
+				canonicalWorkflowVersion(event, t, proj))
 			if err != nil {
 				skipped = append(skipped, wf.Name+" ("+err.Error()+")")
 				continue
@@ -793,14 +794,32 @@ func contains(items []string, want string) bool {
 	return false
 }
 
+// canonicalWorkflowVersion reports whether a delivery's workflow content may
+// become the project's canonical (trusted) version — the definition cron,
+// prime and dispatch fallbacks execute. Only default-branch content qualifies:
+// push to the default branch, sync-time resolution, and the
+// default-branch-context events (pull_request_target, workflow_run,
+// repository_dispatch). Pull-request heads, other refs, tags and releases
+// never do — fork YAML must not poison LatestWorkflowVersion.
+func canonicalWorkflowVersion(event string, t *ghTrigger, proj store.Project) bool {
+	switch event {
+	case "pull_request_target", "workflow_run", "repository_dispatch":
+		return true // resolved to the base repo's default-branch head
+	case "push":
+		return t.ref == "refs/heads/"+firstNonEmpty(proj.DefaultBranch, "main")
+	}
+	return false
+}
+
 // workflowAtSHA compiles the workflow as it exists at the pushed commit and
 // stores it as a new version, so the run executes what was pushed — not what
-// was last synced. Falls back to the latest stored version when the repo is
-// unreachable.
-func (s *Server) workflowAtSHA(c *gin.Context, fullName string, projectID uuid.UUID,
-	wf store.Workflow, sha string) (store.WorkflowVersion, *workflows.Plan, error) {
+// was last synced. Falls back to the latest trusted stored version when the
+// repo is unreachable. trusted marks the version canonical-eligible for
+// LatestWorkflowVersion and cron/prime picks.
+func (s *Server) workflowAtSHA(c *gin.Context, orgID uuid.UUID, fullName string, projectID uuid.UUID,
+	wf store.Workflow, sha string, trusted bool) (store.WorkflowVersion, *workflows.Plan, error) {
 	ctx := c.Request.Context()
-	gh, err := s.githubClient(ctx, fullName)
+	gh, err := s.githubClientForOrg(ctx, orgID, fullName)
 	var content string
 	if err == nil {
 		content, err = gh.FileContent(ctx, fullName, wf.Path, sha)
@@ -823,7 +842,7 @@ func (s *Server) workflowAtSHA(c *gin.Context, fullName string, projectID uuid.U
 	if err != nil || !res.Valid || res.Plan == nil {
 		return store.WorkflowVersion{}, nil, fmt.Errorf("workflow does not compile at %s", sha[:8])
 	}
-	version, err := s.Store.PutWorkflowVersion(ctx, wf.ID, sha, content, res.Plan, res.Valid, res.Diagnostics, res.Deps)
+	version, err := s.Store.PutWorkflowVersion(ctx, wf.ID, sha, content, res.Plan, res.Valid, res.Diagnostics, res.Deps, trusted)
 	if err != nil {
 		return store.WorkflowVersion{}, nil, err
 	}

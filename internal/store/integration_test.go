@@ -88,7 +88,7 @@ func fixture(t testing.TB, ctx context.Context, s *Store) (uuid.UUID, uuid.UUID,
 	if err != nil {
 		t.Fatalf("workflow: %v", err)
 	}
-	v, err := s.PutWorkflowVersion(ctx, wf.ID, "deadbeef", "name: IT", map[string]any{}, true, nil, nil)
+	v, err := s.PutWorkflowVersion(ctx, wf.ID, "deadbeef", "name: IT", map[string]any{}, true, nil, nil, true)
 	if err != nil {
 		t.Fatalf("version: %v", err)
 	}

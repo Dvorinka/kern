@@ -160,7 +160,7 @@ func (s *Server) syncProject(c *gin.Context) {
 			return
 		}
 		if _, err := s.Store.PutWorkflowVersion(c.Request.Context(), wf.ID, sha,
-			string(content), res.Plan, res.Valid, res.Diagnostics, res.Deps); err != nil {
+			string(content), res.Plan, res.Valid, res.Diagnostics, res.Deps, true); err != nil {
 			s.internalError(c, err)
 			return
 		}
@@ -175,7 +175,7 @@ func (s *Server) syncProject(c *gin.Context) {
 // stores each file as a compiled workflow version, mirroring the local path.
 func (s *Server) syncProjectGitHub(c *gin.Context, user store.User, p store.Project) {
 	ctx := c.Request.Context()
-	gh, err := s.githubClient(ctx, p.RepoFullName)
+	gh, err := s.githubClientForOrg(ctx, p.OrgID, p.RepoFullName)
 	if err != nil {
 		fail(c, http.StatusBadGateway, "github_fetch_failed", err.Error())
 		return
@@ -220,7 +220,7 @@ func (s *Server) syncProjectGitHub(c *gin.Context, user store.User, p store.Proj
 			s.internalError(c, err)
 			return
 		}
-		if _, err := s.Store.PutWorkflowVersion(ctx, wf.ID, sha, content, res.Plan, res.Valid, res.Diagnostics, res.Deps); err != nil {
+		if _, err := s.Store.PutWorkflowVersion(ctx, wf.ID, sha, content, res.Plan, res.Valid, res.Diagnostics, res.Deps, true); err != nil {
 			s.internalError(c, err)
 			return
 		}
@@ -356,7 +356,9 @@ func (s *Server) triggerRun(c *gin.Context) {
 	// get webhook parity; local-path projects keep the stored version.
 	sha := s.resolveTriggerSHA(c.Request.Context(), p, req.Ref, req.SHA)
 	if p.RepoFullName != "" && sha != "" {
-		if v, _, verr := s.workflowAtSHA(c, p.RepoFullName, p.ID, wf, sha); verr == nil {
+		// A manual dispatch compiles the workflow at the requested ref for this
+		// run only — it must not become the canonical version cron/prime pick.
+		if v, _, verr := s.workflowAtSHA(c, p.OrgID, p.RepoFullName, p.ID, wf, sha, false); verr == nil {
 			version = v
 		} else {
 			s.Log.Warn("trigger workflow fetch failed; using stored version",
@@ -369,7 +371,7 @@ func (s *Server) triggerRun(c *gin.Context) {
 	// github.event.pull_request.number) see number=null (#176).
 	if (req.Event == "pull_request" || req.Event == "pull_request_target") && p.RepoFullName != "" {
 		if num, ok := prNumberFromRef(req.Ref); ok {
-			if gh, gerr := s.githubClient(c.Request.Context(), p.RepoFullName); gerr == nil {
+			if gh, gerr := s.githubClientForOrg(c.Request.Context(), p.OrgID, p.RepoFullName); gerr == nil {
 				if pr, perr := gh.PullRequest(c.Request.Context(), p.RepoFullName, num); perr == nil {
 					source["pr_number"] = pr.Number
 					source["head_ref"] = pr.Head.Ref
@@ -428,7 +430,7 @@ func (s *Server) resolveTriggerSHA(ctx context.Context, p store.Project, ref, sh
 	}
 	refName := strings.TrimPrefix(ref, "refs/heads/")
 	refName = strings.TrimPrefix(refName, "refs/tags/")
-	gh, err := s.githubClient(ctx, p.RepoFullName)
+	gh, err := s.githubClientForOrg(ctx, p.OrgID, p.RepoFullName)
 	if err != nil {
 		return ""
 	}
@@ -501,7 +503,7 @@ func (s *Server) triggerRunByPath(c *gin.Context) {
 	if content == "" {
 		switch {
 		case p.RepoFullName != "" && sha != "":
-			gh, gerr := s.githubClient(c.Request.Context(), p.RepoFullName)
+			gh, gerr := s.githubClientForOrg(c.Request.Context(), p.OrgID, p.RepoFullName)
 			if gerr != nil {
 				s.internalError(c, gerr)
 				return
@@ -529,7 +531,7 @@ func (s *Server) triggerRunByPath(c *gin.Context) {
 	}
 	var gh *github.Client
 	if p.RepoFullName != "" {
-		if g, gerr := s.githubClient(c.Request.Context(), p.RepoFullName); gerr == nil {
+		if g, gerr := s.githubClientForOrg(c.Request.Context(), p.OrgID, p.RepoFullName); gerr == nil {
 			gh = g
 		}
 	}
@@ -554,7 +556,7 @@ func (s *Server) triggerRunByPath(c *gin.Context) {
 		return
 	}
 	version, err := s.Store.PutWorkflowVersion(c.Request.Context(), wf.ID,
-		firstNonEmpty(sha, "adhoc"), content, res.Plan, res.Valid, res.Diagnostics, res.Deps)
+		firstNonEmpty(sha, "adhoc"), content, res.Plan, res.Valid, res.Diagnostics, res.Deps, false)
 	if err != nil {
 		s.internalError(c, err)
 		return

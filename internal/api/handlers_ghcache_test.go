@@ -145,7 +145,7 @@ func TestGHCacheReserveUploadCommitCycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("workflow: %v", err)
 	}
-	wfv, err := st.PutWorkflowVersion(ctx, wf.ID, "deadbeef", "on: push", nil, true, nil, nil)
+	wfv, err := st.PutWorkflowVersion(ctx, wf.ID, "deadbeef", "on: push", nil, true, nil, nil, true)
 	if err != nil {
 		t.Fatalf("workflow version: %v", err)
 	}

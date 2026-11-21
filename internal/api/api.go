@@ -43,10 +43,20 @@ type Server struct {
 
 	ghAppsMu  sync.Mutex
 	ghApps    map[uuid.UUID]*github.App // github_apps.id -> lazily built app
-	ghRepoApp map[string]uuid.UUID      // repo -> github_apps.id (probe cache)
-	geoSelfMu sync.Mutex                // serializes the control-plane self-lookup
-	metrics   *kernMetrics
-	ghCache   *ghCacheState
+	ghRepoApp map[string]uuid.UUID      // org|repo -> github_apps.id (probe cache)
+	// ghAppStates holds single-use nonces for the manifest callback so a
+	// forged GET cannot bind an attacker's app to a victim's org (#368).
+	ghAppStates map[uuid.UUID]ghAppState // user id -> pending manifest state
+	geoSelfMu   sync.Mutex               // serializes the control-plane self-lookup
+	metrics     *kernMetrics
+	ghCache     *ghCacheState
+}
+
+// ghAppState is a pending GitHub App manifest conversion: the nonce the
+// callback must echo plus its expiry.
+type ghAppState struct {
+	nonce  string
+	expiry time.Time
 }
 
 func New(cfg *config.Config, st *store.Store, orch *orchestrator.Orchestrator, blobStore blobs.Store,
@@ -68,7 +78,8 @@ func New(cfg *config.Config, st *store.Store, orch *orchestrator.Orchestrator, b
 		GH:     &github.Resolver{App: app, PAT: github.New(cfg.GitHub.APIBaseURL, cfg.GitHub.StatusToken)},
 		Geo:    geoip.New(cfg.GeoIPURL),
 		ghApps: make(map[uuid.UUID]*github.App), ghRepoApp: make(map[string]uuid.UUID),
-		metrics: newKernMetrics(), ghCache: newGHCacheState(),
+		ghAppStates: make(map[uuid.UUID]ghAppState),
+		metrics:     newKernMetrics(), ghCache: newGHCacheState(),
 	}
 	s.wireCommitStatus()
 	s.Engine = s.buildRouter()
@@ -91,7 +102,7 @@ func (s *Server) wireCommitStatus() {
 		if repo == "" || run.SHA == "" {
 			return
 		}
-		cl, err := s.githubClient(ctx, repo)
+		cl, err := s.githubClientForOrg(ctx, run.OrgID, repo)
 		if err != nil {
 			s.Log.Warn("github client", zap.String("repo", repo), zap.Error(err))
 			return
