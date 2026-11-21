@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -289,6 +290,46 @@ func mcpTools() []mcpTool {
 			}()},
 		{Name: "kern_cancel_run", Description: "Cancel a queued or in-progress run.",
 			Annotations: mcpAnn(false, true, true),
+			InputSchema: func() map[string]any {
+				p := props(map[string]map[string]any{"run_id": str("run UUID")})
+				p["required"] = []string{"run_id"}
+				return p
+			}()},
+		{Name: "kern_diagnose_run", Description: "Single-call failure bundle: run, jobs/steps, failed-step log tails, runner map — one round trip instead of many.",
+			Annotations: mcpAnn(true, false, true),
+			InputSchema: func() map[string]any {
+				p := props(map[string]map[string]any{
+					"run_id":    str("run UUID"),
+					"tail":      num("per-failed-step log tail bytes, default 8192"),
+					"max_steps": num("max failed steps to tail, default 5"),
+				})
+				p["required"] = []string{"run_id"}
+				return p
+			}()},
+		{Name: "kern_search_logs", Description: "Search step logs for a string across a project or run.",
+			Annotations: mcpAnn(true, false, true),
+			InputSchema: func() map[string]any {
+				p := props(map[string]map[string]any{
+					"q":       str("case-insensitive substring to find"),
+					"project": str("project slug to scope the search"),
+					"run":     str("run UUID to scope the search"),
+					"limit":   num("max hits, default 100"),
+				})
+				p["required"] = []string{"q"}
+				return p
+			}()},
+		{Name: "kern_wait_run", Description: "Block until a run reaches a terminal state (or timeout) and return the final state.",
+			Annotations: mcpAnn(true, false, false),
+			InputSchema: func() map[string]any {
+				p := props(map[string]map[string]any{
+					"run_id":  str("run UUID"),
+					"timeout": num("seconds to wait, default 120, max 600"),
+				})
+				p["required"] = []string{"run_id"}
+				return p
+			}()},
+		{Name: "kern_list_artifacts", Description: "Artifacts produced by a run.",
+			Annotations: mcpAnn(true, false, true),
 			InputSchema: func() map[string]any {
 				p := props(map[string]map[string]any{"run_id": str("run UUID")})
 				p["required"] = []string{"run_id"}
@@ -782,6 +823,59 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) *rpcResponse {
 				out = run
 			}
 		}
+	case "kern_diagnose_run":
+		runID, perr := uuid.Parse(mcpArgStringOr(call.Arguments, "run_id"))
+		if perr != nil {
+			err = fmt.Errorf("run_id must be a UUID")
+			break
+		}
+		out, err = s.mcpDiagnoseRun(ctx, user, runID,
+			mcpArgInt(call.Arguments, "tail", 8192),
+			mcpArgInt(call.Arguments, "max_steps", 5))
+	case "kern_search_logs":
+		q := strings.TrimSpace(mcpArgStringOr(call.Arguments, "q"))
+		if q == "" {
+			err = fmt.Errorf("q is required")
+			break
+		}
+		var runID uuid.UUID
+		if v := mcpArgStringOr(call.Arguments, "run"); v != "" {
+			var perr error
+			runID, perr = uuid.Parse(v)
+			if perr != nil {
+				err = fmt.Errorf("run must be a uuid")
+				break
+			}
+		}
+		sctx, cancel := context.WithTimeout(ctx, logSearchDeadline)
+		hits, stepsSeen, scanned, truncated, lerr := s.logSearchHits(sctx, user.OrgID, q,
+			mcpArgStringOr(call.Arguments, "project"), runID,
+			mcpArgInt(call.Arguments, "limit", logSearchDefaultHit))
+		cancel()
+		if lerr != nil {
+			err = lerr
+			break
+		}
+		out = map[string]any{"hits": hits, "steps_scanned": stepsSeen,
+			"bytes_scanned": scanned, "truncated": truncated}
+	case "kern_wait_run":
+		runID, perr := uuid.Parse(mcpArgStringOr(call.Arguments, "run_id"))
+		if perr != nil {
+			err = fmt.Errorf("run_id must be a UUID")
+			break
+		}
+		timeout := mcpArgInt(call.Arguments, "timeout", 120)
+		if timeout <= 0 || timeout > 600 {
+			timeout = 120
+		}
+		out, err = s.mcpWaitRun(ctx, runID, time.Duration(timeout)*time.Second)
+	case "kern_list_artifacts":
+		runID, perr := uuid.Parse(mcpArgStringOr(call.Arguments, "run_id"))
+		if perr != nil {
+			err = fmt.Errorf("run_id must be a UUID")
+			break
+		}
+		out, err = s.Store.Artifacts(ctx, user.OrgID, &runID, 200)
 	default:
 		r := rpcErr(req.ID, -32602, "unknown tool "+call.Name)
 		return &r
@@ -846,9 +940,18 @@ func (s *Server) mcpToolAllowed(c *gin.Context, name string, args map[string]jso
 		if !grantHas(granted, mcpArgStringOr(args, "project")) {
 			return projectDenied
 		}
-	case "kern_get_run", "kern_rerun_run", "kern_approve_run", "kern_cancel_run":
+	case "kern_get_run", "kern_rerun_run", "kern_approve_run", "kern_cancel_run",
+		"kern_diagnose_run", "kern_wait_run", "kern_list_artifacts":
 		if !runAllowed("run_id") {
 			return fmt.Errorf("run is outside this token's projects")
+		}
+	case "kern_search_logs":
+		if run := mcpArgStringOr(args, "run"); run != "" {
+			if !runAllowed("run") {
+				return fmt.Errorf("run is outside this token's projects")
+			}
+		} else if !grantHas(granted, mcpArgStringOr(args, "project")) {
+			return projectDenied
 		}
 	case "kern_step_log":
 		jobID, perr := uuid.Parse(mcpArgStringOr(args, "job_id"))
@@ -923,5 +1026,93 @@ func (s *Server) mcpResolveWorkflow(ctx context.Context, projectID uuid.UUID, wa
 		return matches[0], nil
 	default:
 		return store.Workflow{}, fmt.Errorf("workflow %q is ambiguous", want)
+	}
+}
+
+// mcpDiagnoseRun builds the single-call failure bundle kern_diagnose_run
+// returns: run state, jobs with their steps, tails of the failed steps'
+// logs, and the runner map an agent needs to triage in one round trip.
+func (s *Server) mcpDiagnoseRun(ctx context.Context, user store.User, runID uuid.UUID, tail, maxSteps int) (map[string]any, error) {
+	if tail <= 0 || tail > 1<<20 {
+		tail = 8192
+	}
+	if maxSteps <= 0 || maxSteps > 20 {
+		maxSteps = 5
+	}
+	run, err := s.Store.Run(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	jobs, err := s.Store.JobsForRun(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	type stepView struct {
+		store.Step
+		LogTail string `json:"log_tail,omitempty"`
+	}
+	type jobView struct {
+		store.Job
+		Steps      []stepView `json:"steps"`
+		RunnerName string     `json:"runner_name,omitempty"`
+	}
+	runners, _ := s.Store.Runners(ctx, user.OrgID)
+	names := map[uuid.UUID]string{}
+	for _, r := range runners {
+		names[r.ID] = r.Name
+	}
+	views := make([]jobView, 0, len(jobs))
+	tailed := 0
+	for _, j := range jobs {
+		steps, err := s.Store.StepsForJob(ctx, j.ID)
+		if err != nil {
+			return nil, err
+		}
+		sv := make([]stepView, 0, len(steps))
+		for _, st := range steps {
+			v := stepView{Step: st}
+			if tailed < maxSteps && st.Conclusion == "failure" && st.LogRef != "" {
+				size := st.LogBytes
+				offset := int64(0)
+				if size > int64(tail) {
+					offset = size - int64(tail)
+				}
+				if data, _, rerr := s.Blobs.ReadFrom(st.LogRef, offset, tail); rerr == nil {
+					v.LogTail = string(data)
+					tailed++
+				}
+			}
+			sv = append(sv, v)
+		}
+		jv := jobView{Job: j, Steps: sv}
+		if j.RunnerID != nil {
+			jv.RunnerName = names[*j.RunnerID]
+		}
+		views = append(views, jv)
+	}
+	return map[string]any{"run": run, "jobs": views}, nil
+}
+
+// mcpWaitRun polls until the run reaches a terminal status or the timeout
+// lapses — an agent blocking on a result burns one call instead of polling.
+func (s *Server) mcpWaitRun(ctx context.Context, runID uuid.UUID, timeout time.Duration) (map[string]any, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		run, err := s.Store.Run(ctx, runID)
+		if err != nil {
+			return nil, err
+		}
+		switch run.Status {
+		case "completed", "cancelled":
+			return map[string]any{"run": run, "terminal": true}, nil
+		}
+		if time.Now().After(deadline) {
+			return map[string]any{"run": run, "terminal": false}, nil
+		}
+		select {
+		case <-ctx.Done():
+			return map[string]any{"run": run, "terminal": false, "note": "client disconnected"}, nil
+		case <-time.After(2 * time.Second):
+		}
 	}
 }
