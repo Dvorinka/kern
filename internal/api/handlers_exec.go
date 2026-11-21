@@ -46,13 +46,20 @@ func (s *Server) createExec(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
-	if job.Status != "in_progress" || job.RunnerID == nil {
-		fail(c, http.StatusConflict, "job_not_running", "job is not running on a runner")
-		return
-	}
+	// Tenant check before the status check so a foreign job id answers the
+	// same 404 as a missing one — no existence/status oracle (#368).
 	run, err := s.Store.Run(c.Request.Context(), job.RunID)
 	if err != nil {
 		s.internalError(c, err)
+		return
+	}
+	user, _ := currentUser(c)
+	if run.OrgID != user.OrgID {
+		fail(c, http.StatusNotFound, "not_found", "job not found")
+		return
+	}
+	if job.Status != "in_progress" || job.RunnerID == nil {
+		fail(c, http.StatusConflict, "job_not_running", "job is not running on a runner")
 		return
 	}
 	if run.TrustLevel == "fork" || run.TrustLevel == "pull_request" {
@@ -68,7 +75,6 @@ func (s *Server) createExec(c *gin.Context) {
 		fail(c, http.StatusConflict, "host_executor", "exec needs the docker executor; this job runs on a host executor")
 		return
 	}
-	user, _ := currentUser(c)
 	createdBy := &user.ID
 	ex, err := s.Store.CreateExec(c.Request.Context(), job.ID, req.Command, req.Interactive, createdBy)
 	if err != nil {
@@ -93,6 +99,23 @@ func (s *Server) execForUser(c *gin.Context) (store.ExecRequest, bool) {
 	}
 	if err != nil {
 		s.internalError(c, err)
+		return ex, false
+	}
+	// The exec's job must belong to the caller's org — exec ids are
+	// unguessable but not authorization (#368).
+	user, _ := currentUser(c)
+	runID, _, rerr := s.Store.JobRunID(c.Request.Context(), ex.JobID)
+	if rerr != nil {
+		s.internalError(c, rerr)
+		return ex, false
+	}
+	run, rerr := s.Store.Run(c.Request.Context(), runID)
+	if rerr != nil {
+		s.internalError(c, rerr)
+		return ex, false
+	}
+	if run.OrgID != user.OrgID {
+		fail(c, http.StatusNotFound, "not_found", "exec session not found")
 		return ex, false
 	}
 	return ex, true
@@ -178,6 +201,17 @@ func (s *Server) runnerExec(c *gin.Context) (store.ExecRequest, store.Job, store
 		return ex, job, runner, false
 	}
 	if job.RunnerID == nil || *job.RunnerID != runner.ID {
+		fail(c, http.StatusNotFound, "not_found", "job is not leased to this runner")
+		return ex, job, runner, false
+	}
+	// Defense in depth behind the lease check: the job's project must
+	// belong to the runner's org (#368).
+	run, rerr := s.Store.Run(c.Request.Context(), job.RunID)
+	if rerr != nil {
+		s.internalError(c, rerr)
+		return ex, job, runner, false
+	}
+	if run.OrgID != runner.OrgID {
 		fail(c, http.StatusNotFound, "not_found", "job is not leased to this runner")
 		return ex, job, runner, false
 	}

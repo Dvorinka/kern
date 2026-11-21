@@ -174,12 +174,13 @@ func (s *Server) deleteArtifact(c *gin.Context) {
 }
 
 func (s *Server) getArtifact(c *gin.Context) {
+	user, _ := currentUser(c)
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
 		fail(c, http.StatusBadRequest, "invalid_id", "artifact id must be a uuid")
 		return
 	}
-	a, err := s.Store.Artifact(c.Request.Context(), id)
+	a, err := s.Store.Artifact(c.Request.Context(), user.OrgID, id)
 	if err != nil {
 		s.internalError(c, err)
 		return

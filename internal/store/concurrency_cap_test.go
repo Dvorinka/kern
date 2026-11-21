@@ -85,6 +85,7 @@ func TestClaimConcurrencyCapZeroIsUncapped(t *testing.T) {
 // waiting on the cap is reported as capped.
 func TestConcurrencyCappedJobs(t *testing.T) {
 	s, ctx := testStore(t)
+	org, _ := s.FirstOrg(ctx)
 	r := labeledRunner(t, ctx, s, "r1", []string{"linux"}, "docker")
 
 	pid, wid, vid := fixture(t, ctx, s)
@@ -96,7 +97,7 @@ func TestConcurrencyCappedJobs(t *testing.T) {
 	}
 	parked := queueJob(t, ctx, s, pid, wid, vid, "trusted", false)
 
-	capped, err := s.ConcurrencyCappedJobs(ctx)
+	capped, err := s.ConcurrencyCappedJobs(ctx, org.ID)
 	if err != nil {
 		t.Fatalf("capped query: %v", err)
 	}

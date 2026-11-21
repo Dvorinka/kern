@@ -18,6 +18,7 @@ import (
 func (s *Server) listRuns(c *gin.Context) {
 	user, _ := currentUser(c)
 	filter := store.RunFilter{
+		OrgID:          user.OrgID,
 		Status:         c.Query("status"),
 		Conclusion:     c.Query("conclusion"),
 		IncludeCleared: c.Query("include_cleared") == "1" || c.Query("include_cleared") == "true",
@@ -49,7 +50,7 @@ func (s *Server) listRuns(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
-	counts, err := s.Store.RunCounts(c.Request.Context(), filter.ProjectID, filter.IncludeCleared)
+	counts, err := s.Store.RunCounts(c.Request.Context(), user.OrgID, filter.ProjectID, filter.IncludeCleared)
 	if err != nil {
 		s.internalError(c, err)
 		return
@@ -71,7 +72,7 @@ func (s *Server) dayCounts(c *gin.Context) {
 		}
 		projectID = &p.ID
 	}
-	days, err := s.Store.RunDayCounts(c.Request.Context(), projectID,
+	days, err := s.Store.RunDayCounts(c.Request.Context(), user.OrgID, projectID,
 		parseInt(c.DefaultQuery("days", "30"), 30))
 	if err != nil {
 		s.internalError(c, err)
@@ -84,7 +85,8 @@ func (s *Server) dayCounts(c *gin.Context) {
 // in claim order (priority then age). The overview and runs pages used
 // to fan out a run-detail read per live run to reconstruct this.
 func (s *Server) queuedJobs(c *gin.Context) {
-	jobs, err := s.Store.QueuedJobs(c.Request.Context(),
+	user, _ := currentUser(c)
+	jobs, err := s.Store.QueuedJobs(c.Request.Context(), user.OrgID,
 		parseInt(c.DefaultQuery("limit", "100"), 100))
 	if err != nil {
 		s.internalError(c, err)
@@ -118,7 +120,9 @@ func (s *Server) clearCancelledRuns(c *gin.Context) {
 // runIDParam resolves the :id route param — a full UUID or an unambiguous
 // hex prefix (the short ids `kern runs list` prints). Writes the error
 // response and returns false when the id is invalid, unknown, or ambiguous.
-func (s *Server) runIDParam(c *gin.Context) (uuid.UUID, bool) {
+// orgID scopes prefix resolution to one tenant; uuid.Nil resolves across
+// orgs — only the unauthenticated public-run route passes that.
+func (s *Server) runIDParam(c *gin.Context, orgID uuid.UUID) (uuid.UUID, bool) {
 	raw := strings.ToLower(c.Param("id"))
 	if id, err := uuid.Parse(raw); err == nil {
 		return id, true
@@ -133,7 +137,7 @@ func (s *Server) runIDParam(c *gin.Context) (uuid.UUID, bool) {
 			return uuid.Nil, false
 		}
 	}
-	cands, err := s.Store.RunPrefix(c.Request.Context(), raw)
+	cands, err := s.Store.RunPrefix(c.Request.Context(), orgID, raw)
 	if err != nil {
 		s.internalError(c, err)
 		return uuid.Nil, false
@@ -186,14 +190,31 @@ func (s *Server) runsInGrant(c *gin.Context, cands []store.Run, projects []strin
 	return kept, nil
 }
 
-func (s *Server) getRun(c *gin.Context) {
-	id, ok := s.runIDParam(c)
-	if !ok {
-		return
-	}
+// runForOrg loads a run and verifies it belongs to the caller's org. A
+// foreign run id answers 404, identical to a missing one — the API must
+// not confirm that another tenant's run exists (#368).
+func (s *Server) runForOrg(c *gin.Context, id uuid.UUID) (store.Run, bool) {
+	user, _ := currentUser(c)
 	run, err := s.Store.Run(c.Request.Context(), id)
 	if err != nil {
 		s.internalError(c, err)
+		return store.Run{}, false
+	}
+	if run.OrgID != user.OrgID {
+		fail(c, http.StatusNotFound, "not_found", "resource not found")
+		return store.Run{}, false
+	}
+	return run, true
+}
+
+func (s *Server) getRun(c *gin.Context) {
+	user, _ := currentUser(c)
+	id, ok := s.runIDParam(c, user.OrgID)
+	if !ok {
+		return
+	}
+	run, ok := s.runForOrg(c, id)
+	if !ok {
 		return
 	}
 	jobs, err := s.Store.JobsForRun(c.Request.Context(), run.ID)
@@ -202,7 +223,7 @@ func (s *Server) getRun(c *gin.Context) {
 		return
 	}
 	// Advisory only: a diagnostic failure must not take the run page down.
-	if unmatched, err := s.Store.UnmatchedQueuedJobs(c.Request.Context()); err == nil {
+	if unmatched, err := s.Store.UnmatchedQueuedJobs(c.Request.Context(), user.OrgID); err == nil {
 		starved := make(map[uuid.UUID]int, len(unmatched))
 		for _, u := range unmatched {
 			if u.RunID == run.ID {
@@ -219,7 +240,7 @@ func (s *Server) getRun(c *gin.Context) {
 			}
 		}
 	}
-	if capped, err := s.Store.ConcurrencyCappedJobs(c.Request.Context()); err == nil {
+	if capped, err := s.Store.ConcurrencyCappedJobs(c.Request.Context(), user.OrgID); err == nil {
 		set := make(map[uuid.UUID]bool, len(capped))
 		for _, id := range capped {
 			set[id] = true
@@ -259,8 +280,12 @@ func (s *Server) getRun(c *gin.Context) {
 }
 
 func (s *Server) cancelRun(c *gin.Context) {
-	id, ok := s.runIDParam(c)
+	user, _ := currentUser(c)
+	id, ok := s.runIDParam(c, user.OrgID)
 	if !ok {
+		return
+	}
+	if _, ok := s.runForOrg(c, id); !ok {
 		return
 	}
 	run, err := s.Store.CancelRun(c.Request.Context(), id)
@@ -268,7 +293,6 @@ func (s *Server) cancelRun(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
-	user, _ := currentUser(c)
 	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "run.cancel", run.ID.String())
 	c.JSON(http.StatusOK, gin.H{"run": run})
 }
@@ -277,8 +301,11 @@ func (s *Server) cancelRun(c *gin.Context) {
 // Rejecting is the existing cancel endpoint.
 func (s *Server) approveRun(c *gin.Context) {
 	user, _ := currentUser(c)
-	id, ok := s.runIDParam(c)
+	id, ok := s.runIDParam(c, user.OrgID)
 	if !ok {
+		return
+	}
+	if _, ok := s.runForOrg(c, id); !ok {
 		return
 	}
 	if err := s.Store.ApproveRunHold(c.Request.Context(), id); err != nil {
@@ -296,13 +323,12 @@ func (s *Server) approveRun(c *gin.Context) {
 
 func (s *Server) rerunRun(c *gin.Context) {
 	user, _ := currentUser(c)
-	id, ok := s.runIDParam(c)
+	id, ok := s.runIDParam(c, user.OrgID)
 	if !ok {
 		return
 	}
-	orig, err := s.Store.Run(c.Request.Context(), id)
-	if err != nil {
-		s.internalError(c, err)
+	orig, ok := s.runForOrg(c, id)
+	if !ok {
 		return
 	}
 	if len(tokenLabels(c)) > 0 {
@@ -491,6 +517,8 @@ func (s *Server) stepLogStream(c *gin.Context) {
 }
 
 // StepByIDParam resolves the step id path parameter, writing an error response when invalid.
+// The step's run must belong to the caller's org — step ids are unguessable
+// but not authorization (#368).
 func (s *Server) StepByIDParam(c *gin.Context) (store.Step, uuid.UUID, uuid.UUID, error) {
 	id, err := uuid.Parse(c.Param("stepID"))
 	if err != nil {
@@ -501,6 +529,16 @@ func (s *Server) StepByIDParam(c *gin.Context) (store.Step, uuid.UUID, uuid.UUID
 	if err != nil {
 		s.internalError(c, err)
 		return store.Step{}, uuid.Nil, uuid.Nil, err
+	}
+	user, _ := currentUser(c)
+	run, rerr := s.Store.Run(c.Request.Context(), runID)
+	if rerr != nil {
+		s.internalError(c, rerr)
+		return store.Step{}, uuid.Nil, uuid.Nil, rerr
+	}
+	if run.OrgID != user.OrgID {
+		fail(c, http.StatusNotFound, "not_found", "resource not found")
+		return store.Step{}, uuid.Nil, uuid.Nil, store.ErrNotFound
 	}
 	return step, runID, jobID, nil
 }
