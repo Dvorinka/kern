@@ -261,7 +261,7 @@ func (s *Server) ghCacheLookup(c *gin.Context) {
 		return
 	}
 	entry, err := s.Store.CacheLookup(c.Request.Context(), run.ProjectID,
-		keys[0], c.Query("version"), keys[1:], cacheReadScopes(run.TrustLevel))
+		keys[0], c.Query("version"), keys[1:], cacheReadScopes(run))
 	if errors.Is(err, store.ErrNotFound) {
 		if s.metrics != nil {
 			s.metrics.observeCache("miss")
@@ -298,7 +298,7 @@ func (s *Server) ghCacheList(c *gin.Context) {
 	caches := []gin.H{}
 	if key != "" {
 		if entry, err := s.Store.CacheLookup(c.Request.Context(), run.ProjectID,
-			key, c.Query("version"), nil, cacheReadScopes(run.TrustLevel)); err == nil {
+			key, c.Query("version"), nil, cacheReadScopes(run)); err == nil {
 			caches = append(caches, gin.H{
 				"cacheKey":     entry.Key,
 				"cacheVersion": entry.Version,
@@ -334,7 +334,7 @@ func (s *Server) ghCacheReserve(c *gin.Context) {
 				req.CacheSize/(1024*1024), req.CacheSize))
 		return
 	}
-	scope := cacheScope(run.TrustLevel)
+	scope := cacheScope(run)
 	// Caches are immutable per scope: an existing exact key means another job
 	// already saved it — 409 maps to the client's ReserveCacheError warning.
 	if _, err := s.Store.CacheLookup(c.Request.Context(), run.ProjectID, req.Key, req.Version,
