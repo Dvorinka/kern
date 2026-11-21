@@ -138,6 +138,9 @@ type Agent struct {
 	// diskPaused latches while the work-root filesystem is under pressure so
 	// the transition is logged once per episode, not once per worker tick.
 	diskPaused atomic.Bool
+	// pruneCh wakes diskGCLoop for reactive reclaim when the disk claim
+	// gate latches (#373). Buffered 1; a pending signal is enough.
+	pruneCh chan struct{}
 	// memPaused latches while host memory is under the claim floor.
 	memPaused atomic.Bool
 	// loadPaused latches while the load gate is engaged, for the same
@@ -205,7 +208,7 @@ func New(cfg Config, log *zap.Logger) *Agent {
 	if cfg.Concurrency <= 0 {
 		cfg.Concurrency = 1
 	}
-	a := &Agent{cfg: cfg, log: log}
+	a := &Agent{cfg: cfg, log: log, pruneCh: make(chan struct{}, 1)}
 	a.lastActivity.Store(time.Now().UnixNano())
 	return a
 }
@@ -727,6 +730,12 @@ func (a *Agent) diskClaimPaused() bool {
 		return false
 	}
 	if a.diskPaused.CompareAndSwap(false, true) {
+		// Wake the GC loop now rather than at the next 15m tick — pressure
+		// latches exactly when reclaim is most needed (#373).
+		select {
+		case a.pruneCh <- struct{}{}:
+		default:
+		}
 		a.log.Warn("disk pressure: pausing job claims",
 			zap.Int64("free_bytes", free), zap.Int64("total_bytes", total),
 			zap.Float64("min_free_pct", a.cfg.DiskMinFreePct))

@@ -168,6 +168,10 @@ func (a *Agent) diskGCLoop(ctx context.Context) {
 			a.sweepWorkspaceLinks()
 			a.pruneDangling(ctx)
 			a.maybePruneDisk(ctx)
+		case <-a.pruneCh:
+			// Reactive reclaim: the claim gate just latched disk pressure —
+			// prune now instead of waiting out the 15m interval (#373).
+			a.maybePruneDisk(ctx)
 		}
 	}
 }
