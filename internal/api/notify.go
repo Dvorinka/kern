@@ -79,10 +79,10 @@ func notifyConclusionAllowed(filter, conclusion string) bool {
 func (s *Server) NotifyRunnersOffline(ctx context.Context, runners []store.OfflineRunner) {
 	seen := map[[16]byte]struct{}{}
 	for _, r := range runners {
-		if _, dup := seen[r.OrgID]; dup {
+		if _, dup := seen[r.ID]; dup {
 			continue
 		}
-		seen[r.OrgID] = struct{}{}
+		seen[r.ID] = struct{}{}
 		orgRaw, err := s.Store.OrgSettings(ctx, r.OrgID)
 		if err != nil {
 			continue

@@ -184,12 +184,16 @@ func (e *executor) startMetricsSampler(ctx context.Context) {
 		}
 	}
 	sample()
+	e.stopped.Add(1)
 	go func() {
+		defer e.stopped.Done()
 		t := time.NewTicker(15 * time.Second)
 		defer t.Stop()
 		for {
 			select {
 			case <-ctx.Done():
+				return
+			case <-e.stop:
 				return
 			case <-t.C:
 				sample()

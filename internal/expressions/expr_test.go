@@ -1,6 +1,7 @@
 package expressions
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -177,15 +178,59 @@ func TestErrors(t *testing.T) {
 }
 
 func TestTruthy(t *testing.T) {
-	for _, v := range []any{nil, "", "0", float64(0), false} {
+	for _, v := range []any{nil, "", float64(0), math.NaN(), false} {
 		if Truthy(v) {
 			t.Errorf("%#v should be falsey", v)
 		}
 	}
-	for _, v := range []any{"false", "x", float64(1), true, []any{}, map[string]any{}} {
+	for _, v := range []any{"0", "0.0", "false", "x", float64(1), true, []any{}, map[string]any{}} {
 		if !Truthy(v) {
 			t.Errorf("%#v should be truthy", v)
 		}
+	}
+}
+
+func TestExpressionGHACompat(t *testing.T) {
+	// Precedence: < binds tighter than ==
+	if got, err := Evaluate(`true == 1 < 2`, ctx()); err != nil || got != true {
+		t.Fatalf("true == 1 < 2 => %#v err=%v", got, err)
+	}
+	// Case-insensitive context and property lookup
+	c := map[string]any{"github": map[string]any{"ref": "refs/heads/main"}}
+	if got, err := Evaluate(`GitHub.REF == 'refs/heads/main'`, c); err != nil || got != true {
+		t.Fatalf("case-insensitive lookup => %#v err=%v", got, err)
+	}
+	// Single-quoted strings treat backslashes literally
+	if got, err := Evaluate(`'C:\Users\dev'`, nil); err != nil || got != `C:\Users\dev` {
+		t.Fatalf("single-quote backslash => %#v err=%v", got, err)
+	}
+	// Lazy case() does not evaluate untaken branches
+	if got, err := Evaluate(`case(false, fromJSON('not-json'), true, 'ok', fromJSON('also-bad'))`, nil); err != nil || got != "ok" {
+		t.Fatalf("lazy case() => %#v err=%v", got, err)
+	}
+	// Status check string literal does NOT suppress implicit success()
+	failCtx := map[string]any{"__job_status": "failure", "github": map[string]any{"event_name": "push"}}
+	if ok, err := EvaluateCondition(`'failure()' != ''`, failCtx); err != nil || ok {
+		t.Fatalf("string literal 'failure()' bypassed implicit success(): ok=%v err=%v", ok, err)
+	}
+	// hashFiles returns "" on 0 matches and honors '!' exclusions
+	ws := t.TempDir()
+	_ = os.WriteFile(filepath.Join(ws, "a.lock"), []byte("one"), 0o644)
+	_ = os.WriteFile(filepath.Join(ws, "b.lock"), []byte("two"), 0o644)
+	hctx := map[string]any{"__workspace": ws}
+	if got, err := Evaluate(`hashFiles('*.none')`, hctx); err != nil || got != "" {
+		t.Fatalf("hashFiles(0 matches) = %#v err=%v, want \"\"", got, err)
+	}
+	onlyA, err := Evaluate(`hashFiles('a.lock')`, hctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exclB, err := Evaluate(`hashFiles('*.lock', '!b.lock')`, hctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exclB != onlyA {
+		t.Fatalf("hashFiles exclusion mismatch: %v vs %v", exclB, onlyA)
 	}
 }
 

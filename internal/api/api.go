@@ -65,6 +65,7 @@ type Server struct {
 type webhookTask struct {
 	delivery, event string
 	body            []byte
+	matchedOrg      *uuid.UUID
 }
 
 type maskerCacheEntry struct {
@@ -101,6 +102,13 @@ func New(cfg *config.Config, st *store.Store, orch *orchestrator.Orchestrator, b
 	go s.webhookWorker()
 	go s.sweepStaleWebhooks()
 	go s.listenStepLog()
+	go func() {
+		// Running only at startup leaked handles and /tmp dirs for every
+		// abandoned upload in long-lived processes (#369).
+		for range time.Tick(10 * time.Minute) {
+			s.sweepGHCacheUploads()
+		}
+	}()
 	return s
 }
 
@@ -303,6 +311,7 @@ func (s *Server) buildRouter() *gin.Engine {
 		admin.POST("/jobs/:id/exec", s.createExec)
 		auth.GET("/exec/:id", s.getExec)
 		admin.POST("/exec/:id/stdin", s.postExecStdin)
+		admin.DELETE("/exec/:id", s.cancelExec)
 
 		auth.GET("/secrets", s.listSecrets)
 		admin.PUT("/secrets/:name", s.putSecret)

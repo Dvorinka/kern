@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -85,6 +86,7 @@ Environments:
 
 Advisory:
   split --pattern GLOB --shards N [--root DIR]   suggest strategy.split and file buckets
+  optimize [dir|file]          audit workflows for speed, caching, and runner fit
   lint [dir ...]               offline compile of .github/workflows — will KERN run it?
   hooks install [--dry-run] [--force]             pre-push hook that runs kern lint
   completion <bash|zsh|fish>  print a shell completion script
@@ -289,7 +291,9 @@ func dispatch(c *cli, args []string) int {
 	var err error
 	switch name {
 	case "version", "--version", "-v":
-		fmt.Println("kern " + version.Version)
+		c.orJSON(map[string]any{"version": version.Version}, func() {
+			fmt.Println("kern " + version.Version)
+		})
 	case "install":
 		err = c.cmdInstall(ctx, rest)
 	case "status":
@@ -367,11 +371,27 @@ func dispatch(c *cli, args []string) int {
 		err = fmt.Errorf("unknown command %q — see kern help", name)
 	}
 	if err != nil {
+		var ec exitCodeError
+		if errors.As(err, &ec) {
+			if ec.msg != "" {
+				fmt.Fprintln(os.Stderr, "kern:", ec.msg)
+			}
+			return ec.code
+		}
 		fmt.Fprintln(os.Stderr, "kern:", err)
 		return 1
 	}
 	return 0
 }
+
+// exitCodeError carries a process exit code up to dispatch so deferred cleanup
+// runs instead of being bypassed by os.Exit.
+type exitCodeError struct {
+	code int
+	msg  string
+}
+
+func (e exitCodeError) Error() string { return e.msg }
 
 func fatalf(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "kern: "+format+"\n", args...)

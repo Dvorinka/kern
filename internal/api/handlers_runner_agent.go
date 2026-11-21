@@ -1051,5 +1051,17 @@ func (s *Server) runnerJob(c *gin.Context) (store.Job, store.Runner, bool) {
 		fail(c, http.StatusNotFound, "not_found", "job is not leased to this runner")
 		return store.Job{}, store.Runner{}, false
 	}
+	// Tenant boundary behind the lease check: the job's project must belong
+	// to the runner's org, so a runner token can never reach — or receive
+	// secrets for — another tenant's job (#368).
+	run, rerr := s.Store.Run(c.Request.Context(), job.RunID)
+	if rerr != nil {
+		s.internalError(c, rerr)
+		return store.Job{}, store.Runner{}, false
+	}
+	if run.OrgID != runner.OrgID {
+		fail(c, http.StatusNotFound, "not_found", "job is not leased to this runner")
+		return store.Job{}, store.Runner{}, false
+	}
 	return job, runner, true
 }

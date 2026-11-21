@@ -1053,14 +1053,15 @@ func pathGlobMatch(pattern, name string) bool {
 // counts/events are whole-table totals so the pills stay true when the
 // list itself is a bounded, filtered window.
 func (s *Server) listWebhookDeliveries(c *gin.Context) {
+	user, _ := currentUser(c)
 	ctx := c.Request.Context()
-	rows, err := s.Store.WebhookDeliveries(ctx, c.Query("status"), c.Query("event"),
+	rows, err := s.Store.WebhookDeliveries(ctx, user.OrgID, c.Query("status"), c.Query("event"),
 		parseInt(c.DefaultQuery("limit", "100"), 100))
 	if err != nil {
 		s.internalError(c, err)
 		return
 	}
-	total, counts, events, err := s.Store.WebhookDeliveryStats(ctx)
+	total, counts, events, err := s.Store.WebhookDeliveryStats(ctx, user.OrgID)
 	if err != nil {
 		s.internalError(c, err)
 		return
@@ -1069,12 +1070,13 @@ func (s *Server) listWebhookDeliveries(c *gin.Context) {
 }
 
 func (s *Server) getWebhookDelivery(c *gin.Context) {
+	user, _ := currentUser(c)
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
 		fail(c, http.StatusBadRequest, "invalid_id", "delivery id must be a uuid")
 		return
 	}
-	d, err := s.Store.WebhookDelivery(c.Request.Context(), id)
+	d, err := s.Store.WebhookDelivery(c.Request.Context(), user.OrgID, id)
 	if errors.Is(err, store.ErrNotFound) {
 		fail(c, http.StatusNotFound, "not_found", "delivery not found")
 		return

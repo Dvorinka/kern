@@ -103,7 +103,9 @@ func (c *cli) cmdRunners(ctx context.Context, args []string) error {
 			map[string]any{"draining": sub == "drain"}, nil); err != nil {
 			return err
 		}
-		fmt.Println(r.Name, sub+"ed")
+		c.orJSON(map[string]any{"id": r.ID, "name": r.Name, "draining": sub == "drain"}, func() {
+			fmt.Println(r.Name, sub+"ed")
+		})
 	case "self-update":
 		arg, err := strarg(rest, 0, "runner id|name")
 		if err != nil {
@@ -124,7 +126,9 @@ func (c *cli) cmdRunners(ctx context.Context, args []string) error {
 			map[string]any{"enabled": on == "on"}, nil); err != nil {
 			return err
 		}
-		fmt.Printf("%s self-update %s\n", r.Name, on)
+		c.orJSON(map[string]any{"id": r.ID, "name": r.Name, "auto_update": on == "on"}, func() {
+			fmt.Printf("%s self-update %s\n", r.Name, on)
+		})
 	case "wake":
 		arg, err := strarg(rest, 0, "runner id|name")
 		if err != nil {
@@ -145,7 +149,9 @@ func (c *cli) cmdRunners(ctx context.Context, args []string) error {
 			map[string]any{"wake_on_demand": on == "on"}, nil); err != nil {
 			return err
 		}
-		fmt.Printf("%s wake_on_demand %s\n", r.Name, on)
+		c.orJSON(map[string]any{"id": r.ID, "name": r.Name, "wake_on_demand": on == "on"}, func() {
+			fmt.Printf("%s wake_on_demand %s\n", r.Name, on)
+		})
 	case "install":
 		return c.runnerInstall(ctx, rest)
 	case "delete":
@@ -160,7 +166,9 @@ func (c *cli) cmdRunners(ctx context.Context, args []string) error {
 		if err := c.api().del(ctx, "/runners/"+r.ID); err != nil {
 			return err
 		}
-		fmt.Println(r.Name, "deleted")
+		c.orJSON(map[string]any{"deleted": true, "id": r.ID, "name": r.Name}, func() {
+			fmt.Println(r.Name, "deleted")
+		})
 	case "enroll":
 		opts, _ := parseFlags(rest, "name", "ttl")
 		var out struct {
@@ -294,7 +302,9 @@ func (c *cli) cmdArtifacts(ctx context.Context, args []string) error {
 		if err := c.api().download(ctx, "/artifacts/"+id+"/download", fh); err != nil {
 			return err
 		}
-		fmt.Println("saved to", name)
+		c.orJSON(map[string]any{"id": id, "path": name}, func() {
+			fmt.Println("saved to", name)
+		})
 	case "delete":
 		id, err := strarg(args, 1, "artifact id")
 		if err != nil {
@@ -303,7 +313,9 @@ func (c *cli) cmdArtifacts(ctx context.Context, args []string) error {
 		if err := c.api().del(ctx, "/artifacts/"+id); err != nil {
 			return err
 		}
-		fmt.Println("artifact deleted")
+		c.orJSON(map[string]any{"deleted": true, "id": id}, func() {
+			fmt.Println("artifact deleted")
+		})
 	default:
 		return fmt.Errorf("unknown artifacts subcommand %q", args[0])
 	}
@@ -346,7 +358,9 @@ func (c *cli) cmdCache(ctx context.Context, args []string) error {
 		if err := c.api().del(ctx, "/cache/"+id); err != nil {
 			return err
 		}
-		fmt.Println("cache entry deleted")
+		c.orJSON(map[string]any{"deleted": true, "id": id}, func() {
+			fmt.Println("cache entry deleted")
+		})
 	default:
 		return fmt.Errorf("unknown cache subcommand %q", args[0])
 	}
@@ -517,7 +531,9 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 		if err := c.api().put(ctx, path, body, &out); err != nil {
 			return err
 		}
-		fmt.Println(pos[0], "=", pos[1])
+		c.orJSON(map[string]any{"key": pos[0], "value": pos[1]}, func() {
+			fmt.Println(pos[0], "=", pos[1])
+		})
 	default:
 		return fmt.Errorf("unknown settings subcommand %q", args[0])
 	}
@@ -526,16 +542,19 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 
 func (c *cli) cmdSecrets(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: kern secrets list|set|delete [--project S]\n       kern secrets set NAME [--value V] — omit --value to be prompted, or pipe via --value -")
+		return fmt.Errorf("usage: kern secrets list|set|delete [--project S] [--environment E]\n       kern secrets set NAME [--value V] — omit --value to be prompted, or pipe via --value -")
 	}
 	if err := c.requireAuth(); err != nil {
 		return err
 	}
-	opts, pos := parseFlags(args[1:], "project", "value")
+	opts, pos := parseFlags(args[1:], "project", "environment", "value")
 	project := first(opts["project"], c.project)
 	q := url.Values{}
 	if project != "" {
 		q.Set("project", project)
+	}
+	if env := opts["environment"]; env != "" {
+		q.Set("environment", env)
 	}
 	switch args[0] {
 	case "list":
@@ -581,27 +600,31 @@ func (c *cli) cmdSecrets(ctx context.Context, args []string) error {
 			}
 			value = v
 		}
-		path := "/secrets/" + name
-		if project != "" {
-			path += "?project=" + url.QueryEscape(project)
+		path := "/secrets/" + url.PathEscape(name)
+		if encoded := q.Encode(); encoded != "" {
+			path += "?" + encoded
 		}
 		if err := c.api().put(ctx, path, map[string]any{"value": value}, nil); err != nil {
 			return err
 		}
-		fmt.Println("secret", name, "stored")
+		c.orJSON(map[string]any{"stored": true, "name": name}, func() {
+			fmt.Println("secret", name, "stored")
+		})
 	case "delete":
 		name, err := strarg(pos, 0, "secret name")
 		if err != nil {
 			return err
 		}
-		path := "/secrets/" + name
-		if project != "" {
-			path += "?project=" + url.QueryEscape(project)
+		path := "/secrets/" + url.PathEscape(name)
+		if encoded := q.Encode(); encoded != "" {
+			path += "?" + encoded
 		}
 		if err := c.api().del(ctx, path); err != nil {
 			return err
 		}
-		fmt.Println("secret", name, "deleted")
+		c.orJSON(map[string]any{"deleted": true, "name": name}, func() {
+			fmt.Println("secret", name, "deleted")
+		})
 	default:
 		return fmt.Errorf("unknown secrets subcommand %q", args[0])
 	}
@@ -656,7 +679,9 @@ func (c *cli) cmdVars(ctx context.Context, args []string) error {
 		if err := c.api().put(ctx, path, map[string]any{"value": value}, nil); err != nil {
 			return err
 		}
-		fmt.Println("var", name, "stored")
+		c.orJSON(map[string]any{"stored": true, "name": name}, func() {
+			fmt.Println("var", name, "stored")
+		})
 	case "delete":
 		name, err := strarg(pos, 0, "variable name")
 		if err != nil {
@@ -666,7 +691,9 @@ func (c *cli) cmdVars(ctx context.Context, args []string) error {
 		if err := c.api().del(ctx, path); err != nil {
 			return err
 		}
-		fmt.Println("var", name, "deleted")
+		c.orJSON(map[string]any{"deleted": true, "name": name}, func() {
+			fmt.Println("var", name, "deleted")
+		})
 	default:
 		return fmt.Errorf("unknown vars subcommand %q", args[0])
 	}
@@ -830,7 +857,9 @@ func (c *cli) cmdEnvironments(ctx context.Context, args []string) error {
 		if err := c.api().del(ctx, base+"/"+url.PathEscape(name)); err != nil {
 			return err
 		}
-		fmt.Println("environment", name, "deleted")
+		c.orJSON(map[string]any{"deleted": true, "name": name}, func() {
+			fmt.Println("environment", name, "deleted")
+		})
 	default:
 		return fmt.Errorf("unknown environments subcommand %q", args[0])
 	}

@@ -50,6 +50,14 @@ func (s *Server) actOnCheckRun(ctx context.Context, body []byte) (status, detail
 	if err != nil {
 		return "ignored", "check run references unknown run " + runPart
 	}
+	// The signed delivery must belong to the run's own repository — a
+	// rerequest for repo A must not reset repo B's run (#368).
+	var src map[string]any
+	_ = json.Unmarshal(run.Source, &src)
+	if repo, _ := src["repo_full_name"].(string); repo != "" &&
+		!strings.EqualFold(repo, p.Repository.FullName) {
+		return "ignored", "check run repository does not match run " + runPart
+	}
 	var keys []string
 	if jobKey != "" {
 		keys = []string{jobKey}
