@@ -47,6 +47,15 @@ type Server struct {
 	geoSelfMu sync.Mutex                // serializes the control-plane self-lookup
 	metrics   *kernMetrics
 	ghCache   *ghCacheState
+	// maskers caches each running job's log masker — building one costs 4-6
+	// queries plus AES-GCM per secret, and log chunks arrive every second
+	// (#374). Entries expire in 60s and are evicted on job finish.
+	maskers sync.Map // jobID (uuid) -> maskerCacheEntry
+}
+
+type maskerCacheEntry struct {
+	m   *secrets.Masker
+	exp time.Time
 }
 
 func New(cfg *config.Config, st *store.Store, orch *orchestrator.Orchestrator, blobStore blobs.Store,

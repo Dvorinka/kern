@@ -494,12 +494,16 @@ func (s *Store) jobsForRun(ctx context.Context, runID uuid.UUID, withSteps bool)
 	if !withSteps {
 		return out, nil
 	}
+	ids := make([]uuid.UUID, len(out))
 	for i := range out {
-		steps, err := s.StepsForJob(ctx, out[i].ID)
-		if err != nil {
-			return nil, err
-		}
-		out[i].Steps = steps
+		ids[i] = out[i].ID
+	}
+	steps, err := s.StepsForJobs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].Steps = steps[out[i].ID]
 	}
 	return out, nil
 }
@@ -523,6 +527,31 @@ func (s *Store) StepsForJob(ctx context.Context, jobID uuid.UUID) ([]Step, error
 		}
 		st.HasSummary = st.SummaryRef != ""
 		out = append(out, st)
+	}
+	return out, rows.Err()
+}
+
+// StepsForJobs loads steps for many jobs in one query — the JobsForRun and
+// MCP get_run callers fan out per job otherwise (#374).
+func (s *Store) StepsForJobs(ctx context.Context, jobIDs []uuid.UUID) (map[uuid.UUID][]Step, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, job_id, number, key, name, status, conclusion, exit_code, started_at,
+		       completed_at, spec, log_ref, log_bytes, diagnosis, annotations, summary_ref
+		FROM steps WHERE job_id = ANY($1) ORDER BY job_id, number`, jobIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[uuid.UUID][]Step, len(jobIDs))
+	for rows.Next() {
+		var st Step
+		if err := rows.Scan(&st.ID, &st.JobID, &st.Number, &st.Key, &st.Name, &st.Status,
+			&st.Conclusion, &st.ExitCode, &st.StartedAt, &st.CompletedAt, &st.Spec, &st.LogRef,
+			&st.LogBytes, &st.Diagnosis, &st.Annotations, &st.SummaryRef); err != nil {
+			return nil, err
+		}
+		st.HasSummary = st.SummaryRef != ""
+		out[st.JobID] = append(out[st.JobID], st)
 	}
 	return out, rows.Err()
 }
