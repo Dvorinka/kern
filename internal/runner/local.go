@@ -3,15 +3,28 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"go.uber.org/zap"
 )
+
+type syncWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *syncWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
+}
 
 // RunLocalJob executes one job claim entirely in-process (#143, kern
 // testbox): an httptest shim stands in for the runner-facing API so the
@@ -23,7 +36,9 @@ import (
 // Source comes from bundlePath, a tar.gz of the working tree — the same
 // bundle kern exec uploads — fetched through the /source endpoint.
 func RunLocalJob(ctx context.Context, cfg Config, claim *Claim, secrets, vars map[string]string, log *zap.Logger, logOut io.Writer, artifactsDir, bundlePath string) (string, error) {
-	srv := httptest.NewServer(localShim(logOut, artifactsDir, bundlePath))
+	cfg.Local = true
+	sw := &syncWriter{w: logOut}
+	srv := httptest.NewServer(localShim(sw, artifactsDir, bundlePath))
 	defer srv.Close()
 
 	cl := newClient(srv.URL, "")
@@ -39,10 +54,18 @@ func RunLocalJob(ctx context.Context, cfg Config, claim *Claim, secrets, vars ma
 	exec.runPreHooks(ctx)
 
 	jobStatus := "success"
-	for _, step := range claim.Steps {
+	for i, step := range claim.Steps {
 		if ctx.Err() != nil {
 			return "cancelled", ctx.Err()
 		}
+		label := step.Name
+		if label == "" {
+			label = step.Uses
+		}
+		if label == "" {
+			label = fmt.Sprintf("step %d", i+1)
+		}
+		_, _ = fmt.Fprintf(sw, "\n==> %s\n", label)
 		conclusion, stepErr := exec.runStep(ctx, step)
 		if stepErr != nil {
 			return "", stepErr
