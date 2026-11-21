@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"sort"
@@ -439,6 +440,7 @@ func (e *executor) releaseServicePorts() {
 func (e *executor) waitServiceHealthy(ctx context.Context, svc ClaimService) error {
 	name := e.serviceContainerName(svc)
 	deadline := time.Now().Add(2 * time.Minute)
+	var lastProbe error
 	for {
 		out, err := exec.CommandContext(ctx, "docker", "inspect",
 			"--format", "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}",
@@ -447,15 +449,26 @@ func (e *executor) waitServiceHealthy(ctx context.Context, svc ClaimService) err
 			return fmt.Errorf("inspect: %s", tailStr(string(out), 200))
 		}
 		switch strings.TrimSpace(string(out)) {
-		case "healthy", "running":
+		case "healthy":
 			return nil
+		case "running":
+			// No HEALTHCHECK: "running" does not mean the listener is up —
+			// dial the declared ports before declaring readiness, or step 1
+			// eats an ECONNREFUSED (#373).
+			if err := e.probeServicePorts(ctx, svc); err == nil {
+				return nil
+			} else {
+				lastProbe = err
+			}
 		case "unhealthy":
-			return fmt.Errorf("healthcheck reports unhealthy")
+			return fmt.Errorf("healthcheck reports unhealthy: %s", e.serviceHealthLog(ctx, name))
 		case "exited", "dead", "removing":
-			logs, _ := exec.CommandContext(ctx, "docker", "logs", "--tail", "20", name).CombinedOutput()
-			return fmt.Errorf("service exited during startup: %s", tailStr(string(logs), 300))
+			return fmt.Errorf("service exited during startup: %s", e.serviceExitDetail(ctx, name))
 		}
 		if time.Now().After(deadline) {
+			if lastProbe != nil {
+				return fmt.Errorf("timed out waiting for service port: %s", lastProbe)
+			}
 			return fmt.Errorf("timed out waiting for service to become healthy")
 		}
 		select {
@@ -464,6 +477,65 @@ func (e *executor) waitServiceHealthy(ctx context.Context, svc ClaimService) err
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
+}
+
+// probeServicePorts TCP-dials every declared tcp port of a running service.
+// Host-net jobs answer on loopback; job-netns services share the job
+// container's bridge address. Unprobeable layouts return nil — "running"
+// remains the signal. nil when nothing is declared.
+func (e *executor) probeServicePorts(ctx context.Context, svc ClaimService) error {
+	if len(svc.Ports) == 0 {
+		return nil
+	}
+	target := "127.0.0.1"
+	loopback := e.host || e.privileged()
+	if !loopback {
+		out, err := exec.CommandContext(ctx, "docker", "inspect",
+			"--format", "{{.NetworkSettings.IPAddress}}", e.container).CombinedOutput()
+		if err != nil || strings.TrimSpace(string(out)) == "" {
+			return nil // cannot resolve the job IP — treat as unprobeable
+		}
+		target = strings.TrimSpace(string(out))
+	}
+	var d net.Dialer
+	for _, p := range svc.Ports {
+		host, container, proto := portSpecParts(p)
+		if proto != "" && proto != "/tcp" {
+			continue
+		}
+		port := container
+		if loopback {
+			port = host
+		}
+		conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(target, port))
+		if err != nil {
+			return fmt.Errorf("port %s not listening: %s", p, tailStr(err.Error(), 120))
+		}
+		conn.Close()
+	}
+	return nil
+}
+
+// serviceHealthLog renders the last healthcheck log entries for a failed
+// service — the inspect state alone used to hide why it went unhealthy.
+func (e *executor) serviceHealthLog(ctx context.Context, name string) string {
+	out, err := exec.CommandContext(ctx, "docker", "inspect",
+		"--format", "{{range .State.Health.Log}}{{.Output}}{{end}}", name).CombinedOutput()
+	if err != nil || strings.TrimSpace(string(out)) == "" {
+		logs, _ := exec.CommandContext(ctx, "docker", "logs", "--tail", "30", name).CombinedOutput()
+		return tailStr(string(logs), 500)
+	}
+	return tailStr(string(out), 500)
+}
+
+// serviceExitDetail reports OOMKilled/ExitCode plus a log tail for a service
+// that died during startup — the authoritative kernel state instead of a
+// guessed reason (#373).
+func (e *executor) serviceExitDetail(ctx context.Context, name string) string {
+	state, _ := exec.CommandContext(ctx, "docker", "inspect",
+		"--format", "OOMKilled={{.State.OOMKilled}} ExitCode={{.State.ExitCode}}", name).CombinedOutput()
+	logs, _ := exec.CommandContext(ctx, "docker", "logs", "--tail", "30", name).CombinedOutput()
+	return fmt.Sprintf("%s — %s", strings.TrimSpace(string(state)), tailStr(string(logs), 400))
 }
 
 // streamServiceLogs follows `docker logs -f` for a service and folds its
