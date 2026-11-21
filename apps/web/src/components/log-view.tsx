@@ -109,6 +109,8 @@ export function LogView({
 	header?: string;
 }) {
 	const [text, setText] = useState("");
+	const [lines, setLines] = useState<LLine[]>([]);
+	const [partial, setPartial] = useState("");
 	const [err, setErr] = useState("");
 	const [trunc, setTrunc] = useState<{ next: number; size: number } | null>(null);
 	const [wrap, setWrap] = useState(true);
@@ -120,8 +122,43 @@ export function LogView({
 	const logRef = useRef<HTMLDivElement>(null);
 	const [away, setAway] = useState(false);
 
+	// Incremental parse: each appended chunk classifies only its own
+	// completed lines — the old useMemo re-stripped ANSI and re-classified
+	// the entire accumulated log on every SSE chunk (O(N²) on long logs).
+	const pendingRef = useRef("");
+	const appendText = (chunk: string) => {
+		if (!chunk) return;
+		const joined = pendingRef.current + chunk.replace(ANSI, "");
+		const parts = joined.split("\n");
+		const pending = parts.pop() ?? "";
+		pendingRef.current = pending;
+		setPartial(pending);
+		if (parts.length === 0) return;
+		setLines((prev) => {
+			const out = prev.slice();
+			for (const raw of parts) {
+				const c = classify(raw);
+				if (c) out.push({ n: out.length + 1, ...c });
+			}
+			return out;
+		});
+	};
+	const flushPending = () => {
+		const p = pendingRef.current;
+		pendingRef.current = "";
+		setPartial("");
+		if (!p) return;
+		setLines((prev) => {
+			const c = classify(p);
+			return c ? [...prev, { n: prev.length + 1, ...c }] : prev;
+		});
+	};
+
 	useEffect(() => {
 		setText("");
+		setLines([]);
+		setPartial("");
+		pendingRef.current = "";
 		setErr("");
 		setTrunc(null);
 		setQ("");
@@ -137,6 +174,8 @@ export function LogView({
 				if (res.ok) {
 					const d = await res.json();
 					setText(d.text ?? "");
+					appendText(d.text ?? "");
+					flushPending();
 					// The endpoint caps at 256 KiB — flag truncation and offer
 					// paged continuation instead of silently dropping the rest.
 					if ((d.size ?? 0) > (d.next_offset ?? 0)) {
@@ -165,10 +204,12 @@ export function LogView({
 					if (!c) return;
 					lastOff = c.offset + new TextEncoder().encode(c.text ?? "").length;
 					setText((t) => t + (c.text ?? ""));
+					appendText(c.text ?? "");
 					retries = 0;
 				});
 				es.addEventListener("end", () => {
 					ended = true;
+					flushPending();
 					es?.close();
 				});
 				// Server-sent error events are application errors — show them;
@@ -198,19 +239,7 @@ export function LogView({
 		};
 	}, [stepId, active]);
 
-	const clean = text.replace(ANSI, "");
-
-	// classify once per text update — the stream appends, never rewrites
-	const parsed = useMemo(() => {
-		const out: LLine[] = [];
-		if (!clean) return out;
-		const raw = clean.split("\n");
-		for (let i = 0; i < raw.length; i++) {
-			const c = classify(raw[i]!);
-			if (c) out.push({ n: i + 1, ...c });
-		}
-		return out;
-	}, [clean]);
+	const parsed = lines;
 
 	const counts = useMemo(() => {
 		const c = { err: 0, warn: 0, cmd: 0 };
@@ -239,7 +268,7 @@ export function LogView({
 
 	const copyAll = async () => {
 		try {
-			await navigator.clipboard.writeText(clean);
+			await navigator.clipboard.writeText(text.replace(ANSI, ""));
 			setCopied(true);
 			setTimeout(() => setCopied(false), 1400);
 		} catch {
@@ -248,7 +277,7 @@ export function LogView({
 	};
 
 	const download = () => {
-		const blob = new Blob([clean], { type: "text/plain" });
+		const blob = new Blob([text.replace(ANSI, "")], { type: "text/plain" });
 		const a = document.createElement("a");
 		a.href = URL.createObjectURL(blob);
 		a.download = `${(header ?? "step").replace(/[^\w.-]+/g, "_")}.log`;
@@ -269,6 +298,7 @@ export function LogView({
 		}
 		const d = await res.json();
 		setText((t) => t + (d.text ?? ""));
+		appendText(d.text ?? "");
 		setTrunc(
 			(d.size ?? 0) > (d.next_offset ?? 0)
 				? { next: d.next_offset, size: d.size }
@@ -381,6 +411,23 @@ export function LogView({
 						</div>
 					);
 				})}
+				{partial && (() => {
+					const c = classify(partial);
+					if (!c) return null;
+					const n = parsed.length + 1;
+					if (filtering && !partial.toLowerCase().includes(q.trim().toLowerCase()) && q.trim()) return null;
+					return (
+						<div className={cn("l", c.lvl && `l-l${c.lvl === "grp" ? "g" : c.lvl === "err" ? "e" : c.lvl === "warn" ? "w" : c.lvl === "cmd" ? "c" : "d"}`, active && "l-lv", selLine === n && "l-sel")}>
+							<span className="lnum" onClick={() => setSelLine(selLine === n ? null : n)}>
+								{n}
+							</span>
+							<span className="lm">
+								{withHits(c.text, toks(c.text), q.trim())}
+								{active && <span className="cursor" />}
+							</span>
+						</div>
+					);
+				})()}
 				{err && (
 					<div className="l">
 						<span className="lnum">!</span>

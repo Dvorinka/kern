@@ -335,9 +335,6 @@ export function RunsPage() {
 							<span className="k">Stored</span>
 							<span className="v">{bytes(overview?.cache.bytes)}</span>
 						</div>
-						<div className="meter" style={{ margin: "10px 0 4px" }}>
-							<i style={{ width: "100%" }} />
-						</div>
 						<div className="kv" style={{ padding: "8px 0" }}>
 							<span className="k">Runs total</span>
 							<span className="v">{overview?.overview.runs_total ?? 0}</span>

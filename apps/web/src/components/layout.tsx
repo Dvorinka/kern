@@ -1,6 +1,6 @@
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { LogOut, Menu, Search, X } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
@@ -257,6 +257,7 @@ function CommandK({ onClose }: { onClose: () => void }) {
 	const nav = useNavigate();
 	const [q, setQ] = useState("");
 	const [sel, setSel] = useState(0);
+	const listRef = useRef<HTMLDivElement>(null);
 	const { data: projects } = useQuery({
 		queryKey: ["projects"],
 		queryFn: () => api.get<{ projects: Project[] }>("/projects"),
@@ -328,6 +329,17 @@ function CommandK({ onClose }: { onClose: () => void }) {
 		nav(to);
 	};
 
+	// Clamp the selection when the filtered list shrinks under it, and
+	// keep the highlighted row scrolled into view on keyboard nav.
+	useEffect(() => {
+		if (sel >= items.length) setSel(Math.max(0, items.length - 1));
+	}, [items.length, sel]);
+	useEffect(() => {
+		listRef.current
+			?.querySelector(".ckit.s")
+			?.scrollIntoView({ block: "nearest" });
+	}, [sel]);
+
 	return (
 		<div
 			className="fixed inset-0 z-50 flex items-start justify-center bg-black/45 pt-[14vh] backdrop-blur-sm"
@@ -335,6 +347,9 @@ function CommandK({ onClose }: { onClose: () => void }) {
 		>
 			<div
 				className="panel ckpanel overflow-hidden"
+				role="dialog"
+				aria-modal="true"
+				aria-label="Command palette"
 				onClick={(e) => e.stopPropagation()}
 				onKeyDown={(e) => {
 					if (e.key === "Escape") onClose();
@@ -361,7 +376,7 @@ function CommandK({ onClose }: { onClose: () => void }) {
 						className="w-full bg-transparent text-[14px] text-[var(--ink)] outline-none placeholder:text-[var(--faint)]"
 					/>
 				</div>
-				<div className="max-h-[340px] overflow-y-auto p-1.5">
+				<div ref={listRef} className="max-h-[340px] overflow-y-auto p-1.5">
 					{items.length === 0 && (
 						<div className="px-4 py-3 text-xs text-[var(--faint)]">Nothing matches.</div>
 					)}

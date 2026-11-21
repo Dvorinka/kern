@@ -123,6 +123,18 @@ export function OverviewPage() {
 	const details = useRunDetails(detailRuns);
 	const detailOf = (id: string) => details[detailRuns.findIndex((r) => r.id === id)]?.data;
 
+	// The legend mirrors the actual job names on screen — not a fixed
+	// lint/build/web guess.
+	const legendJobs = useMemo(() => {
+		const seen = new Set<string>();
+		for (const d of details) {
+			for (const j of d.data?.jobs ?? []) {
+				if (j.name) seen.add(j.name);
+			}
+		}
+		return [...seen].slice(0, 4);
+	}, [details]);
+
 	// Server aggregates → chart points + activity cells. Buckets are UTC
 	// days; the ?day= drill-down parses the same instant server-side.
 	const { day, totals } = useMemo(() => {
@@ -269,18 +281,12 @@ export function OverviewPage() {
 						</span>
 					</div>
 					<div className="key">
-						<span>
-							<i className="sw h1" />
-							lint
-						</span>
-						<span>
-							<i className="sw h2" />
-							build
-						</span>
-						<span>
-							<i className="sw h3" />
-							web
-						</span>
+						{legendJobs.map((name, i) => (
+							<span key={name}>
+								<i className={`sw h${(i % 3) + 1}`} />
+								{name}
+							</span>
+						))}
 						<Link to="/runs" className="keygo">
 							All runs
 						</Link>
