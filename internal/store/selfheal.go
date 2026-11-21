@@ -162,8 +162,10 @@ func (s *Store) ApproveRemediation(ctx context.Context, jobID uuid.UUID, stepNum
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE steps SET status = 'queued', conclusion = '', started_at = NULL,
-			completed_at = NULL, exit_code = NULL
-		WHERE job_id = $1 AND status <> 'completed'`, jobID); err != nil {
+			completed_at = NULL, exit_code = NULL, log_ref = '', log_bytes = 0,
+			annotations = '[]'::jsonb, summary_ref = '',
+			diagnosis = CASE WHEN number = $2 THEN diagnosis ELSE NULL END
+		WHERE job_id = $1`, jobID, stepNumber); err != nil {
 		return nil, err
 	}
 	return fix, tx.Commit(ctx)

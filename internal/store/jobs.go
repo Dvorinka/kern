@@ -460,8 +460,9 @@ func (s *Store) RequeueJob(ctx context.Context, runnerID, jobID uuid.UUID, reaso
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE steps SET status = 'queued', conclusion = '', started_at = NULL,
-			completed_at = NULL, exit_code = NULL
-		WHERE job_id = $1 AND status <> 'completed'`, jobID); err != nil {
+			completed_at = NULL, exit_code = NULL, log_ref = '', log_bytes = 0,
+			diagnosis = NULL, annotations = '[]'::jsonb, summary_ref = ''
+		WHERE job_id = $1`, jobID); err != nil {
 		return false, err
 	}
 	// A requeued job returns its deployment to queued, matching lease reaping.
@@ -518,10 +519,19 @@ func (s *Store) ReapExpiredLeases(ctx context.Context, maxAttempts int) ([]uuid.
 	for _, jobID := range jobIDs {
 		_, _ = s.pool.Exec(ctx, `
 			UPDATE job_leases SET released_at = now() WHERE job_id = $1 AND released_at IS NULL`, jobID)
+		// Reset all steps cleanly for requeued jobs (clearing attempt-1 logs
+		// and diagnoses); jobs that exhausted maxAttempts keep their terminal step data.
 		_, _ = s.pool.Exec(ctx, `
-			UPDATE steps SET status = 'queued', conclusion = '', started_at = NULL,
-				completed_at = NULL, exit_code = NULL
-			WHERE job_id = $1 AND status <> 'completed'`, jobID)
+			UPDATE steps s SET status = 'queued', conclusion = '', started_at = NULL,
+				completed_at = NULL, exit_code = NULL, log_ref = '', log_bytes = 0,
+				diagnosis = NULL, annotations = '[]'::jsonb, summary_ref = ''
+			FROM jobs j
+			WHERE s.job_id = $1 AND j.id = s.job_id AND j.status = 'queued'`, jobID)
+		_, _ = s.pool.Exec(ctx, `
+			UPDATE steps s SET status = 'cancelled', conclusion = 'cancelled', completed_at = now()
+			FROM jobs j
+			WHERE s.job_id = $1 AND j.id = s.job_id AND j.status = 'completed'
+			  AND s.status IN ('queued', 'running')`, jobID)
 		// Requeued jobs return their deployment to queued; jobs that exhausted
 		// attempts fail it.
 		_, _ = s.pool.Exec(ctx, `
@@ -543,11 +553,16 @@ func (s *Store) ReapExpiredLeases(ctx context.Context, maxAttempts int) ([]uuid.
 // enforces the same timeout via context, so this only fires when a runner
 // keeps renewing the lease without enforcing it.
 func (s *Store) TimeoutOverdueJobs(ctx context.Context) (int64, error) {
-	rows, err := s.pool.Query(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `
 		UPDATE jobs SET status = 'completed', conclusion = 'failure',
 			classification = 'timeout',
 			error = 'job exceeded timeout-minutes', completed_at = now(),
-			lease_expires_at = NULL
+			runner_id = NULL, lease_expires_at = NULL
 		WHERE status = 'in_progress'
 		  AND started_at IS NOT NULL
 		  AND started_at + make_interval(secs => timeout_seconds) < now()
@@ -568,7 +583,26 @@ func (s *Store) TimeoutOverdueJobs(ctx context.Context) (int64, error) {
 	if err := rows.Err(); err != nil {
 		return 0, err
 	}
-	s.failDeploymentsForJobs(ctx, ids)
+	if len(ids) > 0 {
+		if _, err := tx.Exec(ctx, `
+			UPDATE job_leases SET released_at = now()
+			WHERE released_at IS NULL AND job_id = ANY($1)`, ids); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE steps SET status = 'cancelled', conclusion = 'cancelled', completed_at = now()
+			WHERE job_id = ANY($1) AND status IN ('queued', 'running')`, ids); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE deployments SET status = 'failure', completed_at = now()
+			WHERE job_id = ANY($1) AND status IN ('queued', 'in_progress')`, ids); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
 	return int64(len(ids)), nil
 }
 
