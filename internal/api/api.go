@@ -51,6 +51,16 @@ type Server struct {
 	// queries plus AES-GCM per secret, and log chunks arrive every second
 	// (#374). Entries expire in 60s and are evicted on job finish.
 	maskers sync.Map // jobID (uuid) -> maskerCacheEntry
+
+	// webhookQueue feeds the background delivery worker. Persisted rows are
+	// processed off-request so GitHub's 10s ack deadline cannot cancel a
+	// delivery mid-flight (#374); the sweeper reclaims anything dropped.
+	webhookQueue chan webhookTask
+}
+
+type webhookTask struct {
+	delivery, event string
+	body            []byte
 }
 
 type maskerCacheEntry struct {
@@ -78,10 +88,13 @@ func New(cfg *config.Config, st *store.Store, orch *orchestrator.Orchestrator, b
 		Geo:    geoip.New(cfg.GeoIPURL),
 		ghApps: make(map[uuid.UUID]*github.App), ghRepoApp: make(map[string]uuid.UUID),
 		metrics: newKernMetrics(), ghCache: newGHCacheState(),
+		webhookQueue: make(chan webhookTask, 128),
 	}
 	s.wireCommitStatus()
 	s.Engine = s.buildRouter()
 	s.sweepGHCacheUploads()
+	go s.webhookWorker()
+	go s.sweepStaleWebhooks()
 	return s
 }
 

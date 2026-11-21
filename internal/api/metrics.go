@@ -95,7 +95,8 @@ func (m *kernMetrics) observeJobFinish(conclusion, classification string) {
 	m.mu.Unlock()
 }
 
-// snapshot returns a stable copy for rendering.
+// snapshot returns a stable copy for rendering — the histograms are cloned
+// too: returning the live pointers raced with observe() during a scrape.
 func (m *kernMetrics) snapshot() (map[string]uint64, map[string]uint64, *histogram, *histogram) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -107,7 +108,15 @@ func (m *kernMetrics) snapshot() (map[string]uint64, map[string]uint64, *histogr
 	for k, v := range m.jobFinishes {
 		finishes[k] = v
 	}
-	return lookups, finishes, m.claimQuery, m.webhookProcess
+	clone := func(h *histogram) *histogram {
+		return &histogram{
+			buckets: h.buckets,
+			counts:  append([]uint64(nil), h.counts...),
+			sum:     h.sum,
+			count:   h.count,
+		}
+	}
+	return lookups, finishes, clone(m.claimQuery), clone(m.webhookProcess)
 }
 
 // writeDurationHistogram emits a store.DurationHistogram (non-cumulative
@@ -124,8 +133,10 @@ func writeDurationHistogram(b *strings.Builder, name, help string, h store.Durat
 	fmt.Fprintf(b, "%s_sum %g\n%s_count %d\n", name, h.Sum, name, h.Count)
 }
 
-// labelValue escapes a Prometheus label value.
+// labelValue escapes a Prometheus label value. Only backslash, quote and
+// newline are escapable in the 0.0.4 text format.
 func labelValue(v string) string {
 	v = strings.ReplaceAll(v, `\`, `\\`)
-	return strings.ReplaceAll(v, `"`, `\"`)
+	v = strings.ReplaceAll(v, `"`, `\"`)
+	return strings.ReplaceAll(v, "\n", `\n`)
 }
