@@ -244,7 +244,8 @@ func (a *Agent) sweepOrphanServices(ctx context.Context) {
 			id, name, ok := strings.Cut(line, "|")
 			name = strings.TrimPrefix(strings.TrimSpace(name), "/")
 			if !ok || id == "" || a.jobActive(name) ||
-				!(strings.HasPrefix(name, "kern-svc-") || strings.HasPrefix(name, "kern-job-") || strings.HasPrefix(name, "kern-egro-")) {
+				!(strings.HasPrefix(name, "kern-svc-") || strings.HasPrefix(name, "kern-job-") ||
+					strings.HasPrefix(name, "kern-egro-") || strings.HasPrefix(name, "kern-action-")) {
 				continue
 			}
 			rctx, cancel := context.WithTimeout(ctx, 30*time.Second)

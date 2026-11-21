@@ -51,11 +51,18 @@ type JobSeed struct {
 
 // ServiceSeed is a service container spec persisted with the job.
 type ServiceSeed struct {
-	Name    string            `json:"name"`
-	Image   string            `json:"image"`
-	Env     map[string]string `json:"env,omitempty"`
-	Options []string          `json:"options,omitempty"`
-	Ports   []string          `json:"ports,omitempty"`
+	Name        string              `json:"name"`
+	Image       string              `json:"image"`
+	Env         map[string]string   `json:"env,omitempty"`
+	Options     []string            `json:"options,omitempty"`
+	Ports       []string            `json:"ports,omitempty"`
+	Credentials *ServiceCredentials `json:"credentials,omitempty"`
+}
+
+// ServiceCredentials carries private-registry auth for a service container pull.
+type ServiceCredentials struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
 }
 
 type StepSeed struct {

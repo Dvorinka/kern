@@ -137,6 +137,7 @@ func (s *Server) getExec(c *gin.Context) {
 		}
 		resp["data"] = base64.StdEncoding.EncodeToString(chunk)
 		resp["size"] = size
+		resp["next_offset"] = after + int64(len(chunk))
 	}
 	c.JSON(http.StatusOK, resp)
 }
@@ -285,10 +286,11 @@ func (s *Server) execStdinFeed(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"data":      base64.StdEncoding.EncodeToString(chunk),
-		"size":      size,
-		"closed":    ex.StdinClosed,
-		"cancelled": ex.State == "cancelled",
+		"data":        base64.StdEncoding.EncodeToString(chunk),
+		"size":        size,
+		"next_offset": after + int64(len(chunk)),
+		"closed":      ex.StdinClosed,
+		"cancelled":   ex.State == "cancelled",
 	})
 }
 

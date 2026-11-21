@@ -162,6 +162,7 @@ type executor struct {
 	sumBuf            bytes.Buffer      // composite sub-step summaries, folded into the parent step
 	actionDirs        map[string]string // remote actions fetched this job, keyed by owner__repo__ref
 	actionCachePruned bool              // persistent action cache swept once per job
+	builtActionImages []string          // Dockerfile action images built during this job, removed in cleanup
 	exprCtx           map[string]any    // composite sub-step interpolation context; nil = runnerContext()
 
 	postHooks []*actionHook          // post stack: armed lazily, popped LIFO
@@ -1181,6 +1182,9 @@ func (e *executor) cleanup() {
 		e.stopServices(ctx)
 		if !e.cfg.Local {
 			e.reapOrphanContainers(ctx)
+		}
+		for _, tag := range e.builtActionImages {
+			_ = exec.CommandContext(ctx, "docker", "rmi", "-f", tag).Run()
 		}
 	} else if len(e.claim.Job.Services) > 0 {
 		e.stopServices(ctx)
