@@ -9,11 +9,13 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/dvorinka/kern/internal/blobs"
 	"github.com/dvorinka/kern/internal/store"
 )
 
@@ -86,6 +88,27 @@ func (s *Server) cacheRestore(c *gin.Context) {
 	result := "prefix"
 	if entry.Key == key {
 		result = "exact"
+	}
+	// direct=1 hands the runner a pre-signed object URL instead of proxying
+	// bytes through the API (#369). Filesystem has no Presigner — the runner
+	// only asks when its prepare probe said presign is available.
+	if c.Query("direct") == "1" {
+		ps, okP := s.Blobs.(blobs.Presigner)
+		if !okP {
+			fail(c, http.StatusNotFound, "presign_unavailable", "blob backend cannot presign")
+			return
+		}
+		u, uerr := ps.PresignGet(c.Request.Context(), entry.BlobRef, 15*time.Minute)
+		if uerr != nil {
+			s.internalError(c, uerr)
+			return
+		}
+		if s.metrics != nil {
+			s.metrics.observeCache(result)
+		}
+		s.Store.TouchCache(c.Request.Context(), entry.ID)
+		c.JSON(http.StatusOK, gin.H{"url": u, "key": entry.Key})
+		return
 	}
 	rc, size, err := s.Blobs.Open(entry.BlobRef)
 	if err != nil {
@@ -209,4 +232,95 @@ func (s *Server) cacheSave(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusCreated, gin.H{"key": key, "size": size})
+}
+
+// cachePrepareUpload hands the runner a pre-signed PUT URL for its archive
+// plus the blob_ref it must echo at commit. 404 presign_unavailable tells
+// older/again runners to use the plain PUT path instead (#369).
+func (s *Server) cachePrepareUpload(c *gin.Context) {
+	job, _, ok := s.runnerJob(c)
+	if !ok {
+		return
+	}
+	key := c.Param("key")
+	if !cacheKeyRe.MatchString(key) {
+		fail(c, http.StatusBadRequest, "invalid_key", "cache key must be 1-512 chars and contain no commas")
+		return
+	}
+	ps, okP := s.Blobs.(blobs.Presigner)
+	if !okP {
+		fail(c, http.StatusNotFound, "presign_unavailable", "blob backend cannot presign")
+		return
+	}
+	run, err := s.Store.Run(c.Request.Context(), job.RunID)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	// Same unique-ref scheme as cacheSave — fork saves can never overwrite a
+	// trusted blob in place (#369).
+	blobRef := fmt.Sprintf("cache/%s/%s/%s-%s.tar.gz", run.ProjectID,
+		cacheScope(run), url.PathEscape(key), uuid.NewString())
+	u, err := ps.PresignPut(c.Request.Context(), blobRef, 15*time.Minute)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"upload_url": u, "blob_ref": blobRef})
+}
+
+// cacheCommitUpload finalizes a direct-S3 save: the blob must exist at the
+// prepared ref with a sane size before the cache_entries row is written.
+func (s *Server) cacheCommitUpload(c *gin.Context) {
+	job, _, ok := s.runnerJob(c)
+	if !ok {
+		return
+	}
+	key := c.Param("key")
+	if !cacheKeyRe.MatchString(key) {
+		fail(c, http.StatusBadRequest, "invalid_key", "cache key must be 1-512 chars and contain no commas")
+		return
+	}
+	var req struct {
+		BlobRef string `json:"blob_ref"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.BlobRef == "" {
+		fail(c, http.StatusBadRequest, "invalid_request", "blob_ref required")
+		return
+	}
+	run, err := s.Store.Run(c.Request.Context(), job.RunID)
+	if err != nil {
+		s.internalError(c, err)
+		return
+	}
+	// The ref must be one WE issued for this project+scope — a runner could
+	// otherwise point commit at another tenant's object (#368).
+	prefix := fmt.Sprintf("cache/%s/%s/", run.ProjectID, cacheScope(run))
+	if !strings.HasPrefix(req.BlobRef, prefix) {
+		fail(c, http.StatusBadRequest, "invalid_ref", "blob_ref is not a cache upload for this run")
+		return
+	}
+	size, err := s.Blobs.Size(req.BlobRef)
+	if err != nil || size <= 0 {
+		fail(c, http.StatusBadRequest, "missing_blob", "upload not found — PUT to the signed URL first")
+		return
+	}
+	if max := s.Cfg.CacheMaxBytes; max > 0 && size > max {
+		_ = s.Blobs.Delete(req.BlobRef)
+		fail(c, http.StatusRequestEntityTooLarge, "cache_too_large",
+			"cache archive exceeds KERN_CACHE_MAX_BYTES")
+		return
+	}
+	_, err = s.Store.SaveCacheEntry(c.Request.Context(), run.ProjectID, key, "", cacheScope(run), req.BlobRef, size)
+	if errors.Is(err, store.ErrExists) {
+		_ = s.Blobs.Delete(req.BlobRef)
+		fail(c, http.StatusConflict, "cache_exists", "a cache with this key already exists")
+		return
+	}
+	if err != nil {
+		_ = s.Blobs.Delete(req.BlobRef)
+		s.internalError(c, err)
+		return
+	}
+	c.Status(http.StatusOK)
 }

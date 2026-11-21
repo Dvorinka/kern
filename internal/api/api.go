@@ -356,6 +356,10 @@ func (s *Server) buildRouter() *gin.Engine {
 		runner.GET("/runners/jobs/:jobID/artifacts/:name", s.downloadArtifact)
 		runner.GET("/runners/jobs/:jobID/cache/restore", s.cacheRestore)
 		runner.PUT("/runners/jobs/:jobID/cache/:key", s.cacheSave)
+	// Direct-blob uploads (#369): presigned-PUT pair; runners fall back to
+	// the proxied PUT when prepare answers presign_unavailable.
+	runner.POST("/runners/jobs/:jobID/cache/:key/prepare", s.cachePrepareUpload)
+	runner.POST("/runners/jobs/:jobID/cache/:key/commit", s.cacheCommitUpload)
 		runner.POST("/runners/exec/:execID/start", s.execStart)
 		runner.POST("/runners/exec/:execID/output", s.execOutput)
 		runner.GET("/runners/exec/:execID/stdin", s.execStdinFeed)

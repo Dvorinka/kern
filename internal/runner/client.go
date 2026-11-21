@@ -455,6 +455,9 @@ func (c *client) listArtifacts(ctx context.Context, jobID string) ([]string, err
 // restoreCache downloads the best-matching archive to path and reports the
 // matched key. found is false on a clean 404 cache miss.
 func (c *client) restoreCache(ctx context.Context, jobID, key string, prefixes []string, path string) (string, bool, error) {
+	if k, found, err := c.restoreCacheDirect(ctx, jobID, key, prefixes, path); err == nil {
+		return k, found, nil
+	}
 	q := url.Values{"key": {key}}
 	if len(prefixes) > 0 {
 		q.Set("restore_keys", strings.Join(prefixes, ","))
@@ -488,9 +491,59 @@ func (c *client) restoreCache(ctx context.Context, jobID, key string, prefixes [
 	return resp.Header.Get("X-Kern-Cache-Key"), true, nil
 }
 
+// restoreCacheDirect is the presigned-fetch half of restoreCache: one small
+// API call trades the archive bytes for a signed object URL, then a plain
+// unauthenticated GET streams it off the control plane entirely (#369).
+func (c *client) restoreCacheDirect(ctx context.Context, jobID, key string, prefixes []string, path string) (string, bool, error) {
+	q := url.Values{"key": {key}, "direct": {"1"}}
+	if len(prefixes) > 0 {
+		q.Set("restore_keys", strings.Join(prefixes, ","))
+	}
+	var loc struct {
+		URL string `json:"url"`
+		Key string `json:"key"`
+	}
+	err := c.do(ctx, http.MethodGet,
+		"/api/v1/runners/jobs/"+url.PathEscape(jobID)+"/cache/restore?"+q.Encode(), nil, &loc)
+	if err != nil {
+		// A clean miss comes back as a miss — no wasted proxy retry.
+		// presign_unavailable and friends fall through to the proxy path.
+		if ae, ok := err.(*APIError); ok && strings.Contains(ae.Body, "cache_miss") {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	if loc.URL == "" {
+		return "", false, fmt.Errorf("empty presigned URL")
+	}
+	resp, err := c.http.Get(loc.URL) // no auth — the signed URL is the credential
+	if err != nil {
+		return "", false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", false, fmt.Errorf("presigned GET: %s", resp.Status)
+	}
+	fh, err := os.Create(path)
+	if err != nil {
+		return "", false, err
+	}
+	defer fh.Close()
+	if _, err := io.Copy(fh, resp.Body); err != nil {
+		return "", false, err
+	}
+	return loc.Key, true, nil
+}
+
 // saveCache uploads an archive under key. A 409 means the key is taken;
-// callers map that to a warning.
+// callers map that to a warning. When the blob backend can presign, the
+// archive PUTs straight to object storage and the API only records the
+// entry — cache traffic leaves the control plane's bandwidth budget
+// (#369). Any presign-path failure falls back to the proxied PUT.
 func (c *client) saveCache(ctx context.Context, jobID, key, path string) error {
+	if err := c.saveCacheDirect(ctx, jobID, key, path); err == nil {
+		return nil
+	}
 	fh, err := os.Open(path)
 	if err != nil {
 		return err
@@ -498,6 +551,43 @@ func (c *client) saveCache(ctx context.Context, jobID, key, path string) error {
 	defer fh.Close()
 	return c.do(ctx, http.MethodPut,
 		"/api/v1/runners/jobs/"+url.PathEscape(jobID)+"/cache/"+url.PathEscape(key), fh2bytes(fh), nil)
+}
+
+// saveCacheDirect is the presigned-upload half of saveCache: prepare →
+// unauthenticated PUT to the signed URL → commit. Errors are opaque on
+// purpose — the caller retries through the proxy path.
+func (c *client) saveCacheDirect(ctx context.Context, jobID, key, path string) error {
+	var prep struct {
+		URL     string `json:"upload_url"`
+		BlobRef string `json:"blob_ref"`
+	}
+	base := "/api/v1/runners/jobs/" + url.PathEscape(jobID) + "/cache/" + url.PathEscape(key)
+	if err := c.do(ctx, http.MethodPost, base+"/prepare", nil, &prep); err != nil || prep.URL == "" {
+		return err
+	}
+	fh, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer fh.Close()
+	put, err := http.NewRequestWithContext(ctx, http.MethodPut, prep.URL, fh)
+	if err != nil {
+		return err
+	}
+	if fi, err := fh.Stat(); err == nil {
+		put.ContentLength = fi.Size()
+	}
+	resp, err := c.http.Do(put) // no auth header — the signed URL is the credential
+	if err != nil {
+		return err
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("presigned PUT: %s", resp.Status)
+	}
+	return c.do(ctx, http.MethodPost, base+"/commit",
+		map[string]string{"blob_ref": prep.BlobRef}, nil)
 }
 
 func (c *client) jobSecrets(ctx context.Context, jobID string) (map[string]string, map[string]string, bool, error) {
