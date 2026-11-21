@@ -18,11 +18,50 @@ type Workflow struct {
 	Env         map[string]any    `yaml:"env"`
 	Defaults    Defaults          `yaml:"defaults"`
 	Concurrency Concurrency       `yaml:"concurrency"`
-	Permissions map[string]string `yaml:"permissions"`
+	Permissions Permissions       `yaml:"permissions"`
 	Jobs        map[string]*Job   `yaml:"jobs"`
 
 	// Unknown keeps top-level keys KERN does not implement so validation can report them.
 	Unknown map[string]struct{} `yaml:"-"`
+}
+
+// Permissions accepts either a mapping of scope -> read|write|none or the
+// GitHub Actions shorthands `read-all` and `write-all`.
+type Permissions map[string]string
+
+var allPermissionScopes = []string{
+	"actions", "checks", "contents", "deployments", "issues",
+	"packages", "pages", "pull-requests", "security-events", "statuses",
+}
+
+func (p *Permissions) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		var s string
+		if err := node.Decode(&s); err != nil {
+			return err
+		}
+		switch strings.TrimSpace(s) {
+		case "read-all", "write-all":
+			level := strings.TrimSuffix(strings.TrimSpace(s), "-all")
+			m := make(map[string]string, len(allPermissionScopes))
+			for _, sc := range allPermissionScopes {
+				m[sc] = level
+			}
+			*p = m
+			return nil
+		default:
+			return fmt.Errorf("invalid scalar permissions %q (expected read-all, write-all, or mapping)", s)
+		}
+	case yaml.MappingNode:
+		var m map[string]string
+		if err := node.Decode(&m); err != nil {
+			return err
+		}
+		*p = m
+		return nil
+	}
+	return fmt.Errorf("permissions must be read-all, write-all, or a mapping")
 }
 
 type Defaults struct {
@@ -37,6 +76,38 @@ type RunDefaults struct {
 type Concurrency struct {
 	Group            string `yaml:"group"`
 	CancelInProgress bool   `yaml:"cancel-in-progress"`
+	CancelExpr       string `yaml:"-"`
+}
+
+func (c *Concurrency) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		return node.Decode(&c.Group)
+	case yaml.MappingNode:
+		var raw struct {
+			Group            string `yaml:"group"`
+			CancelInProgress any    `yaml:"cancel-in-progress"`
+		}
+		if err := node.Decode(&raw); err != nil {
+			return err
+		}
+		c.Group = raw.Group
+		switch v := raw.CancelInProgress.(type) {
+		case nil:
+		case bool:
+			c.CancelInProgress = v
+		case string:
+			if strings.EqualFold(strings.TrimSpace(v), "true") {
+				c.CancelInProgress = true
+			} else if !strings.EqualFold(strings.TrimSpace(v), "false") {
+				c.CancelExpr = v
+			}
+		default:
+			return fmt.Errorf("concurrency.cancel-in-progress must be a boolean or expression")
+		}
+		return nil
+	}
+	return fmt.Errorf("concurrency must be a string or mapping")
 }
 
 // Triggers accepts `on: push`, `on: [push, pull_request]` and the mapping form.
@@ -75,7 +146,8 @@ func (t *Triggers) UnmarshalYAML(node *yaml.Node) error {
 	return fmt.Errorf("invalid 'on' trigger")
 }
 
-// StringList accepts a string or a list of strings.
+// StringList accepts a string, a list of strings, or a GitHub runs-on
+// mapping `{group: ..., labels: ...}`.
 type StringList []string
 
 func (s *StringList) UnmarshalYAML(node *yaml.Node) error {
@@ -94,29 +166,47 @@ func (s *StringList) UnmarshalYAML(node *yaml.Node) error {
 		}
 		*s = StringList(v)
 		return nil
+	case yaml.MappingNode:
+		var m struct {
+			Group  string     `yaml:"group"`
+			Labels StringList `yaml:"labels"`
+		}
+		if err := node.Decode(&m); err != nil {
+			return err
+		}
+		var out []string
+		if m.Group != "" {
+			out = append(out, m.Group)
+		}
+		out = append(out, m.Labels...)
+		*s = StringList(out)
+		return nil
 	}
-	return fmt.Errorf("expected a string or list of strings")
+	return fmt.Errorf("expected a string, list of strings, or {group, labels} mapping")
 }
 
 type Job struct {
-	Name            string            `yaml:"name"`
-	Needs           StringList        `yaml:"needs"`
-	If              string            `yaml:"if"`
-	RunsOn          StringList        `yaml:"runs-on"`
-	Env             map[string]any    `yaml:"env"`
-	Steps           []Step            `yaml:"steps"`
-	TimeoutMinutes  float64           `yaml:"timeout-minutes"`
-	ContinueOnError bool              `yaml:"continue-on-error"`
-	Outputs         map[string]string `yaml:"outputs"`
-	Strategy        *Strategy         `yaml:"strategy"`
-	Uses            string            `yaml:"uses"`
-	With            map[string]any    `yaml:"with"`
-	Secrets         any               `yaml:"secrets"`
-	Container       any               `yaml:"container"`
-	Services        map[string]any    `yaml:"services"`
-	Defaults        *Defaults         `yaml:"defaults"`
-	Permissions     map[string]string `yaml:"permissions"`
-	Environment     any               `yaml:"environment"`
+	Name                string         `yaml:"name"`
+	Needs               StringList     `yaml:"needs"`
+	If                  string         `yaml:"if"`
+	RunsOn              StringList     `yaml:"runs-on"`
+	Env                 map[string]any `yaml:"env"`
+	Steps               []Step         `yaml:"steps"`
+	TimeoutMinutes      float64        `yaml:"-"`
+	TimeoutExpr         string         `yaml:"-"`
+	ContinueOnError     bool           `yaml:"-"`
+	ContinueOnErrorExpr string         `yaml:"-"`
+	Outputs             map[string]string `yaml:"outputs"`
+	Strategy            *Strategy      `yaml:"strategy"`
+	Uses                string         `yaml:"uses"`
+	With                map[string]any `yaml:"with"`
+	Secrets             any            `yaml:"secrets"`
+	Container           any            `yaml:"container"`
+	Services            map[string]any `yaml:"services"`
+	Defaults            *Defaults      `yaml:"defaults"`
+	Permissions         Permissions    `yaml:"permissions"`
+	Environment         any            `yaml:"environment"`
+	Concurrency         Concurrency    `yaml:"concurrency"`
 	// Priority is a KERN extension: higher jobs are claimed first when a
 	// runner polls the queue. GitHub ignores the key, so the same file
 	// stays valid on both platforms.
@@ -128,11 +218,102 @@ type Job struct {
 	Resources map[string]any `yaml:"resources"`
 }
 
+func (j *Job) UnmarshalYAML(node *yaml.Node) error {
+	type plain Job
+	type jobWire struct {
+		plain           `yaml:",inline"`
+		TimeoutMinutes  any `yaml:"timeout-minutes"`
+		ContinueOnError any `yaml:"continue-on-error"`
+	}
+	var w jobWire
+	if err := node.Decode(&w); err != nil {
+		return err
+	}
+	*j = Job(w.plain)
+	if f, expr, err := decodeFloatOrExpr(w.TimeoutMinutes, "timeout-minutes"); err != nil {
+		return err
+	} else {
+		j.TimeoutMinutes, j.TimeoutExpr = f, expr
+	}
+	if b, expr, err := decodeBoolOrExpr(w.ContinueOnError, "continue-on-error"); err != nil {
+		return err
+	} else {
+		j.ContinueOnError, j.ContinueOnErrorExpr = b, expr
+	}
+	return nil
+}
+
 type Strategy struct {
-	Matrix      map[string][]any `yaml:"matrix"`
-	FailFast    *bool            `yaml:"fail-fast"`
-	MaxParallel int              `yaml:"max-parallel"`
-	Split       Split            `yaml:"split"`
+	Matrix       map[string][]any `yaml:"matrix"`
+	FailFast     *bool            `yaml:"-"`
+	FailFastExpr string           `yaml:"-"`
+	MaxParallel  int              `yaml:"max-parallel"`
+	Split        Split            `yaml:"split"`
+}
+
+func (s *Strategy) UnmarshalYAML(node *yaml.Node) error {
+	type plain Strategy
+	type stratWire struct {
+		plain    `yaml:",inline"`
+		FailFast any `yaml:"fail-fast"`
+	}
+	var w stratWire
+	if err := node.Decode(&w); err != nil {
+		return err
+	}
+	*s = Strategy(w.plain)
+	if w.FailFast != nil {
+		b, expr, err := decodeBoolOrExpr(w.FailFast, "fail-fast")
+		if err != nil {
+			return err
+		}
+		if expr != "" {
+			s.FailFastExpr = expr
+		} else {
+			s.FailFast = &b
+		}
+	}
+	return nil
+}
+
+func decodeBoolOrExpr(raw any, field string) (bool, string, error) {
+	switch v := raw.(type) {
+	case nil:
+		return false, "", nil
+	case bool:
+		return v, "", nil
+	case string:
+		t := strings.TrimSpace(v)
+		if strings.EqualFold(t, "true") {
+			return true, "", nil
+		}
+		if strings.EqualFold(t, "false") {
+			return false, "", nil
+		}
+		return false, v, nil
+	default:
+		return false, "", fmt.Errorf("%s must be a boolean or expression", field)
+	}
+}
+
+func decodeFloatOrExpr(raw any, field string) (float64, string, error) {
+	switch v := raw.(type) {
+	case nil:
+		return 0, "", nil
+	case int:
+		return float64(v), "", nil
+	case int64:
+		return float64(v), "", nil
+	case float64:
+		return v, "", nil
+	case string:
+		if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+			return f, "", nil
+		}
+		return 0, v, nil
+	default:
+		return 0, "", fmt.Errorf("%s must be a number or expression", field)
+	}
 }
 
 // Split is strategy.split: a shard count from 1 to 32, or the string "auto".
@@ -163,17 +344,44 @@ func (s *Split) UnmarshalYAML(node *yaml.Node) error {
 }
 
 type Step struct {
-	ID               string         `yaml:"id"`
-	Name             string         `yaml:"name"`
-	If               string         `yaml:"if"`
-	Run              string         `yaml:"run"`
-	Shell            string         `yaml:"shell"`
-	WorkingDirectory string         `yaml:"working-directory"`
-	Uses             string         `yaml:"uses"`
-	With             map[string]any `yaml:"with"`
-	Env              map[string]any `yaml:"env"`
-	ContinueOnError  bool           `yaml:"continue-on-error"`
-	TimeoutMinutes   float64        `yaml:"timeout-minutes"`
+	ID                  string         `yaml:"id"`
+	Name                string         `yaml:"name"`
+	If                  string         `yaml:"if"`
+	Run                 string         `yaml:"run"`
+	Shell               string         `yaml:"shell"`
+	WorkingDirectory    string         `yaml:"working-directory"`
+	Uses                string         `yaml:"uses"`
+	With                map[string]any `yaml:"with"`
+	Env                 map[string]any `yaml:"env"`
+	ContinueOnError     bool           `yaml:"-"`
+	ContinueOnErrorExpr string         `yaml:"-"`
+	TimeoutMinutes      float64        `yaml:"-"`
+	TimeoutExpr         string         `yaml:"-"`
+}
+
+func (s *Step) UnmarshalYAML(node *yaml.Node) error {
+	type plain Step
+	type stepWire struct {
+		plain           `yaml:",inline"`
+		TimeoutMinutes  any `yaml:"timeout-minutes"`
+		ContinueOnError any `yaml:"continue-on-error"`
+	}
+	var w stepWire
+	if err := node.Decode(&w); err != nil {
+		return err
+	}
+	*s = Step(w.plain)
+	if f, expr, err := decodeFloatOrExpr(w.TimeoutMinutes, "timeout-minutes"); err != nil {
+		return err
+	} else {
+		s.TimeoutMinutes, s.TimeoutExpr = f, expr
+	}
+	if b, expr, err := decodeBoolOrExpr(w.ContinueOnError, "continue-on-error"); err != nil {
+		return err
+	} else {
+		s.ContinueOnError, s.ContinueOnErrorExpr = b, expr
+	}
+	return nil
 }
 
 // MatrixValue is one axis value; GitHub permits scalars and maps in include entries.

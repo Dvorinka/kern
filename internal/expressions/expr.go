@@ -74,8 +74,7 @@ func findClose(s string) int {
 	return -1
 }
 
-// Evaluate parses and evaluates a single expression body (without ${{ }}).
-func Evaluate(body string, ctx map[string]any) (any, error) {
+func parseExpr(body string) (node, error) {
 	p, err := newParser(body)
 	if err != nil {
 		return nil, err
@@ -93,6 +92,15 @@ func Evaluate(body string, ctx map[string]any) (any, error) {
 	if p.err != nil {
 		return nil, p.err
 	}
+	return expr, nil
+}
+
+// Evaluate parses and evaluates a single expression body (without ${{ }}).
+func Evaluate(body string, ctx map[string]any) (any, error) {
+	expr, err := parseExpr(body)
+	if err != nil {
+		return nil, err
+	}
 	v, err := expr.eval(ctx)
 	if err != nil {
 		return nil, err
@@ -100,31 +108,70 @@ func Evaluate(body string, ctx map[string]any) (any, error) {
 	return unwrap(v), nil
 }
 
-// statusCheckRe detects an explicit status check function call. A preceding '.'
-// disqualifies the match so property lookups don't read as functions.
-var statusCheckRe = regexp.MustCompile(`(?i)(^|[^.\w])(success|failure|always|cancelled)\s*\(`)
+// stripOuterExpr unwraps a single outer `${{ ... }}` only when the opening
+// `${{` closes at the very end of s (respecting string literals), so
+// `${{ a }} && ${{ b }}` is never sliced across the middle.
+func stripOuterExpr(s string) string {
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(s, "${{") || !strings.HasSuffix(s, "}}") {
+		return s
+	}
+	inner := s[3:]
+	end := findClose(inner)
+	if end == len(inner)-2 {
+		return strings.TrimSpace(inner[:end])
+	}
+	return s
+}
+
+func hasStatusCheck(n node) bool {
+	switch x := n.(type) {
+	case *callNode:
+		switch strings.ToLower(x.name) {
+		case "success", "failure", "always", "cancelled":
+			return true
+		}
+		for _, a := range x.args {
+			if hasStatusCheck(a) {
+				return true
+			}
+		}
+	case *binaryNode:
+		return hasStatusCheck(x.left) || hasStatusCheck(x.right)
+	case *notNode:
+		return hasStatusCheck(x.inner)
+	case *accessNode:
+		return hasStatusCheck(x.base) || hasStatusCheck(x.key)
+	case *starNode:
+		return hasStatusCheck(x.base)
+	}
+	return false
+}
 
 // EvaluateCondition evaluates an `if:` condition. A condition may be wrapped in ${{ }}.
-// GitHub applies an implicit success() when the expression names no status check
+// GitHub applies an implicit success() when the expression AST names no status check
 // function — that is what skips jobs and steps after a failure.
 func EvaluateCondition(cond string, ctx map[string]any) (bool, error) {
-	cond = strings.TrimSpace(cond)
-	if strings.HasPrefix(cond, "${{") && strings.HasSuffix(cond, "}}") {
-		cond = strings.TrimSpace(cond[3 : len(cond)-2])
-	}
+	cond = stripOuterExpr(cond)
 	if cond == "" {
 		cond = "success()"
-	} else if !statusCheckRe.MatchString(cond) {
-		cond = "success() && (" + cond + ")"
 	}
-	v, err := Evaluate(cond, ctx)
+	expr, err := parseExpr(cond)
 	if err != nil {
 		return false, err
 	}
-	return Truthy(v), nil
+	if !hasStatusCheck(expr) {
+		expr = &binaryNode{op: "&&", left: &callNode{name: "success"}, right: expr}
+	}
+	v, err := expr.eval(ctx)
+	if err != nil {
+		return false, err
+	}
+	return Truthy(unwrap(v)), nil
 }
 
-// Truthy mirrors GitHub's coercion: empty strings/zero/null are false.
+// Truthy mirrors GitHub's coercion: empty string, 0, NaN, false, and null are false;
+// every non-empty string (including "0") is true.
 func Truthy(v any) bool {
 	switch t := v.(type) {
 	case nil:
@@ -132,16 +179,9 @@ func Truthy(v any) bool {
 	case bool:
 		return t
 	case string:
-		if t == "" {
-			return false
-		}
-		f, err := strconv.ParseFloat(t, 64)
-		if err != nil {
-			return true
-		}
-		return f != 0
+		return t != ""
 	case float64:
-		return t != 0
+		return t != 0 && !math.IsNaN(t)
 	case int:
 		return t != 0
 	case int64:
@@ -228,7 +268,9 @@ func (l *lexer) next() (token, error) {
 				l.pos++
 				return token{kind: tokString, text: b.String()}, nil
 			}
-			if l.s[l.pos] == '\\' && l.pos+1 < len(l.s) && (l.s[l.pos+1] == '\\' || l.s[l.pos+1] == quote) {
+			// Single-quoted GHA strings only escape via doubled '' — backslashes
+			// are literal (e.g. Windows paths).
+			if quote == '"' && l.s[l.pos] == '\\' && l.pos+1 < len(l.s) && (l.s[l.pos+1] == '\\' || l.s[l.pos+1] == quote) {
 				b.WriteByte(l.s[l.pos+1])
 				l.pos += 2
 				continue
@@ -402,7 +444,8 @@ func (p *parser) parseExpression() (node, error) { return p.parseBinary(0) }
 var precedence = map[string]int{
 	"||": 1,
 	"&&": 2,
-	"==": 3, "!=": 3, "<": 3, "<=": 3, ">": 3, ">=": 3,
+	"==": 3, "!=": 3,
+	"<": 4, "<=": 4, ">": 4, ">=": 4,
 }
 
 func (p *parser) parseBinary(minPrec int) (node, error) {
@@ -592,13 +635,21 @@ func (n *accessNode) eval(ctx map[string]any) (any, error) {
 	return v, nil
 }
 
-// accessOne resolves key against a single value. found is false when the
-// value is not a collection or lacks the key — the filtered-chain skip rule.
+// accessOne resolves key against a single value (case-insensitive on objects
+// per GitHub Actions). found is false when the value is not a collection or
+// lacks the key — the filtered-chain skip rule.
 func accessOne(base any, key string) (any, bool) {
 	switch m := base.(type) {
 	case map[string]any:
-		v, ok := m[key]
-		return v, ok
+		if v, ok := m[key]; ok {
+			return v, true
+		}
+		for k, v := range m {
+			if strings.EqualFold(k, key) {
+				return v, true
+			}
+		}
+		return nil, false
 	case []any:
 		i, err := strconv.Atoi(key)
 		if err != nil || i < 0 || i >= len(m) {
@@ -737,6 +788,35 @@ type callNode struct {
 }
 
 func (n *callNode) eval(ctx map[string]any) (any, error) {
+	// case() evaluates predicates and branches lazily so untaken branches
+	// do not trigger runtime errors (e.g. fromJSON on empty input).
+	if strings.EqualFold(n.name, "case") {
+		if len(n.args)%2 == 0 {
+			return nil, fmt.Errorf("case expects an odd number of arguments")
+		}
+		for i := 0; i+1 < len(n.args); i += 2 {
+			pv, err := n.args[i].eval(ctx)
+			if err != nil {
+				return nil, err
+			}
+			pred, ok := unwrap(pv).(bool)
+			if !ok {
+				return nil, fmt.Errorf("case predicate %d must evaluate to a boolean", i+1)
+			}
+			if pred {
+				v, err := n.args[i+1].eval(ctx)
+				if err != nil {
+					return nil, err
+				}
+				return unwrap(v), nil
+			}
+		}
+		v, err := n.args[len(n.args)-1].eval(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return unwrap(v), nil
+	}
 	args := make([]any, 0, len(n.args))
 	for _, a := range n.args {
 		v, err := a.eval(ctx)
@@ -752,11 +832,8 @@ func lookup(ctx map[string]any, path string) (any, bool) {
 	parts := strings.Split(path, ".")
 	var cur any = ctx
 	for _, p := range parts {
-		m, ok := cur.(map[string]any)
-		if !ok {
-			return nil, false
-		}
-		cur, ok = m[p]
+		var ok bool
+		cur, ok = accessOne(cur, p)
 		if !ok {
 			return nil, false
 		}
@@ -1119,26 +1196,39 @@ func call(name string, args []any, ctx map[string]any) (any, error) {
 }
 
 // hashFilesFunc hashes every file matched by the glob patterns under ws —
-// sha256 over the sorted per-file content hashes, GitHub-compatible enough for
-// "did the lockfile change" cache keys.
+// sha256 over the sorted per-file content hashes. Leading '!' excludes
+// matched paths, and zero matched files returns "" (matching GitHub Actions).
 func hashFilesFunc(ws string, args []any) (any, error) {
 	if len(args) == 0 {
 		return nil, fmt.Errorf("hashFiles expects at least 1 pattern")
 	}
-	seen := map[string]bool{}
-	var files []string
+	matched := map[string]bool{}
 	for _, a := range args {
 		pat := Stringify(a)
+		exclude := strings.HasPrefix(pat, "!")
+		if exclude {
+			pat = pat[1:]
+		}
 		matches, err := doublestar.FilepathGlob(filepath.Join(ws, filepath.FromSlash(pat)))
 		if err != nil {
 			return nil, fmt.Errorf("hashFiles: invalid pattern %q: %w", pat, err)
 		}
 		for _, m := range matches {
-			if info, err := os.Stat(m); err == nil && info.Mode().IsRegular() && !seen[m] {
-				seen[m] = true
-				files = append(files, m)
+			if exclude {
+				delete(matched, m)
+				continue
+			}
+			if info, err := os.Stat(m); err == nil && info.Mode().IsRegular() {
+				matched[m] = true
 			}
 		}
+	}
+	if len(matched) == 0 {
+		return "", nil
+	}
+	files := make([]string, 0, len(matched))
+	for f := range matched {
+		files = append(files, f)
 	}
 	sort.Strings(files)
 	h := sha256.New()
