@@ -78,6 +78,8 @@ func (e *executor) resolveDockerImage(ctx context.Context, step StepSpec, meta *
 		if err := e.docker(ctx, "build", "-q", "-t", tag, hostDir); err != nil {
 			return "", fmt.Errorf("docker build %s: %s", hostDir, err)
 		}
+		recordImageUse(e.cfg.WorkRoot, tag)
+		e.builtActionImages = append(e.builtActionImages, tag)
 		return tag, nil
 	case !imageRe.MatchString(image):
 		return "", fmt.Errorf("invalid runs.image %s", image)
@@ -258,6 +260,13 @@ func (e *executor) dockerActionRun(ctx context.Context, step StepSpec, image, en
 	go func() { defer wg.Done(); streamInto(stderr, pump) }()
 	wg.Wait()
 	waitErr := cmd.Wait()
+	if waitErr != nil && stepCtx.Err() != nil {
+		// Killing the `docker run` CLI client leaves the container running on
+		// the daemon; explicitly remove it so it cannot become a zombie.
+		rmCtx, rmCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = exec.CommandContext(rmCtx, "docker", "rm", "-f", name).Run()
+		rmCancel()
+	}
 	if waitErr != nil {
 		pump.flush()
 	}

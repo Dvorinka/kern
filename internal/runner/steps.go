@@ -278,6 +278,15 @@ func (e *executor) runStepBody(ctx context.Context, step StepSpec) (string, int,
 	<-doneCh
 
 	waitErr := cmd.Wait() // streams already drained; exit code comes from ProcessState
+	if !e.host && waitErr != nil && stepCtx.Err() != nil {
+		// Killing the `docker exec` CLI client does not stop processes inside
+		// the container; kill anything matching this step's unique script path
+		// so timed-out steps do not keep running during post/always steps.
+		kctx, kcancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = exec.CommandContext(kctx, "docker", "exec", e.container, "sh", "-c",
+			`pkill -KILL -f "$1" 2>/dev/null || true`, "_", script).Run()
+		kcancel()
+	}
 	if waitErr != nil {
 		pump.flush()
 	}
@@ -339,6 +348,7 @@ func (e *executor) hostStepCmd(ctx context.Context, step StepSpec, shell, script
 	cmd := exec.CommandContext(ctx, shell, script)
 	cmd.Dir = e.wsPath()
 	cmd.Env = cmdEnv
+	configureHostProcessGroup(cmd)
 	return cmd
 }
 

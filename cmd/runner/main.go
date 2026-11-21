@@ -290,7 +290,9 @@ func runPortForward(args []string) int {
 			to = strings.TrimPrefix(args[i], "--to=")
 		}
 	}
-	if err := runner.RunPortForward(listen, to); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := runner.RunPortForward(ctx, listen, to); err != nil {
 		fmt.Fprintln(os.Stderr, "kern-runner port-forward:", err)
 		return 1
 	}

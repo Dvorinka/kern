@@ -136,8 +136,8 @@ func (c *cli) streamExec(ctx context.Context, execID string, interactive bool) e
 		if out.Data != "" {
 			chunk, _ := base64.StdEncoding.DecodeString(out.Data)
 			os.Stdout.Write(chunk)
+			off += int64(len(chunk))
 		}
-		off = out.Size
 		switch out.Exec.State {
 		case "done", "failed", "cancelled":
 			// The stdin pump is left for process exit — a TTY reader would
