@@ -84,16 +84,31 @@ func (f *Filesystem) Put(key string, r io.Reader) (int64, string, error) {
 	if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
 		return 0, "", err
 	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	fh, err := os.Create(p)
+	// tmp + rename: readers never see a partial object, and the write holds
+	// no lock — the old global mu stalled every log Append fleet-wide for
+	// the duration of a large upload (#369). Concurrent Puts to one key
+	// resolve last-rename-wins, which matches prior last-writer semantics.
+	tmp, err := os.CreateTemp(filepath.Dir(p), ".put-*")
 	if err != nil {
 		return 0, "", err
 	}
-	defer fh.Close()
 	h := sha256.New()
-	n, err := io.Copy(io.MultiWriter(fh, h), r)
+	n, err := io.Copy(io.MultiWriter(tmp, h), r)
 	if err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return 0, "", err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return 0, "", err
+	}
+	if err := os.Chmod(tmp.Name(), 0o640); err != nil {
+		os.Remove(tmp.Name())
+		return 0, "", err
+	}
+	if err := os.Rename(tmp.Name(), p); err != nil {
+		os.Remove(tmp.Name())
 		return 0, "", err
 	}
 	return n, hex.EncodeToString(h.Sum(nil)), nil
