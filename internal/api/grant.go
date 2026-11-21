@@ -61,7 +61,7 @@ func tokenCap(c *gin.Context) int {
 }
 
 func grantRestricted(c *gin.Context) bool {
-	return len(tokenProjects(c)) > 0 || len(tokenLabels(c)) > 0
+	return len(tokenProjects(c)) > 0 || len(tokenLabels(c)) > 0 || tokenCap(c) > 0
 }
 
 func grantHas(list []string, v string) bool {
@@ -172,21 +172,23 @@ func grantRouteAllowed(path string) bool {
 	}
 }
 
-// constrainGrant keeps a project-scoped token inside its projects.
-// Label pools are checked at dispatch, where the workflow plan exists.
+// constrainGrant keeps a restricted token inside its grant. Empty project
+// or label lists mean unrestricted on that dimension; a cap-only token is
+// still confined to the project/run surface so it cannot reach /mcp,
+// /secrets, /runners or /settings (#368).
 func (s *Server) constrainGrant() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		projects := tokenProjects(c)
-		if c.GetString(ctxAuthKind) != "api_token" || len(projects) == 0 {
+		if c.GetString(ctxAuthKind) != "api_token" || !grantRestricted(c) {
 			c.Next()
 			return
 		}
 		path := c.FullPath()
 		if path == "" || !grantRouteAllowed(path) {
-			fail(c, http.StatusForbidden, "token_scoped", "this token is limited to specific projects")
+			fail(c, http.StatusForbidden, "token_scoped", "this token is limited by its grant")
 			return
 		}
-		if p := c.Param("project"); p != "" && !grantHas(projects, p) {
+		projects := tokenProjects(c)
+		if p := c.Param("project"); p != "" && len(projects) > 0 && !grantHas(projects, p) {
 			fail(c, http.StatusForbidden, "project_denied", "token cannot access project "+p)
 			return
 		}
@@ -203,6 +205,9 @@ func (s *Server) enforceGrantIDs(c *gin.Context, path string) bool {
 	user, _ := currentUser(c)
 	switch path {
 	case "/api/v1/runs":
+		if len(tokenProjects(c)) == 0 {
+			return true // project-unrestricted grant (labels/cap only)
+		}
 		slug := c.Query("project")
 		if slug == "" {
 			fail(c, http.StatusForbidden, "project_required", "this token must pass ?project= set to one of its projects")
@@ -285,7 +290,8 @@ func (s *Server) enforceRunGrant(c *gin.Context, runID uuid.UUID) bool {
 		return false
 	}
 	user, _ := currentUser(c)
-	if p.OrgID != user.OrgID || !grantHas(tokenProjects(c), p.Slug) {
+	projects := tokenProjects(c)
+	if p.OrgID != user.OrgID || (len(projects) > 0 && !grantHas(projects, p.Slug)) {
 		fail(c, http.StatusNotFound, "not_found", "resource not found")
 		return false
 	}

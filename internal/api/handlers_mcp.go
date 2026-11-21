@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/dvorinka/kern/internal/store"
+	"github.com/dvorinka/kern/internal/workflows"
 )
 
 const mcpProtocolVersion = "2025-06-18"
@@ -422,6 +423,10 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			err = fmt.Errorf("stored workflow version is invalid; fix the diagnostics and sync again")
 			break
 		}
+		if msg := mcpLabelDenial(c, version.Parsed); msg != "" {
+			err = fmt.Errorf("%s", msg)
+			break
+		}
 		var inputs map[string]any
 		if raw, ok := mcpArgRaw(params, "inputs"); ok {
 			if uerr := json.Unmarshal(raw, &inputs); uerr != nil {
@@ -472,6 +477,12 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			err = rerr
 			break
 		}
+		if ver, verr := s.Store.WorkflowVersion(ctx, orig.WorkflowVersionID); verr == nil {
+			if msg := mcpLabelDenial(c, ver.Parsed); msg != "" {
+				err = fmt.Errorf("%s", msg)
+				break
+			}
+		}
 		var source map[string]any
 		_ = json.Unmarshal(orig.Source, &source)
 		var run store.Run
@@ -516,7 +527,11 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) {
 			envID = &env.ID
 		}
 		var rows []store.Secret
-		rows, err = s.Store.Secrets(ctx, user.OrgID, projectID, envID)
+		if projectID == nil && envID == nil {
+			rows, err = s.Store.AllSecrets(ctx, user.OrgID)
+		} else {
+			rows, err = s.Store.Secrets(ctx, user.OrgID, projectID, envID)
+		}
 		if err == nil {
 			out = map[string]any{"secrets": secretSummaries(rows)}
 		}
@@ -687,4 +702,20 @@ func (s *Server) mcpResolveWorkflow(ctx context.Context, projectID uuid.UUID, wa
 	default:
 		return store.Workflow{}, fmt.Errorf("workflow %q is ambiguous", want)
 	}
+}
+
+// mcpLabelDenial reports why a label-scoped token cannot dispatch the plan
+// carried in a stored workflow version. Unlike enforceDispatchLabels it
+// returns the reason instead of writing an HTTP response — MCP errors are
+// JSON-RPC errors, not HTTP failures (#368).
+func mcpLabelDenial(c *gin.Context, parsed json.RawMessage) string {
+	labels := tokenLabels(c)
+	if len(labels) == 0 {
+		return ""
+	}
+	var plan workflows.Plan
+	if len(parsed) == 0 || json.Unmarshal(parsed, &plan) != nil {
+		return "this token is limited to a runner pool and the workflow plan could not be checked"
+	}
+	return runsOnDenial(labels, plan.Jobs)
 }

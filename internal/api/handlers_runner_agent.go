@@ -443,13 +443,17 @@ func (s *Server) respondWithClaim(c *gin.Context, claimed *store.ClaimedJob, run
 				zap.String("repo", full), zap.String("job", claimed.Job.Key), zap.Error(err))
 		}
 	}
+	cacheToken := s.cacheJobToken(claimed.Job.ID)
+	// The claim-time credentials are secrets for masking purposes: any
+	// later echo in logs, errors, outputs or summaries must be hidden.
+	s.claimMasks.Store(claimed.Job.ID, []string{cloneToken, githubToken, cacheToken})
 	c.JSON(http.StatusOK, gin.H{
 		"job": gin.H{
 			"id": claimed.Job.ID, "run_id": claimed.Job.RunID, "key": claimed.Job.Key,
 			// Job-scoped cache credential: steps receive it as
 			// ACTIONS_RUNTIME_TOKEN so @actions/cache works without ever
 			// exposing the runner's broad token to job code.
-			"cache_token": s.cacheJobToken(claimed.Job.ID),
+			"cache_token": cacheToken,
 			"name":        claimed.Job.Name, "attempt": claimed.Attempt, "image": s.jobImageFor(runner, claimed.Job.Image),
 			"env": claimed.Job.Env, "matrix": claimed.Job.Matrix, "runs_on": claimed.Job.RunsOn,
 			"timeout_seconds": claimed.Job.TimeoutSeconds, "continue_on_error": claimed.Job.ContinueOnError,
@@ -522,8 +526,9 @@ func (s *Server) appendLog(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_body", "log chunk too large or unreadable")
 		return
 	}
-	masker := s.maskerForJob(c, job)
-	data := masker.MaskBytes(body)
+	// Chunked masking: a secret split across two POSTs is held at the
+	// boundary and masked once complete (#368).
+	data := s.logStreamFor(c, job, n).Write(body)
 	key := blobs.LogKey(job.RunID.String(), job.ID.String(), n)
 	size, err := s.Blobs.Append(key, data)
 	if err != nil {
@@ -590,11 +595,68 @@ func (s *Server) maskerForJob(c *gin.Context, job store.Job) *secrets.Masker {
 	}
 	values := make([]string, 0, len(rows))
 	for _, sec := range rows {
-		if plain, err := s.Cipher.Decrypt(sec.Ciphertext, sec.Nonce); err == nil {
+		if plain, err := s.Cipher.DecryptAAD(sec.Ciphertext, sec.Nonce, secretAAD(sec)); err == nil {
 			values = append(values, plain)
 		}
 	}
+	// Claim-time credentials mask like secrets so they cannot leak through
+	// logs, errors, outputs or summaries (#368).
+	if v, ok := s.claimMasks.Load(job.ID); ok {
+		values = append(values, v.([]string)...)
+	}
 	return secrets.NewMasker(values)
+}
+
+// logStreamFor returns the chunked masking stream for a job step, creating
+// it on first use. The stream holds back suffixes that could be a secret
+// split across log POSTs.
+func (s *Server) logStreamFor(c *gin.Context, job store.Job, n int) *secrets.Stream {
+	key := job.ID.String() + "/" + strconv.Itoa(n)
+	if v, ok := s.logMasks.Load(key); ok {
+		return v.(*secrets.Stream)
+	}
+	st := s.maskerForJob(c, job).NewStream()
+	actual, _ := s.logMasks.LoadOrStore(key, st)
+	return actual.(*secrets.Stream)
+}
+
+// flushLogStream releases any masked tail a step's stream is holding and
+// appends it to the step log, then drops the stream.
+func (s *Server) flushLogStream(ctx context.Context, job store.Job, n int) {
+	key := job.ID.String() + "/" + strconv.Itoa(n)
+	v, ok := s.logMasks.LoadAndDelete(key)
+	if !ok {
+		return
+	}
+	s.emitLogTail(ctx, job, n, v.(*secrets.Stream))
+}
+
+// flushJobLogStreams flushes every step stream a job left open.
+func (s *Server) flushJobLogStreams(ctx context.Context, job store.Job) {
+	prefix := job.ID.String() + "/"
+	s.logMasks.Range(func(k, v any) bool {
+		key, _ := k.(string)
+		if !strings.HasPrefix(key, prefix) {
+			return true
+		}
+		s.logMasks.Delete(key)
+		if n, err := strconv.Atoi(strings.TrimPrefix(key, prefix)); err == nil {
+			s.emitLogTail(ctx, job, n, v.(*secrets.Stream))
+		}
+		return true
+	})
+}
+
+func (s *Server) emitLogTail(ctx context.Context, job store.Job, n int, st *secrets.Stream) {
+	tail := st.Flush()
+	if len(tail) == 0 {
+		return
+	}
+	logKey := blobs.LogKey(job.RunID.String(), job.ID.String(), n)
+	if _, err := s.Blobs.Append(logKey, tail); err != nil {
+		return
+	}
+	_ = s.Store.AppendStepLog(ctx, job.ID, n, logKey, len(tail))
 }
 
 type finishStepRequest struct {
@@ -639,6 +701,8 @@ func (s *Server) finishStep(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
+	// The step's log stream is done — release any masked tail it held.
+	s.flushLogStream(c.Request.Context(), job, n)
 	// Refresh the per-job check so the GitHub UI narrates the step that
 	// just finished and the one now running (#331).
 	run, rerr := s.Store.Run(c.Request.Context(), job.RunID)
@@ -686,8 +750,14 @@ func (s *Server) finishJob(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_conclusion", "invalid conclusion")
 		return
 	}
-	// Job errors surface in the dashboard and status payloads; mask like logs.
-	req.Error = s.maskerForJob(c, job).Mask(req.Error)
+	// Job errors and outputs surface in the dashboard, downstream
+	// expressions and status payloads; mask like logs — outputs feed
+	// needs.<job>.outputs of dependent jobs (#368).
+	finishMasker := s.maskerForJob(c, job)
+	req.Error = finishMasker.Mask(req.Error)
+	for k, v := range req.Outputs {
+		req.Outputs[k] = finishMasker.Mask(v)
+	}
 	// Failed-step kinds feed both the transient-requeue check and the
 	// job's rolled-up classification — fetch once.
 	var kinds []string
@@ -714,6 +784,10 @@ func (s *Server) finishJob(c *gin.Context) {
 		fail(c, http.StatusConflict, "lease_lost", "job is no longer leased to this runner")
 		return
 	}
+	// Job finished: release held log tails and drop the claim credentials —
+	// they must not mask (or linger for) a later attempt's streams.
+	s.flushJobLogStreams(c.Request.Context(), job)
+	s.claimMasks.Delete(job.ID)
 	if run, rerr := s.Store.Run(c.Request.Context(), job.RunID); rerr == nil {
 		job.Conclusion = req.Conclusion
 		s.postJobCheck(c.Request.Context(), run, job, "completed")
@@ -943,7 +1017,7 @@ func (s *Server) jobSecrets(c *gin.Context) {
 	out := map[string]string{}
 	decryptInto := func(rows []store.Secret) {
 		for _, sec := range rows {
-			plain, err := s.Cipher.Decrypt(sec.Ciphertext, sec.Nonce)
+			plain, err := s.Cipher.DecryptAAD(sec.Ciphertext, sec.Nonce, secretAAD(sec))
 			if err != nil {
 				s.Log.Error("decrypt secret", zap.String("secret", sec.Name), zap.Error(err))
 				continue

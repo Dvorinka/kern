@@ -352,7 +352,7 @@ func (s *Server) rerunRun(c *gin.Context) {
 		return
 	}
 	if req.Failed || len(req.Jobs) > 0 {
-		n, err := s.Store.RerunJobs(c.Request.Context(), orig.ID, req.Jobs)
+		n, err := s.Store.RerunJobs(c.Request.Context(), orig.ID, req.Jobs, dispatchTokenID(c))
 		if err != nil {
 			fail(c, http.StatusConflict, "rerun_failed", err.Error())
 			return
