@@ -291,7 +291,7 @@ func (s *Server) postJobCheck(ctx context.Context, run store.Run, job store.Job,
 	if repo == "" || run.SHA == "" {
 		return
 	}
-	cl, err := s.githubClient(ctx, repo)
+	cl, err := s.githubClientForOrg(ctx, run.OrgID, repo)
 	if err != nil {
 		s.Log.Warn("github client", zap.String("repo", repo), zap.Error(err))
 		return

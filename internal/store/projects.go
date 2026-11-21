@@ -154,7 +154,9 @@ func (s *Store) WorkflowByID(ctx context.Context, id uuid.UUID) (Workflow, error
 }
 
 // PutWorkflowVersion stores an immutable version. Identical content for the same commit is reused.
-func (s *Store) PutWorkflowVersion(ctx context.Context, workflowID uuid.UUID, sha, content string, parsed any, valid bool, diagnostics, deps any) (WorkflowVersion, error) {
+// trusted marks the version canonical-eligible; trust is sticky — once any
+// trusted write lands for a commit, later untrusted writes cannot downgrade it.
+func (s *Store) PutWorkflowVersion(ctx context.Context, workflowID uuid.UUID, sha, content string, parsed any, valid bool, diagnostics, deps any, trusted bool) (WorkflowVersion, error) {
 	parsedJSON, err := json.Marshal(parsed)
 	if err != nil {
 		return WorkflowVersion{}, err
@@ -169,43 +171,46 @@ func (s *Store) PutWorkflowVersion(ctx context.Context, workflowID uuid.UUID, sh
 	}
 	var v WorkflowVersion
 	err = s.pool.QueryRow(ctx, `
-		INSERT INTO workflow_versions (workflow_id, commit_sha, content, parsed, valid, diagnostics, deps)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO workflow_versions (workflow_id, commit_sha, content, parsed, valid, diagnostics, deps, trusted)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (workflow_id, commit_sha) DO UPDATE
 		SET content = EXCLUDED.content, parsed = EXCLUDED.parsed,
-		    valid = EXCLUDED.valid, diagnostics = EXCLUDED.diagnostics, deps = EXCLUDED.deps
-		RETURNING id, workflow_id, commit_sha, content, parsed, valid, diagnostics, deps, created_at`,
-		workflowID, sha, content, parsedJSON, valid, diagJSON, depsJSON).
-		Scan(&v.ID, &v.WorkflowID, &v.CommitSHA, &v.Content, &v.Parsed, &v.Valid, &v.Diagnostics, &v.Deps, &v.CreatedAt)
+		    valid = EXCLUDED.valid, diagnostics = EXCLUDED.diagnostics, deps = EXCLUDED.deps,
+		    trusted = workflow_versions.trusted OR EXCLUDED.trusted
+		RETURNING id, workflow_id, commit_sha, content, parsed, valid, diagnostics, deps, trusted, created_at`,
+		workflowID, sha, content, parsedJSON, valid, diagJSON, depsJSON, trusted).
+		Scan(&v.ID, &v.WorkflowID, &v.CommitSHA, &v.Content, &v.Parsed, &v.Valid, &v.Diagnostics, &v.Deps, &v.Trusted, &v.CreatedAt)
 	return v, err
 }
 
 func (s *Store) WorkflowVersion(ctx context.Context, id uuid.UUID) (WorkflowVersion, error) {
 	var v WorkflowVersion
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, workflow_id, commit_sha, content, parsed, valid, diagnostics, deps, created_at
+		SELECT id, workflow_id, commit_sha, content, parsed, valid, diagnostics, deps, trusted, created_at
 		FROM workflow_versions WHERE id = $1`, id).
-		Scan(&v.ID, &v.WorkflowID, &v.CommitSHA, &v.Content, &v.Parsed, &v.Valid, &v.Diagnostics, &v.Deps, &v.CreatedAt)
+		Scan(&v.ID, &v.WorkflowID, &v.CommitSHA, &v.Content, &v.Parsed, &v.Valid, &v.Diagnostics, &v.Deps, &v.Trusted, &v.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return WorkflowVersion{}, ErrNotFound
 	}
 	return v, err
 }
 
-// LatestWorkflowVersion returns the most recent stored version for a workflow path.
+// LatestWorkflowVersion returns the most recent trusted stored version for a
+// workflow path — the canonical definition cron, prime and dispatch fallbacks
+// execute. Untrusted pull-request and ad-hoc versions never qualify.
 func (s *Store) LatestWorkflowVersion(ctx context.Context, projectID uuid.UUID, path string) (Workflow, WorkflowVersion, error) {
 	var w Workflow
 	var v WorkflowVersion
 	err := s.pool.QueryRow(ctx, `
 		SELECT w.id, w.project_id, w.path, w.name, w.created_at, w.updated_at, w.disabled,
-		       v.id, v.workflow_id, v.commit_sha, v.content, v.parsed, v.valid, v.diagnostics, v.created_at
+		       v.id, v.workflow_id, v.commit_sha, v.content, v.parsed, v.valid, v.diagnostics, v.trusted, v.created_at
 		FROM workflows w
 		JOIN workflow_versions v ON v.workflow_id = w.id
-		WHERE w.project_id = $1 AND w.path = $2
+		WHERE w.project_id = $1 AND w.path = $2 AND v.trusted
 		ORDER BY v.created_at DESC
 		LIMIT 1`, projectID, path).
 		Scan(&w.ID, &w.ProjectID, &w.Path, &w.Name, &w.CreatedAt, &w.UpdatedAt, &w.Disabled,
-			&v.ID, &v.WorkflowID, &v.CommitSHA, &v.Content, &v.Parsed, &v.Valid, &v.Diagnostics, &v.CreatedAt)
+			&v.ID, &v.WorkflowID, &v.CommitSHA, &v.Content, &v.Parsed, &v.Valid, &v.Diagnostics, &v.Trusted, &v.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Workflow{}, WorkflowVersion{}, ErrNotFound
 	}

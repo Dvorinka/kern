@@ -16,6 +16,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -34,7 +36,7 @@ type App struct {
 	inst     map[string]int64             // "owner/repo" -> installation id
 	instPerm map[string]map[string]string // "owner/repo" -> granted permissions
 	instAt   map[string]time.Time         // "owner/repo" -> when inst/instPerm were fetched
-	toks     map[int64]instToken          // installation id -> cached token
+	toks     map[string]instToken         // scope key -> cached token
 }
 
 type instToken struct {
@@ -57,7 +59,7 @@ func NewApp(id, privateKeyPEM, apiBase string) (*App, error) {
 		http: &http.Client{Timeout: 15 * time.Second},
 		inst: make(map[string]int64), instPerm: make(map[string]map[string]string),
 		instAt: make(map[string]time.Time),
-		toks:   make(map[int64]instToken),
+		toks:   make(map[string]instToken),
 	}, nil
 }
 
@@ -186,26 +188,87 @@ func (a *App) InstallationID(ctx context.Context, repo string) (int64, error) {
 }
 
 // token mints or reuses an installation access token until a minute before
-// its GitHub-side expiry.
+// its GitHub-side expiry. The unscoped form is used for server-side API
+// clients only — tokens handed to runners always go through CloneToken or
+// RunToken, which pin repositories and permissions.
 func (a *App) token(ctx context.Context, instID int64) (string, error) {
+	return a.mintToken(ctx, instID, nil, nil)
+}
+
+// mintToken posts to the installation access_tokens endpoint. repos scopes
+// the token to named repositories (nil = every repo the installation covers);
+// perms is the permission ceiling — nil omits the permissions object so
+// GitHub grants the installation's defaults, while a non-nil map (even an
+// empty one, GitHub's `permissions: {}` = zero scope) is sent verbatim after
+// normalization. Tokens are cached per scope until a minute before expiry.
+func (a *App) mintToken(ctx context.Context, instID int64, repos []string, perms map[string]string) (string, error) {
+	key := tokenScopeKey(instID, repos, perms)
 	a.mu.Lock()
-	if t, ok := a.toks[instID]; ok && time.Until(t.expires) > time.Minute {
+	if t, ok := a.toks[key]; ok && time.Until(t.expires) > time.Minute {
 		a.mu.Unlock()
 		return t.token, nil
 	}
 	a.mu.Unlock()
+	body := map[string]any{}
+	if len(repos) > 0 {
+		body["repositories"] = repos
+	}
+	if perms != nil {
+		normalized := make(map[string]string, len(perms))
+		for k, v := range perms {
+			normalized[githubPermName(k)] = v
+		}
+		body["permissions"] = normalized
+	}
 	var out struct {
 		Token     string    `json:"token"`
 		ExpiresAt time.Time `json:"expires_at"`
 	}
 	path := fmt.Sprintf("/app/installations/%d/access_tokens", instID)
-	if err := a.do(ctx, http.MethodPost, path, &out); err != nil {
+	if err := a.doBody(ctx, http.MethodPost, path, body, &out); err != nil {
 		return "", err
 	}
 	a.mu.Lock()
-	a.toks[instID] = instToken{token: out.Token, expires: out.ExpiresAt}
+	a.toks[key] = instToken{token: out.Token, expires: out.ExpiresAt}
 	a.mu.Unlock()
 	return out.Token, nil
+}
+
+// tokenScopeKey builds the cache key for a scoped token mint. Permission
+// entries are sorted so map iteration order cannot split the cache.
+func tokenScopeKey(instID int64, repos []string, perms map[string]string) string {
+	var b strings.Builder
+	b.WriteString(strconv.FormatInt(instID, 10))
+	for _, r := range repos {
+		b.WriteByte('|')
+		b.WriteString(r)
+	}
+	if perms != nil {
+		keys := make([]string, 0, len(perms))
+		for k := range perms {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		if len(keys) == 0 {
+			// Distinguish "permissions: {}" (zero scope) from no permissions
+			// object at all — they must not share a cache entry.
+			b.WriteString("|{}")
+		}
+		for _, k := range keys {
+			b.WriteByte('|')
+			b.WriteString(githubPermName(k))
+			b.WriteByte('=')
+			b.WriteString(perms[k])
+		}
+	}
+	return b.String()
+}
+
+// githubPermName maps workflow-syntax permission names onto the GitHub REST
+// vocabulary: Actions writes `pull-requests`/`id-token` with hyphens while
+// the API expects `pull_requests`/`id_token`.
+func githubPermName(name string) string {
+	return strings.ReplaceAll(name, "-", "_")
 }
 
 // Client returns a repo-scoped API client backed by an installation token.
@@ -221,23 +284,32 @@ func (a *App) Client(ctx context.Context, repo string) (*Client, error) {
 	return New(a.base, tok), nil
 }
 
-// CloneToken returns an installation access token for git clone auth. It is
-// minted at claim time, never stored, and expires about an hour later.
+// CloneToken returns an installation access token for git clone auth,
+// scoped to the single repository with contents:read — the minimum a clone
+// needs, safe to hand to untrusted fork/PR jobs. It is minted at claim time,
+// never stored, and expires about an hour later.
 func (a *App) CloneToken(ctx context.Context, repo string) (string, error) {
 	instID, err := a.InstallationID(ctx, repo)
 	if err != nil {
 		return "", err
 	}
-	return a.token(ctx, instID)
+	name := repo
+	if i := strings.LastIndex(repo, "/"); i >= 0 {
+		name = repo[i+1:]
+	}
+	return a.mintToken(ctx, instID, []string{name}, map[string]string{"contents": "read"})
 }
 
 // RunToken mints a per-run installation token scoped to a single repository
 // with an explicit permission ceiling — KERN's GITHUB_TOKEN. requested uses
-// GitHub's permission vocabulary (read|write|admin|none); the minted set is
-// the intersection with what the installation actually grants, so a workflow
-// can only narrow, never widen. permScoped reports whether a permissions
-// object was sent at all; when requested is empty the token carries the
-// installation's default grants (GitHub's permissive-default parity).
+// GitHub's permission vocabulary (read|write|admin|none) in either Actions
+// hyphenated or REST underscore spelling; keys are normalized before the
+// ceiling is computed. The minted set is the intersection with what the
+// installation actually grants, so a workflow can only narrow, never widen.
+// A nil requested map omits the permissions object entirely (installation
+// defaults, GitHub's permissive-default parity); a non-nil map — including
+// an empty one — is honoured literally, so `permissions: {}` yields a
+// zero-scope token instead of silently escalating to full grants.
 func (a *App) RunToken(ctx context.Context, repo string, requested map[string]string) (token string, permScoped bool, err error) {
 	instID, appPerms, err := a.installation(ctx, repo)
 	if err != nil {
@@ -247,43 +319,39 @@ func (a *App) RunToken(ctx context.Context, repo string, requested map[string]st
 	if i := strings.LastIndex(repo, "/"); i >= 0 {
 		name = repo[i+1:]
 	}
-	body := map[string]any{"repositories": []string{name}}
-	if len(requested) > 0 {
-		effective := map[string]string{}
+	var effective map[string]string
+	if requested != nil {
+		effective = map[string]string{}
 		for k, v := range requested {
 			if v == "none" {
 				continue // omitted keys carry no access on this endpoint
 			}
+			nk := githubPermName(k)
 			if appPerms == nil {
-				effective[k] = v // grants unknown; let GitHub validate
+				effective[nk] = v // grants unknown; let GitHub validate
 				continue
 			}
-			appLevel, ok := appPerms[k]
+			appLevel, ok := appPerms[nk]
 			if !ok || appLevel == "none" {
 				continue // the installation does not grant this permission at all
 			}
 			// Clamp to the installation's level: a workflow may narrow the
 			// ceiling, never widen it past what the app holds.
 			if permRank(v) > permRank(appLevel) {
-				effective[k] = appLevel
+				effective[nk] = appLevel
 			} else {
-				effective[k] = v
+				effective[nk] = v
 			}
 		}
-		if len(effective) == 0 {
+		if len(requested) > 0 && len(effective) == 0 {
 			return "", false, fmt.Errorf("permissions ceiling grants nothing the installation holds")
 		}
-		body["permissions"] = effective
 	}
-	var out struct {
-		Token     string    `json:"token"`
-		ExpiresAt time.Time `json:"expires_at"`
-	}
-	path := fmt.Sprintf("/app/installations/%d/access_tokens", instID)
-	if err := a.doBody(ctx, http.MethodPost, path, body, &out); err != nil {
+	tok, err := a.mintToken(ctx, instID, []string{name}, effective)
+	if err != nil {
 		return "", false, err
 	}
-	return out.Token, len(requested) > 0, nil
+	return tok, requested != nil, nil
 }
 
 // permRank orders GitHub permission levels for ceiling clamping.

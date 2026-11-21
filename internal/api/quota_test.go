@@ -81,7 +81,7 @@ func TestArtifactQuotaBytes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("workflow: %v", err)
 	}
-	v, err := st.PutWorkflowVersion(ctx, wf.ID, "deadbeef", "name: Quota", map[string]any{}, true, nil, nil)
+	v, err := st.PutWorkflowVersion(ctx, wf.ID, "deadbeef", "name: Quota", map[string]any{}, true, nil, nil, true)
 	if err != nil {
 		t.Fatalf("version: %v", err)
 	}

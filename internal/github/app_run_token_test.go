@@ -86,3 +86,101 @@ func TestRunTokenCeiling(t *testing.T) {
 		t.Fatalf("empty request must not send permissions, got %v", gotBody["permissions"])
 	}
 }
+
+// TestRunTokenPermissionNormalization verifies Actions-style hyphenated
+// permission names reach GitHub in REST underscore spelling, and that an
+// explicit empty permissions object mints a zero-scope token rather than
+// falling back to installation defaults (#368).
+func TestRunTokenPermissionNormalization(t *testing.T) {
+	_, pemStr := testKey(t)
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/o/r/installation":
+			json.NewEncoder(w).Encode(map[string]any{
+				"id": 9002,
+				"permissions": map[string]string{
+					"contents": "read", "pull_requests": "read",
+				},
+			})
+		case "/app/installations/9002/access_tokens":
+			_ = json.NewDecoder(r.Body).Decode(&gotBody)
+			json.NewEncoder(w).Encode(map[string]any{
+				"token":      "ghs_tok",
+				"expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	app, err := NewApp("42", pemStr, srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	// Hyphenated workflow syntax must normalize before the ceiling lookup —
+	// "pull-requests" would otherwise miss the installation's "pull_requests"
+	// grant and silently drop the scope.
+	if _, _, err := app.RunToken(ctx, "o/r", map[string]string{"pull-requests": "read"}); err != nil {
+		t.Fatalf("RunToken hyphenated: %v", err)
+	}
+	perms, _ := gotBody["permissions"].(map[string]any)
+	if perms["pull_requests"] != "read" {
+		t.Fatalf("permissions = %v, want pull_requests=read", gotBody["permissions"])
+	}
+	if _, has := perms["pull-requests"]; has {
+		t.Fatalf("hyphenated key leaked to GitHub: %v", perms)
+	}
+
+	// permissions: {} is an explicit zero-scope request — the empty object
+	// must be sent, not treated as "no permissions block".
+	gotBody = nil
+	if _, scoped, err := app.RunToken(ctx, "o/r", map[string]string{}); err != nil || !scoped {
+		t.Fatalf("RunToken({}): scoped=%v err=%v", scoped, err)
+	}
+	perms, hasPerms := gotBody["permissions"].(map[string]any)
+	if !hasPerms || len(perms) != 0 {
+		t.Fatalf("permissions = %v (present=%v), want empty object", gotBody["permissions"], hasPerms)
+	}
+}
+
+// TestCloneTokenScope verifies the clone credential is pinned to one
+// repository with contents:read — never the installation's full grant set.
+func TestCloneTokenScope(t *testing.T) {
+	_, pemStr := testKey(t)
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/o/r/installation":
+			json.NewEncoder(w).Encode(map[string]any{"id": 9003})
+		case "/app/installations/9003/access_tokens":
+			_ = json.NewDecoder(r.Body).Decode(&gotBody)
+			json.NewEncoder(w).Encode(map[string]any{
+				"token":      "ghs_clone",
+				"expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	app, err := NewApp("42", pemStr, srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, err := app.CloneToken(context.Background(), "o/r")
+	if err != nil || tok != "ghs_clone" {
+		t.Fatalf("CloneToken = %q, %v", tok, err)
+	}
+	if repos, _ := gotBody["repositories"].([]any); len(repos) != 1 || repos[0] != "r" {
+		t.Fatalf("repositories = %v, want [r]", gotBody["repositories"])
+	}
+	perms, _ := gotBody["permissions"].(map[string]any)
+	if len(perms) != 1 || perms["contents"] != "read" {
+		t.Fatalf("permissions = %v, want {contents: read}", gotBody["permissions"])
+	}
+}

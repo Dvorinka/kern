@@ -116,7 +116,12 @@ type WorkflowVersion struct {
 	Valid       bool            `json:"valid"`
 	Diagnostics json.RawMessage `json:"diagnostics"`
 	Deps        json.RawMessage `json:"deps"`
-	CreatedAt   time.Time       `json:"created_at"`
+	// Trusted marks versions eligible as the canonical workflow definition —
+	// default-branch syncs and pushes. Pull-request heads and ad-hoc dispatch
+	// versions stay untrusted so they can never become the "latest" version
+	// cron, prime or fallback triggers execute.
+	Trusted   bool      `json:"trusted"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type Run struct {
