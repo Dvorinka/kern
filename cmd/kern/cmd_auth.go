@@ -44,7 +44,9 @@ func (c *cli) cmdInstall(ctx context.Context, args []string) error {
 			return fmt.Errorf("aborted")
 		}
 	}
-	server := opts["server"]
+	// extractGlobals already consumed --server into c.server; opts covers
+	// values passed after a literal `--` terminator.
+	server := first(opts["server"], c.server)
 	if server == "" {
 		server = c.cfg.Server
 	}
@@ -100,7 +102,8 @@ func (c *cli) cmdLogin(ctx context.Context, args []string) error {
 	c.cfg.Server = c.server
 	c.cfg.Token = out.Token
 	c.cfg.TokenID = out.Record.ID
-	if v := opts["project"]; v != "" {
+	// --project arrives via extractGlobals into c.project (flag > env > cfg).
+	if v := first(opts["project"], c.project); v != "" {
 		c.cfg.Project = v
 	}
 	if err := saveConfig(c.cfg); err != nil {
@@ -275,6 +278,11 @@ func (c *cli) cmdConfig(args []string) error {
 			return fmt.Errorf("unknown config key %q", args[1])
 		}
 		*p = args[2]
+		if args[1] == "token" {
+			// A pasted token has no known record id — keeping the old
+			// TokenID would make `kern logout` revoke the wrong credential.
+			c.cfg.TokenID = ""
+		}
 		if err := saveConfig(c.cfg); err != nil {
 			return err
 		}
@@ -322,6 +330,11 @@ func parseFlagsEx(args []string, bools []string, keys ...string) (map[string]str
 	var pos []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
+		if a == "--" {
+			// Terminator: the rest are positional args for the subcommand.
+			pos = append(pos, args[i+1:]...)
+			break
+		}
 		if !strings.HasPrefix(a, "--") {
 			pos = append(pos, a)
 			continue

@@ -23,6 +23,10 @@ func (c *cli) cmdOptimize(args []string) error {
 	if len(paths) == 0 {
 		return fmt.Errorf("no workflows found under %s/.github/workflows", dir)
 	}
+	// Merge flag/env/config credentials; offline lint still works when no
+	// server is configured — the fleet fetch below tolerates its error.
+	_ = c.resolve()
+	root := repoRootFor(dir)
 
 	// fleet label inventory — a runs-on label no runner carries means the
 	// job can never be claimed.
@@ -58,7 +62,7 @@ func (c *cli) cmdOptimize(args []string) error {
 		if err != nil {
 			continue
 		}
-		cc := workflows.Compiler{Resolve: makeResolver(dir)}
+		cc := workflows.Compiler{Resolve: makeResolver(root)}
 		res, err := workflows.Compile(string(content), cc)
 		if err != nil || res.Plan == nil {
 			continue

@@ -1,12 +1,14 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/dvorinka/kern/internal/workflows"
 )
@@ -38,8 +40,9 @@ func (c *cli) cmdLint(args []string) error {
 
 	var files []lintFile
 	for _, dir := range pos {
+		root := repoRootFor(dir)
 		for _, f := range findWorkflows(dir) {
-			files = append(files, lintOne(dir, f, defaultImage))
+			files = append(files, lintOne(root, f, defaultImage))
 		}
 	}
 	if len(files) == 0 {
@@ -59,6 +62,20 @@ func (c *cli) cmdLint(args []string) error {
 		}
 	}
 	return nil
+}
+
+// repoRootFor maps a lint target to the root that ./ reusable-workflow
+// references resolve against. Directory args are already roots; a file arg
+// resolves against the tree containing .github/workflows, else its own dir.
+func repoRootFor(dir string) string {
+	if st, err := os.Stat(dir); err != nil || st.IsDir() {
+		return dir
+	}
+	sep := string(filepath.Separator)
+	if i := strings.Index(dir, sep+".github"+sep+"workflows"+sep); i >= 0 {
+		return dir[:i]
+	}
+	return filepath.Dir(dir)
 }
 
 func findWorkflows(dir string) []string {
@@ -145,14 +162,17 @@ func makeResolver(repoRoot string) func(string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("resolve %s via gh api: %w", uses, err)
 		}
-		var decBuf strings.Builder
-		cmd := exec.Command("base64", "-d")
-		cmd.Stdin = strings.NewReader(strings.ReplaceAll(string(out), "\n", ""))
-		cmd.Stdout = &decBuf
-		if err := cmd.Run(); err != nil {
+		b64 := strings.Map(func(r rune) rune {
+			if unicode.IsSpace(r) {
+				return -1
+			}
+			return r
+		}, string(out))
+		dec, err := base64.StdEncoding.DecodeString(b64)
+		if err != nil {
 			return "", fmt.Errorf("decode %s: %w", uses, err)
 		}
-		return decBuf.String(), nil
+		return string(dec), nil
 	}
 }
 
