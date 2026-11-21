@@ -131,7 +131,7 @@ func (s *Server) listArtifacts(c *gin.Context) {
 	user, _ := currentUser(c)
 	var runID *uuid.UUID
 	if v := c.Query("run_id"); v != "" {
-		id, ok := s.resolveRunID(c, v)
+		id, ok := s.resolveRunID(c, v, user.OrgID)
 		if !ok {
 			return
 		}
@@ -172,11 +172,12 @@ func (s *Server) deleteArtifact(c *gin.Context) {
 }
 
 func (s *Server) getArtifact(c *gin.Context) {
+	user, _ := currentUser(c)
 	id, ok := s.artifactIDParam(c)
 	if !ok {
 		return
 	}
-	a, err := s.Store.Artifact(c.Request.Context(), id)
+	a, err := s.Store.Artifact(c.Request.Context(), user.OrgID, id)
 	if err != nil {
 		s.internalError(c, err)
 		return

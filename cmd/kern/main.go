@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -370,11 +371,27 @@ func dispatch(c *cli, args []string) int {
 		err = fmt.Errorf("unknown command %q — see kern help", name)
 	}
 	if err != nil {
+		var ec exitCodeError
+		if errors.As(err, &ec) {
+			if ec.msg != "" {
+				fmt.Fprintln(os.Stderr, "kern:", ec.msg)
+			}
+			return ec.code
+		}
 		fmt.Fprintln(os.Stderr, "kern:", err)
 		return 1
 	}
 	return 0
 }
+
+// exitCodeError carries a process exit code up to dispatch so deferred cleanup
+// runs instead of being bypassed by os.Exit.
+type exitCodeError struct {
+	code int
+	msg  string
+}
+
+func (e exitCodeError) Error() string { return e.msg }
 
 func fatalf(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "kern: "+format+"\n", args...)

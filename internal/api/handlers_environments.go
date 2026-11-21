@@ -191,7 +191,7 @@ func (s *Server) approveDeployment(c *gin.Context) {
 	if !ok {
 		return
 	}
-	dep, released, err := s.Store.ApproveDeployment(c.Request.Context(), jobID, user.ID, user.Email, user.Role)
+	dep, released, err := s.Store.ApproveDeployment(c.Request.Context(), user.OrgID, jobID, user.ID, user.Email, user.Role)
 	if err != nil {
 		if errors.Is(err, store.ErrNotReviewer) {
 			fail(c, http.StatusForbidden, "not_reviewer", err.Error())
@@ -216,7 +216,7 @@ func (s *Server) rejectDeployment(c *gin.Context) {
 	if !ok {
 		return
 	}
-	dep, err := s.Store.RejectDeployment(c.Request.Context(), jobID, user.ID, user.Role)
+	dep, err := s.Store.RejectDeployment(c.Request.Context(), user.OrgID, jobID, user.ID, user.Role)
 	if err != nil {
 		if errors.Is(err, store.ErrNotReviewer) {
 			fail(c, http.StatusForbidden, "not_reviewer", err.Error())

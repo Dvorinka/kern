@@ -216,7 +216,7 @@ func compile(content string, c Compiler, depth int, calls *int, deps map[string]
 		if windowsJob(job.RunsOn) {
 			shell := wf.Defaults.Run.Shell
 			if job.Defaults != nil && job.Defaults.Run.Shell != "" {
-				shell = wf.Defaults.Run.Shell
+				shell = job.Defaults.Run.Shell
 			}
 			if shell == "pwsh" {
 				d.warnf("pwsh-windows", "jobs."+id+".defaults.run.shell",
@@ -228,6 +228,14 @@ func compile(content string, c Compiler, depth int, calls *int, deps map[string]
 						"shell: pwsh is not provisioned on KERN windows runners — steps run under Git Bash; use bash or `powershell.exe -File`")
 				}
 			}
+		}
+		if job.Concurrency.Group != "" || job.Concurrency.CancelInProgress || job.Concurrency.CancelExpr != "" {
+			d.warnf("concurrency", "jobs."+id+".concurrency",
+				"job-level concurrency is not enforced separately from workflow-level concurrency")
+		}
+		if job.Strategy != nil && job.Strategy.MaxParallel > 0 {
+			d.warnf("strategy", "jobs."+id+".strategy.max-parallel",
+				"strategy.max-parallel is recorded but not yet enforced by the scheduler")
 		}
 		if job.Strategy != nil && len(job.Strategy.Matrix) > 0 {
 			d.info("matrix", "jobs."+id+".strategy.matrix", "matrix expansion is limited to 256 combinations")
@@ -260,6 +268,16 @@ func compile(content string, c Compiler, depth int, calls *int, deps map[string]
 		if job.Uses != "" {
 			if err := ValidateReusableRef(job.Uses); err != nil {
 				continue // already diagnosed
+			}
+			if *calls+1 > maxCalls {
+				d.errorf("reusable-call-cap", "jobs."+id+".uses",
+					fmt.Sprintf("more than %d reusable workflow calls in one run", maxCalls))
+				continue
+			}
+			if depth+1 > maxCallDepth {
+				d.errorf("reusable-depth", "jobs."+id+".uses",
+					fmt.Sprintf("reusable workflow chains deeper than %d are not supported", maxCallDepth))
+				continue
 			}
 			if c.Resolve == nil {
 				d.errorf("reusable-resolve", "jobs."+id+".uses",
@@ -705,7 +723,9 @@ func ghcrAuthedByGitHubToken(s Step) bool {
 	usesToken := strings.Contains(fmt.Sprint(s.With), "GITHUB_TOKEN") ||
 		strings.Contains(fmt.Sprint(s.Env), "GITHUB_TOKEN") ||
 		strings.Contains(s.Run, "GITHUB_TOKEN") ||
-		strings.Contains(s.Uses, "github.token")
+		strings.Contains(fmt.Sprint(s.With), "github.token") ||
+		strings.Contains(fmt.Sprint(s.Env), "github.token") ||
+		strings.Contains(s.Run, "github.token")
 	if !usesToken {
 		return false
 	}
