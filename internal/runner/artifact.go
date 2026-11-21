@@ -7,6 +7,8 @@ package runner
 import (
 	"archive/tar"
 	"compress/gzip"
+
+	"github.com/klauspost/compress/zstd"
 	"context"
 	"fmt"
 	"io"
@@ -159,13 +161,32 @@ func withLines(s StepSpec, key string) []string {
 type artifactEntry struct{ file, root string }
 
 func tarGz(files []artifactEntry, out string) error {
+	return tarCompressed(files, out, "gzip")
+}
+
+// tarCompressed packs files into a tar stream under the named codec —
+// "gzip" or "zstd" (#369). zstd needs klauspost/compress (already an
+// indirect dep); the frames self-describe so restore sniffs instead of
+// trusting a filename.
+func tarCompressed(files []artifactEntry, out, codec string) error {
 	fh, err := os.Create(out)
 	if err != nil {
 		return err
 	}
 	defer fh.Close()
-	gw := gzip.NewWriter(fh)
-	tw := tar.NewWriter(gw)
+	var cw io.Writer = fh
+	var closeCodec func() error
+	if codec == "zstd" {
+		zw, zerr := zstd.NewWriter(fh)
+		if zerr != nil {
+			return zerr
+		}
+		cw, closeCodec = zw, zw.Close
+	} else {
+		gw := gzip.NewWriter(fh)
+		cw, closeCodec = gw, gw.Close
+	}
+	tw := tar.NewWriter(cw)
 	for _, f := range files {
 		// Lstat preserves symlinks — node_modules/.bin and .pnpm are
 		// symlink forests; Stat+IsRegular silently stripped them (#369).
@@ -207,25 +228,50 @@ func tarGz(files []artifactEntry, out string) error {
 	if err := tw.Close(); err != nil {
 		return err
 	}
-	return gw.Close()
+	return closeCodec()
 }
 
 func untarGz(archive, dest string) error {
+	return untarAuto(archive, dest)
+}
+
+// untarAuto extracts a tar archive compressed with gzip or zstd — the
+// codec is sniffed from the frame magic so writers can switch codecs
+// without breaking older blobs (#369).
+func untarAuto(archive, dest string) error {
 	fh, err := os.Open(archive)
 	if err != nil {
 		return err
 	}
 	defer fh.Close()
-	gz, err := gzip.NewReader(fh)
-	if err != nil {
+	var magic [4]byte
+	if _, err := io.ReadFull(fh, magic[:]); err != nil {
 		return err
 	}
-	defer gz.Close()
+	if _, err := fh.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	var cr io.Reader = fh
+	var gz *gzip.Reader
+	var zd *zstd.Decoder
+	if magic == [4]byte{0x28, 0xB5, 0x2F, 0xFD} {
+		if zd, err = zstd.NewReader(fh); err != nil {
+			return err
+		}
+		defer zd.Close()
+		cr = zd
+	} else {
+		if gz, err = gzip.NewReader(fh); err != nil {
+			return err
+		}
+		defer gz.Close()
+		cr = gz
+	}
 	root, err := filepath.Abs(dest)
 	if err != nil {
 		return err
 	}
-	tr := tar.NewReader(gz)
+	tr := tar.NewReader(cr)
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
