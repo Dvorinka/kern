@@ -60,13 +60,13 @@ type ghTrigger struct {
 // only receives pull_request. That delivery also starts pull_request_target
 // workflows. A delivery that already names pull_request_target is not
 // expanded, so it cannot run twice.
-func (s *Server) processGithubDelivery(c *gin.Context, delivery, event string, body []byte) (status, detail string) {
+func (s *Server) processGithubDelivery(ctx context.Context, delivery, event string, body []byte) (status, detail string) {
 	events := deliveryEvents(event)
-	status, detail = s.actOnGithubEvent(c, delivery, events[0], body)
+	status, detail = s.actOnGithubEvent(ctx, delivery, events[0], body)
 	if len(events) == 1 {
 		return status, detail
 	}
-	st2, det2 := s.actOnGithubEvent(c, delivery, events[1], body)
+	st2, det2 := s.actOnGithubEvent(ctx, delivery, events[1], body)
 	return mergeWebhookStatus(status, st2), detail + "; " + events[1] + ": " + det2
 }
 
@@ -92,7 +92,7 @@ func mergeWebhookStatus(a, b string) string {
 	return b
 }
 
-func (s *Server) actOnGithubEvent(c *gin.Context, delivery, event string, body []byte) (status, detail string) {
+func (s *Server) actOnGithubEvent(ctx context.Context, delivery, event string, body []byte) (status, detail string) {
 	var t *ghTrigger
 	switch event {
 	case "push":
@@ -106,9 +106,9 @@ func (s *Server) actOnGithubEvent(c *gin.Context, delivery, event string, body [
 	case "repository_dispatch":
 		t, status, detail = parseRepoDispatchTrigger(body)
 	case "check_run":
-		return s.actOnCheckRun(c, body)
+		return s.actOnCheckRun(ctx, body)
 	case "check_suite":
-		return s.actOnCheckSuite(c, body)
+		return s.actOnCheckSuite(ctx, body)
 	default:
 		return "ignored", "event type " + event + " is recorded but not acted on"
 	}
@@ -130,18 +130,18 @@ func (s *Server) actOnGithubEvent(c *gin.Context, delivery, event string, body [
 	if t.defaultBranch != "" {
 		// pull_request_target runs in the default-branch context: the workflow
 		// file and the checkout both come from the base repo's default head.
-		if err := s.resolvePRTargetSHA(c, t); err != nil {
+		if err := s.resolvePRTargetSHA(ctx, t); err != nil {
 			return "failed", err.Error()
 		}
 	}
 	if t.tagName != "" {
 		// release runs the workflow version at the tagged commit, like a tag
 		// push — the tag must resolve to a sha before anything compiles.
-		if err := s.resolveReleaseSHA(c, t); err != nil {
+		if err := s.resolveReleaseSHA(ctx, t); err != nil {
 			return "failed", err.Error()
 		}
 	}
-	projects, err := s.Store.ProjectsByRepoFullName(c.Request.Context(), t.repoName)
+	projects, err := s.Store.ProjectsByRepoFullName(ctx, t.repoName)
 	if err != nil {
 		return "failed", err.Error()
 	}
@@ -155,7 +155,7 @@ func (s *Server) actOnGithubEvent(c *gin.Context, delivery, event string, body [
 		// fork runs start. Held runs sit in awaiting_approval until released.
 		hold := false
 		if t.trust == "fork" {
-			if raw, err := s.Store.ProjectSettings(c.Request.Context(), proj.ID); err == nil &&
+			if raw, err := s.Store.ProjectSettings(ctx, proj.ID); err == nil &&
 				forkGateHold(settingsValue(raw, "fork_gate", "off"), t.association) {
 				hold = true
 			}
@@ -166,12 +166,12 @@ func (s *Server) actOnGithubEvent(c *gin.Context, delivery, event string, body [
 		// heads are never promoted.
 		trust := t.trust
 		if trust == "pull_request" {
-			if raw, err := s.Store.ProjectSettings(c.Request.Context(), proj.ID); err == nil &&
+			if raw, err := s.Store.ProjectSettings(ctx, proj.ID); err == nil &&
 				prTrustPromoted(raw) {
 				trust = "trusted"
 			}
 		}
-		wfs, err := s.Store.Workflows(c.Request.Context(), proj.ID)
+		wfs, err := s.Store.Workflows(ctx, proj.ID)
 		if err != nil {
 			return "failed", err.Error()
 		}
@@ -180,12 +180,12 @@ func (s *Server) actOnGithubEvent(c *gin.Context, delivery, event string, body [
 				skipped = append(skipped, wf.Name+" (disabled)")
 				continue
 			}
-			version, plan, err := s.workflowAtSHA(c, t.repoName, proj.ID, wf, t.sha)
+			version, plan, err := s.workflowAtSHA(ctx, t.repoName, proj.ID, wf, t.sha)
 			if err != nil {
 				skipped = append(skipped, wf.Name+" ("+err.Error()+")")
 				continue
 			}
-			triggered, why := t.matches(c.Request.Context(), plan)
+			triggered, why := t.matches(ctx, plan)
 			if !triggered {
 				if why != "" {
 					skipped = append(skipped, wf.Name+" ("+why+")")
@@ -206,7 +206,7 @@ func (s *Server) actOnGithubEvent(c *gin.Context, delivery, event string, body [
 			for k, v := range t.extra {
 				source[k] = v
 			}
-			run, err := s.Orch.StartRun(c.Request.Context(), store.CreateRunParams{
+			run, err := s.Orch.StartRun(ctx, store.CreateRunParams{
 				ProjectID:         proj.ID,
 				WorkflowID:        wf.ID,
 				WorkflowVersionID: version.ID,
@@ -661,8 +661,7 @@ func repoDispatchMatchesPlan(plan *workflows.Plan, eventType string) (bool, stri
 // resolveReleaseSHA pins a release trigger to the tagged commit, falling back
 // to the release's target_commitish (a branch name or sha) when the tag ref
 // does not resolve.
-func (s *Server) resolveReleaseSHA(c *gin.Context, t *ghTrigger) error {
-	ctx := c.Request.Context()
+func (s *Server) resolveReleaseSHA(ctx context.Context, t *ghTrigger) error {
 	gh, err := s.githubClient(ctx, t.repoName)
 	if err == nil {
 		if sha, herr := gh.HeadSHA(ctx, t.repoName, url.PathEscape(t.tagName)); herr == nil && sha != "" {
@@ -698,8 +697,7 @@ func (s *Server) pushChangedFiles(ctx context.Context, repo, before, after strin
 // resolvePRTargetSHA pins a pull_request_target trigger to the base repo's
 // default-branch head, falling back to the PR's recorded base sha when the
 // ref cannot be resolved.
-func (s *Server) resolvePRTargetSHA(c *gin.Context, t *ghTrigger) error {
-	ctx := c.Request.Context()
+func (s *Server) resolvePRTargetSHA(ctx context.Context, t *ghTrigger) error {
 	gh, err := s.githubClient(ctx, t.repoName)
 	if err == nil {
 		if sha, herr := gh.HeadSHA(ctx, t.repoName, t.defaultBranch); herr == nil && sha != "" {
@@ -797,9 +795,8 @@ func contains(items []string, want string) bool {
 // stores it as a new version, so the run executes what was pushed — not what
 // was last synced. Falls back to the latest stored version when the repo is
 // unreachable.
-func (s *Server) workflowAtSHA(c *gin.Context, fullName string, projectID uuid.UUID,
+func (s *Server) workflowAtSHA(ctx context.Context, fullName string, projectID uuid.UUID,
 	wf store.Workflow, sha string) (store.WorkflowVersion, *workflows.Plan, error) {
-	ctx := c.Request.Context()
 	gh, err := s.githubClient(ctx, fullName)
 	var content string
 	if err == nil {

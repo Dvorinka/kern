@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/exaring/otelpgx"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
@@ -28,6 +29,8 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 	}
 	cfg.MaxConnLifetime = 30 * time.Minute
 	cfg.MaxConns = 16
+	// No-op until an OTLP endpoint is configured; then every query gets a span.
+	cfg.ConnConfig.Tracer = otelpgx.NewTracer()
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("connect database: %w", err)
@@ -269,6 +272,9 @@ type Runner struct {
 	// (disk,memory,overload; '' = claiming normally), reported on each
 	// heartbeat so a gated runner stops reading as merely idle.
 	ClaimsPaused    string     `json:"claims_paused"`
+	// Concurrency is the runner's worker-slot count as reported at
+	// register/heartbeat time; defaults to 1 for pre-#372 runners.
+	Concurrency     int        `json:"concurrency"`
 	Ephemeral       bool       `json:"ephemeral"`
 	LastHeartbeatAt *time.Time `json:"last_heartbeat_at"`
 	CPUPercent      *float64   `json:"cpu_percent"`
@@ -322,6 +328,10 @@ type HostMetrics struct {
 	// means "not reporting" and the column is left alone; an empty slice
 	// clears recorded drift.
 	MissingTools *[]string `json:"missing_tools"`
+	// Concurrency reports the runner's configured worker slots so the
+	// claim query can compare free slots rather than raw job counts. Nil
+	// leaves the column untouched (pre-#372 runner).
+	Concurrency *int `json:"concurrency,omitempty"`
 }
 
 type Secret struct {

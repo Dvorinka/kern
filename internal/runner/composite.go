@@ -475,6 +475,16 @@ func (e *executor) cachedRefSHA(repoURL, ref string) string {
 	return sha
 }
 
+// freshCachedRefSHA is cachedRefSHA plus a freshness bound — a pointer
+// resolved within the TTL skips the ls-remote entirely (#372).
+func (e *executor) freshCachedRefSHA(repoURL, ref string) string {
+	fi, err := os.Stat(e.refPointerPath(repoURL, ref))
+	if err != nil || time.Since(fi.ModTime()) > 10*time.Minute {
+		return ""
+	}
+	return e.cachedRefSHA(repoURL, ref)
+}
+
 // resolveActionSHA maps a mutable ref (branch/tag) to a commit SHA so the
 // cache key is content-addressed. Pinned SHAs pass through untouched.
 // Returns "" when the ref cannot be resolved — the caller then fetches
@@ -482,6 +492,11 @@ func (e *executor) cachedRefSHA(repoURL, ref string) string {
 func (e *executor) resolveActionSHA(ctx context.Context, repoURL, ref string) string {
 	if isActionSHA(ref) {
 		return strings.ToLower(ref)
+	}
+	// A job fans out the same action refs across steps and pre-hooks;
+	// a still-fresh pointer makes each repeat free (#372).
+	if sha := e.freshCachedRefSHA(repoURL, ref); sha != "" {
+		return sha
 	}
 	ctxCmd, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()

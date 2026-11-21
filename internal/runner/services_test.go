@@ -68,11 +68,26 @@ func TestPublishLockKey(t *testing.T) {
 	}
 }
 
+// trustedExecutor models a privileged host-executor job — the only path
+// that still takes hostPortLocks. Privileged docker jobs ride the per-job
+// bridge and never lock (#372).
 func trustedExecutor(ports []string) *executor {
-	e := &executor{claim: &Claim{}, log: zap.NewNop()}
+	e := &executor{claim: &Claim{}, log: zap.NewNop(), host: true}
 	e.claim.Run.TrustLevel = "trusted"
 	e.claim.Job.Services = []ClaimService{{Name: "svc", Ports: ports}}
 	return e
+}
+
+func TestAcquireServicePortsBridgePrivilegedSkips(t *testing.T) {
+	e := &executor{claim: &Claim{}, log: zap.NewNop()} // docker executor
+	e.claim.Run.TrustLevel = "trusted"
+	e.claim.Job.Services = []ClaimService{{Name: "svc", Ports: []string{"5432:5432"}}}
+	if err := e.acquireServicePorts(context.Background()); err != nil {
+		t.Fatalf("bridge acquire: %v", err)
+	}
+	if len(e.portReleases) != 0 {
+		t.Fatal("bridge-mode privileged job must not take port holds")
+	}
 }
 
 func TestServiceArgsHostExecutor(t *testing.T) {

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -184,25 +185,67 @@ func (s *Server) githubWebhook(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"duplicate": true})
 		return
 	}
-	webhookStart := time.Now()
-	status, detail := s.processGithubDelivery(c, delivery, event, body)
+	// Process off-request: workflow matching and run creation make GitHub API
+	// calls that can outlive GitHub's 10s ack deadline — and a disconnect cancels
+	// the request context, which used to strand deliveries unprocessed (#374).
+	// The sweeper reclaims deliveries whose worker never finishes.
+	select {
+	case s.webhookQueue <- webhookTask{delivery: delivery, event: event, body: body, matchedOrg: matchedOrg}:
+	default:
+		s.Log.Warn("webhook queue full; sweeper will process", zap.String("delivery", delivery))
+	}
+	s.Log.Info("github webhook received", zap.String("event", event), zap.String("delivery", delivery))
+	c.JSON(http.StatusAccepted, gin.H{"delivery": delivery, "event": event, "status": "queued"})
+}
+
+// webhookWorker drains queued deliveries in order. Sequential processing keeps
+// same-repo pushes, PR updates and cancellations applied in delivery order.
+func (s *Server) webhookWorker() {
+	for t := range s.webhookQueue {
+		s.processWebhookTask(t)
+	}
+}
+
+// processWebhookTask runs one delivery with its own context — never the request
+// context, which dies with the client connection.
+func (s *Server) processWebhookTask(t webhookTask) {
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	status, detail := s.processGithubDelivery(ctx, t.delivery, t.event, t.body)
 	if s.metrics != nil {
-		s.metrics.observeWebhook(time.Since(webhookStart))
+		s.metrics.observeWebhook(time.Since(start))
 	}
 	// Bind the delivery to the org that owns the payload's repository once
 	// it resolves to a project — unmatched deliveries stay org-less rather
 	// than leaking into every tenant's delivery views (#368).
-	if orgID, ok := s.deliveryOrg(c.Request.Context(), body, matchedOrg); ok {
-		if err := s.Store.SetWebhookDeliveryOrg(c.Request.Context(), delivery, orgID); err != nil {
+	if orgID, ok := s.deliveryOrg(ctx, t.body, t.matchedOrg); ok {
+		if err := s.Store.SetWebhookDeliveryOrg(ctx, t.delivery, orgID); err != nil {
 			s.Log.Warn("webhook delivery org", zap.Error(err))
 		}
 	}
-	if err := s.Store.MarkWebhookProcessed(c.Request.Context(), delivery, status, detail); err != nil {
-		s.Log.Error("mark webhook processed", zap.Error(err))
+	if err := s.Store.MarkWebhookProcessed(ctx, t.delivery, status, detail); err != nil {
+		s.Log.Error("mark webhook processed", zap.String("delivery", t.delivery), zap.Error(err))
 	}
-	s.Log.Info("github webhook received", zap.String("event", event),
-		zap.String("delivery", delivery), zap.String("status", status), zap.String("detail", detail))
-	c.JSON(http.StatusAccepted, gin.H{"delivery": delivery, "event": event, "status": status, "detail": detail})
+	s.Log.Info("github webhook processed", zap.String("event", t.event),
+		zap.String("delivery", t.delivery), zap.String("status", status), zap.String("detail", detail))
+}
+
+// sweepStaleWebhooks reclaims deliveries left unprocessed — a dropped queue
+// item, or a replica that died between claim and mark.
+func (s *Server) sweepStaleWebhooks() {
+	tick := time.NewTicker(60 * time.Second)
+	defer tick.Stop()
+	for range tick.C {
+		tasks, err := s.Store.ClaimStaleGithubDeliveries(context.Background(), 32)
+		if err != nil {
+			s.Log.Warn("webhook sweep", zap.Error(err))
+			continue
+		}
+		for _, t := range tasks {
+			s.processWebhookTask(webhookTask{delivery: t.DeliveryID, event: t.Event, body: t.Payload})
+		}
+	}
 }
 
 func validSignature(secret string, body []byte, header string) bool {

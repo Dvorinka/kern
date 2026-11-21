@@ -45,6 +45,7 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 			-- cannot take work, and among equally busy peers the cooler host
 			-- wins (#310).
 			SELECT r.id, r.labels, r.executor, r.claims_paused, r.cpu_percent,
+				r.concurrency,
 				(SELECT count(*) FROM jobs a
 				 WHERE a.runner_id = r.id AND a.status = 'in_progress') AS load
 			FROM runners r, me
@@ -64,6 +65,10 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 				   AND q.status = 'in_progress') AS running
 			FROM projects p
 			WHERE p.settings->>'max_concurrent_jobs' ~ '^[1-9]\d*$'
+			-- Row lock serializes concurrent claims per capped project —
+			-- without it two claims read the same pre-UPDATE running count
+			-- and overshoot the quota (#372).
+			FOR UPDATE OF p
 		), token_caps AS MATERIALIZED (
 			-- Per-token concurrency quota (#356): a dispatch token carrying
 			-- max_concurrent_jobs may hold only that many in-progress jobs
@@ -76,6 +81,7 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 				   AND q.status = 'in_progress') AS running
 			FROM api_tokens t
 			WHERE t.max_concurrent_jobs > 0
+			FOR UPDATE OF t
 		), candidate AS (
 			SELECT j.id
 			FROM jobs j
@@ -90,6 +96,10 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 			LEFT JOIN proj_caps cap ON cap.project_id = r.project_id
 			LEFT JOIN token_caps tcap ON tcap.token_id = r.dispatch_token_id
 			WHERE j.status = 'queued'
+			  -- A runner reporting engaged claim gates (disk, memory,
+			  -- overload, updating, retire) must not take work — its own
+			  -- heartbeat may not have landed yet when a queued job races it.
+			  AND (SELECT claims_paused FROM me) = ''
 			  -- Token concurrency quota: same shape as the project cap.
 			  AND (tcap.max_jobs IS NULL OR tcap.running < tcap.max_jobs)
 			  -- Project concurrency quota: a project holding its
@@ -113,7 +123,8 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 				OR r.trust_level IN ('fork', 'pull_request')
 				OR NOT EXISTS (
 					SELECT 1 FROM fleet h
-					WHERE 'kern-docker' = ANY(h.labels)
+					WHERE h.claims_paused = ''
+					  AND 'kern-docker' = ANY(h.labels)
 					  AND j.runs_on <@ (h.labels || ARRAY['self-hosted', 'kern'])
 				)
 			  )
@@ -170,13 +181,22 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 						  AND j.runs_on <@ (h.labels || ARRAY['self-hosted', 'kern'])
 					)
 				  )
+				  -- Slot-aware yield (#372): only a peer with a free worker
+				  -- slot can take this job, and only when its utilization
+				  -- ratio (load/concurrency) is lower — a full 1-slot
+				  -- runner must not suppress a 2/4 peer. Equal ratios fall
+				  -- back to the CPU-margin tiebreak.
+				  AND o.load < o.concurrency
 				  AND (
-					o.load < me_f.load
-					OR (o.load = me_f.load
+					o.load * me_f.concurrency < me_f.load * o.concurrency
+					OR (o.load * me_f.concurrency = me_f.load * o.concurrency
 						AND COALESCE(o.cpu_percent, 100) < COALESCE(me_f.cpu_percent, 100) - $3)
 				  )
 			  )
-			ORDER BY j.priority DESC, j.queued_at
+			-- Longest-pole first within equal priority (#372): jobs whose
+			-- steps historically take longest claim earliest, shrinking the
+			-- run's makespan tail; zero-estimate jobs keep FIFO order.
+			ORDER BY j.priority DESC, j.est_seconds DESC, j.queued_at
 			FOR UPDATE OF j SKIP LOCKED
 			LIMIT 1
 		), claimed AS (
@@ -307,9 +327,10 @@ func (s *Store) Heartbeat(ctx context.Context, runnerID uuid.UUID, m HostMetrics
 			disk_bytes = COALESCE($6, disk_bytes),
 			claims_paused = $7,
 			labels = COALESCE(NULLIF($8, '{}'::text[]), labels),
-			missing_tools = COALESCE($9, missing_tools)
+			missing_tools = COALESCE($9, missing_tools),
+			concurrency = GREATEST(COALESCE($10, concurrency), 1)
 		WHERE id = $1`, runnerID, m.CPUPercent, m.MemUsedBytes, m.DiskFreeBytes,
-		m.Version, m.DiskBytes, m.ClaimsPaused, m.Labels, missingTools)
+		m.Version, m.DiskBytes, m.ClaimsPaused, m.Labels, missingTools, m.Concurrency)
 	return err
 }
 
@@ -344,11 +365,17 @@ func (s *Store) SetStepSummary(ctx context.Context, jobID uuid.UUID, number int,
 }
 
 // AppendStepLog records a log chunk size and reference. Chunks themselves live in blob storage.
+// A pg_notify wakes live log followers so they do not have to poll (#374).
 func (s *Store) AppendStepLog(ctx context.Context, jobID uuid.UUID, number int, ref string, size int) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE steps SET log_ref = $3, log_bytes = log_bytes + $4
 		WHERE job_id = $1 AND number = $2`, jobID, number, ref, size)
-	return err
+	if err != nil {
+		return err
+	}
+	_, _ = s.pool.Exec(ctx, `SELECT pg_notify('kern_step_log', $1)`,
+		fmt.Sprintf("%s:%d", jobID, number))
+	return nil
 }
 
 func (s *Store) StepLogRef(ctx context.Context, jobID uuid.UUID, number int) (string, int64, error) {

@@ -24,6 +24,16 @@ import (
 	"go.uber.org/zap"
 )
 
+// serviceBridgeJob reports whether a privileged job rides the per-job
+// bridge instead of host networking — true whenever it declares services.
+// Port-declaring services then share the job's netns exactly like the
+// unprivileged path, so concurrent privileged jobs no longer serialize on
+// hostPortLocks (#372). Privileged jobs without services keep host
+// networking so step-level `docker run -p` reaches localhost verbatim.
+func (e *executor) serviceBridgeJob() bool {
+	return e.privileged() && !e.host && len(e.claim.Job.Services) > 0
+}
+
 // serviceNet names the per-job bridge network. Fork-trust jobs already sit
 // on the egress-restricted internal network, which doubles as their service
 // network so services inherit the same egress policy.
@@ -53,7 +63,8 @@ func (e *executor) networkedServices() []ClaimService {
 func (e *executor) ensureServiceNet(ctx context.Context) error {
 	// The egress network is created --internal by ensureEgress; creating it
 	// here as a normal bridge would silently lift the egress restriction.
-	needsNet := len(e.networkedServices()) > 0 || (e.host && len(e.claim.Job.Services) > 0)
+	needsNet := len(e.networkedServices()) > 0 || (e.host && len(e.claim.Job.Services) > 0) ||
+		e.serviceBridgeJob()
 	if e.egressRestricted() || !needsNet {
 		return nil
 	}
@@ -91,10 +102,27 @@ func (e *executor) startServices(ctx context.Context) error {
 		e.serviceLogPump(streamCtx)
 	}()
 	net := e.serviceNet()
+	// Pull service images concurrently (#372) — each pull carries its own
+	// throwaway --config credential dir, so registry logins never touch the
+	// daemon's config.json and stay safe in parallel. Starts keep their
+	// order because the port-lock retry path sweeps shared state.
+	var pullWG sync.WaitGroup
+	pullErrs := make(chan error, len(e.claim.Job.Services))
 	for _, svc := range e.claim.Job.Services {
-		if err := e.pullService(ctx, svc); err != nil {
-			return fmt.Errorf("service %s: %w", svc.Name, err)
-		}
+		pullWG.Add(1)
+		go func(svc ClaimService) {
+			defer pullWG.Done()
+			if err := e.pullService(ctx, svc); err != nil {
+				pullErrs <- fmt.Errorf("service %s: %w", svc.Name, err)
+			}
+		}(svc)
+	}
+	pullWG.Wait()
+	close(pullErrs)
+	for err := range pullErrs {
+		return err
+	}
+	for _, svc := range e.claim.Job.Services {
 		if err := e.startService(ctx, net, svc); err != nil {
 			if isPortBindErr(err) && e.sweepOrphans != nil {
 				// The port lock only serializes kern jobs on this runner;
@@ -130,6 +158,12 @@ func (e *executor) pullService(ctx context.Context, svc ClaimService) error {
 		}
 		defer cleanup()
 		pullArgs = append(pullArgs, "--config", cfgDir)
+	}
+	// Digest-pinned service images are immutable — skip the pull when a
+	// local copy exists (#372), same policy as the job image.
+	if strings.Contains(svc.Image, "@sha256:") && e.imageExists(ctx, svc.Image) {
+		recordImageUse(e.cfg.WorkRoot, svc.Image)
+		return nil
 	}
 	pullArgs = append(pullArgs, "pull", "-q", svc.Image)
 	if err := e.docker(ctx, pullArgs...); err != nil {
@@ -209,13 +243,13 @@ func (e *executor) serviceArgs(net string, svc ClaimService) []string {
 		for _, p := range svc.Ports {
 			args = append(args, "-p", "127.0.0.1:"+publishSpec(p))
 		}
-	case e.privileged() && len(svc.Ports) > 0:
+	case e.privileged() && !e.serviceBridgeJob() && len(svc.Ports) > 0:
 		// Host-net job: publish real port mappings on the host's localhost —
 		// the same netns the job sees, so host:container remaps work.
 		for _, p := range svc.Ports {
 			args = append(args, "-p", "127.0.0.1:"+publishSpec(p))
 		}
-	case len(svc.Ports) > 0 || e.privileged():
+	case len(svc.Ports) > 0 || (e.privileged() && !e.serviceBridgeJob()):
 		// Localhost-mode service shares the job netns. On host networking
 		// that is the host netns; the job's /etc/hosts entry covers the name.
 		args = append(args, "--network", "container:"+e.container)
@@ -311,7 +345,7 @@ func portSpecParts(p string) (host, container, proto string) {
 // forwarder container joins the same netns and splices host→container.
 // Privileged jobs publish real -p mappings and never reach this.
 func (e *executor) startPortForwards(ctx context.Context, svc ClaimService) error {
-	if e.privileged() {
+	if e.privileged() && !e.serviceBridgeJob() {
 		return nil // real 127.0.0.1 -p publishes already applied
 	}
 	var remaps [][2]string
@@ -398,7 +432,9 @@ func publishLockKey(p string) string {
 // outside what the runner can lock — a residual collision GitHub's
 // VM-per-job model never sees.
 func (e *executor) acquireServicePorts(ctx context.Context) error {
-	if !e.privileged() {
+	// Bridge-mode privileged jobs never publish on the host — their
+	// services share the per-job netns, so no lock is needed (#372).
+	if !e.privileged() || e.serviceBridgeJob() {
 		return nil
 	}
 	var keys []string

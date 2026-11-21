@@ -421,11 +421,6 @@ func (o *Orchestrator) AdvanceRun(ctx context.Context, runID uuid.UUID) error {
 		return err
 	}
 
-	byJobKey := map[string][]store.Job{}
-	for _, j := range jobs {
-		byJobKey[j.JobKey] = append(byJobKey[j.JobKey], j)
-	}
-
 	// Project vars feed the `vars` expression context for if-conditions;
 	// they are configuration, not secrets, so they load unconditionally.
 	varRows, err := o.Store.VarsForProject(ctx, project.ID)
@@ -437,72 +432,96 @@ func (o *Orchestrator) AdvanceRun(ctx context.Context, runID uuid.UUID) error {
 		vars[v.Name] = v.Value
 	}
 
-	for _, job := range jobs {
-		if job.Status != "waiting" {
-			continue
-		}
-		status, terminal := dependencyStatus(job.Needs, byJobKey)
-		if !terminal {
-			continue
-		}
-		ctxMap := JobContext(job, run, project, byJobKey)
-		ctxMap["vars"] = vars
-		ctxMap["__job_status"] = status
-		ok, evalErr := expressions.EvaluateCondition(job.IfCondition, ctxMap)
-		if evalErr != nil {
-			_ = o.Store.SetJobSkipped(ctx, job.ID, "if expression error: "+evalErr.Error())
-			o.reportJobStatus(ctx, run, job, "skipped")
-			continue
-		}
-		if !ok {
-			reason := "condition evaluated to false"
-			if job.IfCondition != "" {
-				reason = "if: " + job.IfCondition + " evaluated to false"
-			}
-			_ = o.Store.SetJobSkipped(ctx, job.ID, reason)
-			o.reportJobStatus(ctx, run, job, "skipped")
-			continue
-		}
-		// Environment gate: every environment-named job leaves a deployment
-		// record. A protected environment can refuse the ref, then park the
-		// job until its approvals are in and its wait has elapsed.
-		if job.Environment != "" {
-			env, err := o.Store.EnsureEnvironment(ctx, run.ProjectID, job.Environment)
-			if err != nil {
-				return err
-			}
-			var waitUntil *time.Time
-			if env.Protected && env.WaitMinutes > 0 {
-				t := time.Now().Add(time.Duration(env.WaitMinutes) * time.Minute)
-				waitUntil = &t
-			}
-			if _, derr := o.Store.DeploymentForJob(ctx, job.ID); errors.Is(derr, store.ErrNotFound) {
-				if _, err := o.Store.CreateDeployment(ctx, run.ProjectID, env.ID, run.ID, job.ID,
-					run.Ref, run.SHA, job.EnvironmentURL, waitUntil); err != nil {
-					return err
-				}
-			} else if derr != nil {
-				return derr
-			}
-			if env.Protected && !store.BranchAllowed(env.BranchPolicy, env.BranchPatterns, run.Ref) {
-				reason := fmt.Sprintf("branch %s is not allowed to deploy to %s", store.RefBranch(run.Ref), env.Name)
-				if err := o.Store.FailDeployment(ctx, job.ID, reason); err != nil {
-					return err
-				}
-				continue
-			}
-			if env.Holds() {
-				if err := o.Store.SetJobWaitingApproval(ctx, job.ID); err != nil {
-					return err
-				}
-				o.reportJobStatus(ctx, run, job, "queued")
-				continue
-			}
-		}
-		if err := o.Store.SetJobQueued(ctx, job.ID); err != nil {
+	// Advance to fixpoint (#372): a skipped or failed job can terminal-gate
+	// its dependents in this same call, and evaluating a stale snapshot
+	// would leave each DAG hop parked until the next finish event or
+	// 2s tick. Re-read the job list after every transition pass. The
+	// len+1 bound guarantees termination — each pass either settles at
+	// least one waiting job or exits.
+	for pass := 0; pass <= len(jobs); pass++ {
+		jobs, err = o.Store.JobsForRunNoSteps(ctx, runID)
+		if err != nil {
 			return err
 		}
-		o.reportJobStatus(ctx, run, job, "queued")
+		byJobKey := map[string][]store.Job{}
+		for _, j := range jobs {
+			byJobKey[j.JobKey] = append(byJobKey[j.JobKey], j)
+		}
+		changed := false
+		for _, job := range jobs {
+			if job.Status != "waiting" {
+				continue
+			}
+			status, terminal := dependencyStatus(job.Needs, byJobKey)
+			if !terminal {
+				continue
+			}
+			ctxMap := JobContext(job, run, project, byJobKey)
+			ctxMap["vars"] = vars
+			ctxMap["__job_status"] = status
+			ok, evalErr := expressions.EvaluateCondition(job.IfCondition, ctxMap)
+			if evalErr != nil {
+				_ = o.Store.SetJobSkipped(ctx, job.ID, "if expression error: "+evalErr.Error())
+				o.reportJobStatus(ctx, run, job, "skipped")
+				changed = true
+				continue
+			}
+			if !ok {
+				reason := "condition evaluated to false"
+				if job.IfCondition != "" {
+					reason = "if: " + job.IfCondition + " evaluated to false"
+				}
+				_ = o.Store.SetJobSkipped(ctx, job.ID, reason)
+				o.reportJobStatus(ctx, run, job, "skipped")
+				changed = true
+				continue
+			}
+			// Environment gate: every environment-named job leaves a deployment
+			// record. A protected environment can refuse the ref, then park the
+			// job until its approvals are in and its wait has elapsed.
+			if job.Environment != "" {
+				env, err := o.Store.EnsureEnvironment(ctx, run.ProjectID, job.Environment)
+				if err != nil {
+					return err
+				}
+				var waitUntil *time.Time
+				if env.Protected && env.WaitMinutes > 0 {
+					t := time.Now().Add(time.Duration(env.WaitMinutes) * time.Minute)
+					waitUntil = &t
+				}
+				if _, derr := o.Store.DeploymentForJob(ctx, job.ID); errors.Is(derr, store.ErrNotFound) {
+					if _, err := o.Store.CreateDeployment(ctx, run.ProjectID, env.ID, run.ID, job.ID,
+						run.Ref, run.SHA, job.EnvironmentURL, waitUntil); err != nil {
+						return err
+					}
+				} else if derr != nil {
+					return derr
+				}
+				if env.Protected && !store.BranchAllowed(env.BranchPolicy, env.BranchPatterns, run.Ref) {
+					reason := fmt.Sprintf("branch %s is not allowed to deploy to %s", store.RefBranch(run.Ref), env.Name)
+					if err := o.Store.FailDeployment(ctx, job.ID, reason); err != nil {
+						return err
+					}
+					continue
+				}
+				if env.Holds() {
+					if err := o.Store.SetJobWaitingApproval(ctx, job.ID); err != nil {
+						return err
+					}
+					o.reportJobStatus(ctx, run, job, "queued")
+					changed = true
+					continue
+				}
+			}
+			if err := o.Store.SetJobQueued(ctx, job.ID); err != nil {
+				return err
+			}
+			o.reportJobStatus(ctx, run, job, "queued")
+			changed = true
+		}
+		if !changed {
+			break
+		}
 	}
 
 	// Fail-fast: a failed matrix member cancels its still-pending siblings.
