@@ -634,7 +634,15 @@ func (e *executor) startContainer(ctx context.Context) error {
 	// job's localhost can reach it — the VM-runner model GitHub-hosted jobs
 	// get for free. Untrusted jobs keep the isolated bridge.
 	hostNet := e.privileged()
-	if hostNet {
+	if e.serviceBridgeJob() {
+		// Privileged + services: per-job bridge so ported services share
+		// the job netns instead of serializing on hostPortLocks (#372).
+		// host-gateway keeps step-level `docker run -p` (which binds the
+		// daemon's host netns) reachable as host.docker.internal:port.
+		hostNet = false
+		args = append(args, "--network", e.serviceNet(),
+			"--add-host", "host.docker.internal:host-gateway")
+	} else if hostNet {
 		args = append(args, "--network", "host")
 	} else if e.egressRestricted() {
 		args = append(args, "--network", e.egressNet())
