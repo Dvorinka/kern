@@ -199,7 +199,7 @@ func (c *cli) pullArtifacts(ctx context.Context, w io.Writer, runID, dir string)
 	var out struct {
 		Artifacts []artifact `json:"artifacts"`
 	}
-	if err := c.api().get(ctx, "/artifacts", url.Values{"limit": {"500"}}, &out); err != nil {
+	if err := c.api().get(ctx, "/artifacts", url.Values{"limit": {"500"}, "run_id": {runID}}, &out); err != nil {
 		return err
 	}
 	mine := []artifact{}
@@ -216,7 +216,12 @@ func (c *cli) pullArtifacts(ctx context.Context, w io.Writer, runID, dir string)
 		return err
 	}
 	for _, a := range mine {
-		path := filepath.Join(dir, a.Name+".tar.gz")
+		// Artifact names are server-controlled; keep the download inside dir.
+		name := filepath.Base(a.Name)
+		if name == "." || name == string(filepath.Separator) {
+			name = "artifact"
+		}
+		path := filepath.Join(dir, name+".tar.gz")
 		fh, err := os.Create(path)
 		if err != nil {
 			return err
@@ -238,7 +243,7 @@ func (c *cli) pullArtifacts(ctx context.Context, w io.Writer, runID, dir string)
 //
 // The digest covers each entry's path and content (or symlink target), so it
 // is stable across runs even though tar metadata like mtimes is not.
-func bundleDir(dir string) (string, int, string, error) {
+func bundleDir(dir string) (bundlePath string, fileCount int, digestHex string, err error) {
 	entries, err := listBundleFiles(dir)
 	if err != nil {
 		return "", 0, "", err
@@ -247,6 +252,13 @@ func bundleDir(dir string) (string, int, string, error) {
 	if err != nil {
 		return "", 0, "", err
 	}
+	// Error returns never hand the path to the caller — don't leak the
+	// temp archive on pack failures.
+	defer func() {
+		if err != nil {
+			os.Remove(tmp.Name())
+		}
+	}()
 	digest := sha256.New()
 	gz := gzip.NewWriter(tmp)
 	tw := tar.NewWriter(gz)
