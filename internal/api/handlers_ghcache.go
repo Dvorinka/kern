@@ -54,9 +54,13 @@ type ghUpload struct {
 	mu      sync.Mutex // serializes PATCH+commit against concurrent chunks (#369)
 }
 
-// ghCacheState tracks pending uploads. Single-process is enough: the API
-// leader serves runner traffic and a restart only orphans temp files,
-// which the startup sweep reclaims.
+// ghCacheState tracks pending uploads for the chunked GHA-protocol
+// endpoints (external actions/cache clients). Single-process by design:
+// kern runners use the native /cache/:key paths, which are fully
+// stateless on S3 backends via presigned PUTs — this chunked surface is
+// the only node-local remainder, and a restart just orphans temp files
+// the startup sweep reclaims. Multi-replica API deployments should pin
+// runner traffic to the leader or move external clients to presign.
 type ghCacheState struct {
 	mu      sync.Mutex
 	seq     atomic.Int64
