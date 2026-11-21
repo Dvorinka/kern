@@ -44,7 +44,9 @@ func (c *cli) cmdInstall(ctx context.Context, args []string) error {
 			return fmt.Errorf("aborted")
 		}
 	}
-	server := opts["server"]
+	// extractGlobals already consumed --server into c.server; opts covers
+	// values passed after a literal `--` terminator.
+	server := first(opts["server"], c.server)
 	if server == "" {
 		server = c.cfg.Server
 	}
@@ -100,13 +102,16 @@ func (c *cli) cmdLogin(ctx context.Context, args []string) error {
 	c.cfg.Server = c.server
 	c.cfg.Token = out.Token
 	c.cfg.TokenID = out.Record.ID
-	if v := opts["project"]; v != "" {
+	// --project arrives via extractGlobals into c.project (flag > env > cfg).
+	if v := first(opts["project"], c.project); v != "" {
 		c.cfg.Project = v
 	}
 	if err := saveConfig(c.cfg); err != nil {
 		return fmt.Errorf("token issued but config write failed: %w", err)
 	}
-	fmt.Printf("logged in as %s; token %s… saved to %s\n", out.User.Email, out.Record.Prefix, configPath())
+	c.orJSON(map[string]any{"email": out.User.Email, "token_prefix": out.Record.Prefix, "config": configPath()}, func() {
+		fmt.Printf("logged in as %s; token %s… saved to %s\n", out.User.Email, out.Record.Prefix, configPath())
+	})
 	return nil
 }
 
@@ -119,7 +124,9 @@ func (c *cli) cmdLogout(ctx context.Context) error {
 	if err := saveConfig(c.cfg); err != nil {
 		return err
 	}
-	fmt.Println("logged out; local credentials cleared")
+	c.orJSON(map[string]any{"ok": true}, func() {
+		fmt.Println("logged out; local credentials cleared")
+	})
 	return nil
 }
 
@@ -214,7 +221,9 @@ func (c *cli) cmdToken(ctx context.Context, args []string) error {
 		if err := c.api().del(ctx, "/auth/tokens/"+id); err != nil {
 			return err
 		}
-		fmt.Println("token deleted")
+		c.orJSON(map[string]any{"deleted": true, "id": id}, func() {
+			fmt.Println("token deleted")
+		})
 	default:
 		return fmt.Errorf("unknown token subcommand %q", args[0])
 	}
@@ -228,25 +237,38 @@ func (c *cli) cmdConfig(args []string) error {
 	keys := map[string]*string{
 		"server": &c.cfg.Server, "token": &c.cfg.Token, "project": &c.cfg.Project,
 	}
+	mask := func(k, v string) string {
+		if k == "token" && len(v) > 12 {
+			return v[:12] + "…"
+		}
+		return v
+	}
 	switch args[0] {
 	case "list", "get":
 		if len(args) == 1 {
-			rows := [][]string{}
-			for k, p := range keys {
-				v := *p
-				if k == "token" && len(v) > 12 {
-					v = v[:12] + "…"
-				}
-				rows = append(rows, []string{k, v})
+			m := map[string]string{
+				"server":  c.cfg.Server,
+				"token":   mask("token", c.cfg.Token),
+				"project": c.cfg.Project,
 			}
-			table([]string{"KEY", "VALUE"}, rows)
+			c.orJSON(m, func() {
+				rows := [][]string{
+					{"project", m["project"]},
+					{"server", m["server"]},
+					{"token", m["token"]},
+				}
+				table([]string{"KEY", "VALUE"}, rows)
+			})
 			return nil
 		}
 		p, ok := keys[args[1]]
 		if !ok {
 			return fmt.Errorf("unknown config key %q", args[1])
 		}
-		fmt.Println(*p)
+		v := mask(args[1], *p)
+		c.orJSON(map[string]string{"key": args[1], "value": v}, func() {
+			fmt.Println(v)
+		})
 	case "set":
 		if len(args) < 3 {
 			return fmt.Errorf("usage: kern config set <key> <value>")
@@ -256,9 +278,15 @@ func (c *cli) cmdConfig(args []string) error {
 			return fmt.Errorf("unknown config key %q", args[1])
 		}
 		*p = args[2]
+		if args[1] == "token" {
+			// A pasted token has no known record id — keeping the old
+			// TokenID would make `kern logout` revoke the wrong credential.
+			c.cfg.TokenID = ""
+		}
 		if err := saveConfig(c.cfg); err != nil {
 			return err
 		}
+		c.orJSON(map[string]any{"ok": true, "key": args[1]}, func() {})
 	case "unset":
 		if len(args) < 2 {
 			return fmt.Errorf("usage: kern config unset <key>")
@@ -271,6 +299,7 @@ func (c *cli) cmdConfig(args []string) error {
 		if err := saveConfig(c.cfg); err != nil {
 			return err
 		}
+		c.orJSON(map[string]any{"ok": true, "key": args[1]}, func() {})
 	default:
 		return fmt.Errorf("unknown config subcommand %q", args[0])
 	}
@@ -301,6 +330,11 @@ func parseFlagsEx(args []string, bools []string, keys ...string) (map[string]str
 	var pos []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
+		if a == "--" {
+			// Terminator: the rest are positional args for the subcommand.
+			pos = append(pos, args[i+1:]...)
+			break
+		}
 		if !strings.HasPrefix(a, "--") {
 			pos = append(pos, a)
 			continue

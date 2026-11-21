@@ -8,6 +8,7 @@ import (
 func TestRunPrefix(t *testing.T) {
 	s, ctx := testStore(t)
 	pid, wid, vid := fixture(t, ctx, s)
+	org, _ := s.FirstOrg(ctx)
 	params := func() CreateRunParams {
 		return CreateRunParams{
 			ProjectID: pid, WorkflowID: wid, WorkflowVersionID: vid,
@@ -19,7 +20,7 @@ func TestRunPrefix(t *testing.T) {
 	// Full id resolves through the uuid path; the 8-char prefix the CLI
 	// prints resolves through RunPrefix.
 	short := run.ID.String()[:8]
-	cands, err := s.RunPrefix(ctx, short)
+	cands, err := s.RunPrefix(ctx, org.ID, short)
 	if err != nil {
 		t.Fatalf("prefix lookup: %v", err)
 	}
@@ -28,14 +29,14 @@ func TestRunPrefix(t *testing.T) {
 	}
 
 	// Longer prefixes still resolve; unknown prefixes return empty.
-	cands, err = s.RunPrefix(ctx, run.ID.String()[:20])
+	cands, err = s.RunPrefix(ctx, org.ID, run.ID.String()[:20])
 	if err != nil || len(cands) != 1 {
 		t.Fatalf("20-char prefix: %v %+v", err, cands)
 	}
 	// A prefix containing no dash can never match id::text past the first
 	// segment — 32 hex chars overflows the first uuid group, so this is
 	// guaranteed empty.
-	cands, err = s.RunPrefix(ctx, strings.Repeat("f", 32))
+	cands, err = s.RunPrefix(ctx, org.ID, strings.Repeat("f", 32))
 	if err != nil {
 		t.Fatalf("impossible prefix: %v", err)
 	}

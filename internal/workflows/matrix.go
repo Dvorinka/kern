@@ -40,12 +40,25 @@ func expandMatrix(job *Job) ([]map[string]any, error) {
 		}
 	}
 
+	const maxMatrixCartesian = 4096
+
 	dimKeys := sortedKeys(dims)
-	combos := []map[string]any{{}}
+	var combos []map[string]any
+	if len(dimKeys) > 0 {
+		combos = []map[string]any{{}}
+	}
 	for _, key := range dimKeys {
-		next := make([]map[string]any, 0, len(combos)*len(dims[key]))
+		vals := dims[key]
+		if len(vals) == 0 {
+			combos = nil
+			break
+		}
+		if len(combos) > maxMatrixCartesian/len(vals) {
+			return nil, fmt.Errorf("matrix Cartesian product exceeds limit (%d)", maxMatrixCartesian)
+		}
+		next := make([]map[string]any, 0, len(combos)*len(vals))
 		for _, combo := range combos {
-			for _, val := range dims[key] {
+			for _, val := range vals {
 				clone := make(map[string]any, len(combo)+1)
 				for k, v := range combo {
 					clone[k] = v
@@ -122,8 +135,11 @@ func matchesSubset(combo, subset map[string]any) bool {
 }
 
 // matchesDimensions reports whether the include entry agrees with combo on every
-// key that is a real matrix dimension.
+// key that is a real matrix dimension. Empty dims (include-only matrix) never match.
 func matchesDimensions(combo, inc map[string]any, dims map[string]bool) bool {
+	if len(dims) == 0 {
+		return false
+	}
 	for k, v := range inc {
 		if !dims[k] {
 			continue

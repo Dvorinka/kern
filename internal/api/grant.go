@@ -201,6 +201,7 @@ func (s *Server) constrainGrant() gin.HandlerFunc {
 // enforceGrantIDs checks run, artifact and step ids on the allowed routes.
 // It returns false when it has already answered the request.
 func (s *Server) enforceGrantIDs(c *gin.Context, path string) bool {
+	user, _ := currentUser(c)
 	switch path {
 	case "/api/v1/runs":
 		slug := c.Query("project")
@@ -227,7 +228,7 @@ func (s *Server) enforceGrantIDs(c *gin.Context, path string) bool {
 	case "/api/v1/runs/:id", "/api/v1/runs/:id/cancel", "/api/v1/runs/:id/rerun":
 		// Full UUIDs and short prefixes. A prefix must be resolved here:
 		// falling through lets the handler serve another project's run.
-		id, ok := s.runIDParam(c)
+		id, ok := s.runIDParam(c, user.OrgID)
 		if !ok {
 			return false
 		}
@@ -250,7 +251,7 @@ func (s *Server) enforceGrantIDs(c *gin.Context, path string) bool {
 		if err != nil {
 			return true
 		}
-		a, err := s.Store.Artifact(c.Request.Context(), id)
+		a, err := s.Store.Artifact(c.Request.Context(), user.OrgID, id)
 		if err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				return true

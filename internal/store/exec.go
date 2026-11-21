@@ -129,6 +129,15 @@ func (s *Store) CloseExecStdin(ctx context.Context, execID uuid.UUID) error {
 	return err
 }
 
+// CancelExec marks a pending or running exec session cancelled so the runner
+// terminates the underlying docker exec process instead of orphaning it.
+func (s *Store) CancelExec(ctx context.Context, execID uuid.UUID) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE exec_requests SET state = 'cancelled', stdin_closed = true, finished_at = now()
+		  WHERE id = $1 AND state IN ('pending', 'running')`, execID)
+	return err
+}
+
 // FailExecsForJob terminates every live exec for a job — called when the
 // job finishes so no session outlives its container.
 func (s *Store) FailExecsForJob(ctx context.Context, jobID uuid.UUID, reason string) error {

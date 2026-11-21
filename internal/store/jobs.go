@@ -45,6 +45,7 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 			-- cannot take work, and among equally busy peers the cooler host
 			-- wins (#310).
 			SELECT r.id, r.labels, r.executor, r.claims_paused, r.cpu_percent,
+				r.concurrency,
 				(SELECT count(*) FROM jobs a
 				 WHERE a.runner_id = r.id AND a.status = 'in_progress') AS load
 			FROM runners r, me
@@ -64,6 +65,10 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 				   AND q.status = 'in_progress') AS running
 			FROM projects p
 			WHERE p.settings->>'max_concurrent_jobs' ~ '^[1-9]\d*$'
+			-- Row lock serializes concurrent claims per capped project —
+			-- without it two claims read the same pre-UPDATE running count
+			-- and overshoot the quota (#372).
+			FOR UPDATE OF p
 		), token_caps AS MATERIALIZED (
 			-- Per-token concurrency quota (#356): a dispatch token carrying
 			-- max_concurrent_jobs may hold only that many in-progress jobs
@@ -76,15 +81,25 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 				   AND q.status = 'in_progress') AS running
 			FROM api_tokens t
 			WHERE t.max_concurrent_jobs > 0
+			FOR UPDATE OF t
 		), candidate AS (
 			SELECT j.id
 			FROM jobs j
 			JOIN workflow_runs r ON r.id = j.run_id
 			CROSS JOIN me
+			-- Tenant boundary: a runner may only ever claim jobs whose
+			-- project belongs to the runner's own org (#368). Without this
+			-- join a foreign runner could claim — and receive secrets for —
+			-- another tenant's jobs.
+			JOIN projects p ON p.id = r.project_id AND p.org_id = me.org_id
 			JOIN fleet me_f ON me_f.id = me.id
 			LEFT JOIN proj_caps cap ON cap.project_id = r.project_id
 			LEFT JOIN token_caps tcap ON tcap.token_id = r.dispatch_token_id
 			WHERE j.status = 'queued'
+			  -- A runner reporting engaged claim gates (disk, memory,
+			  -- overload, updating, retire) must not take work — its own
+			  -- heartbeat may not have landed yet when a queued job races it.
+			  AND (SELECT claims_paused FROM me) = ''
 			  -- Token concurrency quota: same shape as the project cap.
 			  AND (tcap.max_jobs IS NULL OR tcap.running < tcap.max_jobs)
 			  -- Project concurrency quota: a project holding its
@@ -108,7 +123,8 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 				OR r.trust_level IN ('fork', 'pull_request')
 				OR NOT EXISTS (
 					SELECT 1 FROM fleet h
-					WHERE 'kern-docker' = ANY(h.labels)
+					WHERE h.claims_paused = ''
+					  AND 'kern-docker' = ANY(h.labels)
 					  AND j.runs_on <@ (h.labels || ARRAY['self-hosted', 'kern'])
 				)
 			  )
@@ -165,13 +181,22 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 						  AND j.runs_on <@ (h.labels || ARRAY['self-hosted', 'kern'])
 					)
 				  )
+				  -- Slot-aware yield (#372): only a peer with a free worker
+				  -- slot can take this job, and only when its utilization
+				  -- ratio (load/concurrency) is lower — a full 1-slot
+				  -- runner must not suppress a 2/4 peer. Equal ratios fall
+				  -- back to the CPU-margin tiebreak.
+				  AND o.load < o.concurrency
 				  AND (
-					o.load < me_f.load
-					OR (o.load = me_f.load
+					o.load * me_f.concurrency < me_f.load * o.concurrency
+					OR (o.load * me_f.concurrency = me_f.load * o.concurrency
 						AND COALESCE(o.cpu_percent, 100) < COALESCE(me_f.cpu_percent, 100) - $3)
 				  )
 			  )
-			ORDER BY j.priority DESC, j.queued_at
+			-- Longest-pole first within equal priority (#372): jobs whose
+			-- steps historically take longest claim earliest, shrinking the
+			-- run's makespan tail; zero-estimate jobs keep FIFO order.
+			ORDER BY j.priority DESC, j.est_seconds DESC, j.queued_at
 			FOR UPDATE OF j SKIP LOCKED
 			LIMIT 1
 		), claimed AS (
@@ -212,7 +237,7 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 		       r.id, r.project_id, r.workflow_id, r.workflow_version_id, r.run_number, r.event,
 		       r.ref, r.sha, r.commit_message, r.actor, r.status, r.conclusion, r.trust_level,
 		       r.source, r.concurrency_group, r.started_at, r.completed_at, r.created_at,
-		       w.name, w.path, p.slug, p.name,
+		       w.name, w.path, p.slug, p.name, p.org_id,
 		       v.content
 		FROM jobs j
 		JOIN workflow_runs r ON r.id = j.run_id
@@ -232,7 +257,7 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 			&out.Run.Conclusion, &out.Run.TrustLevel, &out.Run.Source, &out.Run.ConcurrencyGroup,
 			&out.Run.StartedAt, &out.Run.CompletedAt, &out.Run.CreatedAt,
 			&out.Run.WorkflowName, &out.Run.WorkflowPath, &out.Run.ProjectSlug, &out.Run.ProjectName,
-			&out.WorkflowContent)
+			&out.Run.OrgID, &out.WorkflowContent)
 	if err != nil {
 		return nil, fmt.Errorf("load claimed job: %w", err)
 	}
@@ -302,9 +327,10 @@ func (s *Store) Heartbeat(ctx context.Context, runnerID uuid.UUID, m HostMetrics
 			disk_bytes = COALESCE($6, disk_bytes),
 			claims_paused = $7,
 			labels = COALESCE(NULLIF($8, '{}'::text[]), labels),
-			missing_tools = COALESCE($9, missing_tools)
+			missing_tools = COALESCE($9, missing_tools),
+			concurrency = GREATEST(COALESCE($10, concurrency), 1)
 		WHERE id = $1`, runnerID, m.CPUPercent, m.MemUsedBytes, m.DiskFreeBytes,
-		m.Version, m.DiskBytes, m.ClaimsPaused, m.Labels, missingTools)
+		m.Version, m.DiskBytes, m.ClaimsPaused, m.Labels, missingTools, m.Concurrency)
 	return err
 }
 
@@ -339,11 +365,17 @@ func (s *Store) SetStepSummary(ctx context.Context, jobID uuid.UUID, number int,
 }
 
 // AppendStepLog records a log chunk size and reference. Chunks themselves live in blob storage.
+// A pg_notify wakes live log followers so they do not have to poll (#374).
 func (s *Store) AppendStepLog(ctx context.Context, jobID uuid.UUID, number int, ref string, size int) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE steps SET log_ref = $3, log_bytes = log_bytes + $4
 		WHERE job_id = $1 AND number = $2`, jobID, number, ref, size)
-	return err
+	if err != nil {
+		return err
+	}
+	_, _ = s.pool.Exec(ctx, `SELECT pg_notify('kern_step_log', $1)`,
+		fmt.Sprintf("%s:%d", jobID, number))
+	return nil
 }
 
 func (s *Store) StepLogRef(ctx context.Context, jobID uuid.UUID, number int) (string, int64, error) {
@@ -460,8 +492,9 @@ func (s *Store) RequeueJob(ctx context.Context, runnerID, jobID uuid.UUID, reaso
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE steps SET status = 'queued', conclusion = '', started_at = NULL,
-			completed_at = NULL, exit_code = NULL
-		WHERE job_id = $1 AND status <> 'completed'`, jobID); err != nil {
+			completed_at = NULL, exit_code = NULL, log_ref = '', log_bytes = 0,
+			diagnosis = NULL, annotations = '[]'::jsonb, summary_ref = ''
+		WHERE job_id = $1`, jobID); err != nil {
 		return false, err
 	}
 	// A requeued job returns its deployment to queued, matching lease reaping.
@@ -518,10 +551,19 @@ func (s *Store) ReapExpiredLeases(ctx context.Context, maxAttempts int) ([]uuid.
 	for _, jobID := range jobIDs {
 		_, _ = s.pool.Exec(ctx, `
 			UPDATE job_leases SET released_at = now() WHERE job_id = $1 AND released_at IS NULL`, jobID)
+		// Reset all steps cleanly for requeued jobs (clearing attempt-1 logs
+		// and diagnoses); jobs that exhausted maxAttempts keep their terminal step data.
 		_, _ = s.pool.Exec(ctx, `
-			UPDATE steps SET status = 'queued', conclusion = '', started_at = NULL,
-				completed_at = NULL, exit_code = NULL
-			WHERE job_id = $1 AND status <> 'completed'`, jobID)
+			UPDATE steps s SET status = 'queued', conclusion = '', started_at = NULL,
+				completed_at = NULL, exit_code = NULL, log_ref = '', log_bytes = 0,
+				diagnosis = NULL, annotations = '[]'::jsonb, summary_ref = ''
+			FROM jobs j
+			WHERE s.job_id = $1 AND j.id = s.job_id AND j.status = 'queued'`, jobID)
+		_, _ = s.pool.Exec(ctx, `
+			UPDATE steps s SET status = 'cancelled', conclusion = 'cancelled', completed_at = now()
+			FROM jobs j
+			WHERE s.job_id = $1 AND j.id = s.job_id AND j.status = 'completed'
+			  AND s.status IN ('queued', 'running')`, jobID)
 		// Requeued jobs return their deployment to queued; jobs that exhausted
 		// attempts fail it.
 		_, _ = s.pool.Exec(ctx, `
@@ -543,11 +585,16 @@ func (s *Store) ReapExpiredLeases(ctx context.Context, maxAttempts int) ([]uuid.
 // enforces the same timeout via context, so this only fires when a runner
 // keeps renewing the lease without enforcing it.
 func (s *Store) TimeoutOverdueJobs(ctx context.Context) (int64, error) {
-	rows, err := s.pool.Query(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `
 		UPDATE jobs SET status = 'completed', conclusion = 'failure',
 			classification = 'timeout',
 			error = 'job exceeded timeout-minutes', completed_at = now(),
-			lease_expires_at = NULL
+			runner_id = NULL, lease_expires_at = NULL
 		WHERE status = 'in_progress'
 		  AND started_at IS NOT NULL
 		  AND started_at + make_interval(secs => timeout_seconds) < now()
@@ -568,7 +615,26 @@ func (s *Store) TimeoutOverdueJobs(ctx context.Context) (int64, error) {
 	if err := rows.Err(); err != nil {
 		return 0, err
 	}
-	s.failDeploymentsForJobs(ctx, ids)
+	if len(ids) > 0 {
+		if _, err := tx.Exec(ctx, `
+			UPDATE job_leases SET released_at = now()
+			WHERE released_at IS NULL AND job_id = ANY($1)`, ids); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE steps SET status = 'cancelled', conclusion = 'cancelled', completed_at = now()
+			WHERE job_id = ANY($1) AND status IN ('queued', 'running')`, ids); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE deployments SET status = 'failure', completed_at = now()
+			WHERE job_id = ANY($1) AND status IN ('queued', 'in_progress')`, ids); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
 	return int64(len(ids)), nil
 }
 
@@ -745,7 +811,7 @@ type UnmatchedJob struct {
 // queueing, not starvation. PausedMatches counts runners that DO match on
 // labels but sit behind an engaged claim gate, so callers can phrase the
 // reason honestly ("paused" vs "no runner").
-func (s *Store) UnmatchedQueuedJobs(ctx context.Context) ([]UnmatchedJob, error) {
+func (s *Store) UnmatchedQueuedJobs(ctx context.Context, orgID uuid.UUID) ([]UnmatchedJob, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT j.id, j.run_id, j.runs_on,
 			(SELECT count(*) FROM runners rn
@@ -758,7 +824,8 @@ func (s *Store) UnmatchedQueuedJobs(ctx context.Context) ([]UnmatchedJob, error)
 		FROM jobs j
 		JOIN workflow_runs r ON r.id = j.run_id
 		JOIN projects p ON p.id = r.project_id
-		WHERE j.status = 'queued'
+		WHERE p.org_id = $1
+		  AND j.status = 'queued'
 		  AND r.status IN ('queued', 'in_progress')
 		  AND NOT EXISTS (
 			SELECT 1 FROM runners rn
@@ -769,7 +836,7 @@ func (s *Store) UnmatchedQueuedJobs(ctx context.Context) ([]UnmatchedJob, error)
 			  AND (rn.executor <> 'host' OR r.trust_level NOT IN ('fork', 'pull_request'))
 			  AND rn.claims_paused = ''
 		  )
-		ORDER BY j.queued_at`)
+		ORDER BY j.queued_at`, orgID)
 	if err != nil {
 		return nil, fmt.Errorf("unmatched queued jobs: %w", err)
 	}
@@ -788,18 +855,19 @@ func (s *Store) UnmatchedQueuedJobs(ctx context.Context) ([]UnmatchedJob, error)
 // ConcurrencyCappedJobs lists queued jobs whose project holds its
 // max_concurrent_jobs in-progress limit — they wait on their own
 // project's quota, not on runner availability or labels.
-func (s *Store) ConcurrencyCappedJobs(ctx context.Context) ([]uuid.UUID, error) {
+func (s *Store) ConcurrencyCappedJobs(ctx context.Context, orgID uuid.UUID) ([]uuid.UUID, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT j.id FROM jobs j
 		JOIN workflow_runs r ON r.id = j.run_id
 		JOIN projects p ON p.id = r.project_id
-		WHERE j.status = 'queued'
+		WHERE p.org_id = $1
+		  AND j.status = 'queued'
 		  AND r.status IN ('queued', 'in_progress')
 		  AND p.settings->>'max_concurrent_jobs' ~ '^[1-9]\d*$'
 		  AND (SELECT count(*) FROM jobs q
 		       JOIN workflow_runs qr ON qr.id = q.run_id
 		       WHERE qr.project_id = p.id AND q.status = 'in_progress')
-		      >= (p.settings->>'max_concurrent_jobs')::int`)
+		      >= (p.settings->>'max_concurrent_jobs')::int`, orgID)
 	if err != nil {
 		return nil, fmt.Errorf("concurrency capped jobs: %w", err)
 	}

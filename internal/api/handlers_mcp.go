@@ -504,7 +504,7 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) *rpcResponse {
 		}
 		out = projects
 	case "kern_list_runs":
-		f := store.RunFilter{Status: mcpArgStringOr(call.Arguments, "status"), Limit: mcpArgInt(call.Arguments, "limit", 20)}
+		f := store.RunFilter{OrgID: user.OrgID, Status: mcpArgStringOr(call.Arguments, "status"), Limit: mcpArgInt(call.Arguments, "limit", 20)}
 		if slug := mcpArgStringOr(call.Arguments, "project"); slug != "" {
 			var p store.Project
 			p, err = s.Store.Project(ctx, user.OrgID, slug)
@@ -518,13 +518,16 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) *rpcResponse {
 			out = runs
 		}
 	case "kern_get_run":
-		id, perr := uuid.Parse(mcpArgStringOr(call.Arguments, "run_id"))
+		id, perr := s.mcpResolveRunID(c, mcpArgStringOr(call.Arguments, "run_id"))
 		if perr != nil {
-			err = fmt.Errorf("run_id must be a UUID")
+			err = perr
 			break
 		}
 		var run store.Run
 		run, err = s.Store.Run(ctx, id)
+		if err == nil && run.OrgID != user.OrgID {
+			err = fmt.Errorf("run not found")
+		}
 		if err == nil {
 			var jobs []store.Job
 			jobs, err = s.Store.JobsForRun(ctx, run.ID)
@@ -532,23 +535,23 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) *rpcResponse {
 				store.Job
 				Steps []store.Step `json:"steps"`
 			}
+			jobIDs := make([]uuid.UUID, len(jobs))
+			for i := range jobs {
+				jobIDs[i] = jobs[i].ID
+			}
+			stepsByJob, _ := s.Store.StepsForJobs(ctx, jobIDs)
 			views := []jobView{}
 			for _, j := range jobs {
-				var steps []store.Step
-				steps, err = s.Store.StepsForJob(ctx, j.ID)
-				if err != nil {
-					break
-				}
-				views = append(views, jobView{Job: j, Steps: steps})
+				views = append(views, jobView{Job: j, Steps: stepsByJob[j.ID]})
 			}
 			if err == nil {
 				out = map[string]any{"run": run, "jobs": views}
 			}
 		}
 	case "kern_step_log":
-		jobID, perr := uuid.Parse(mcpArgStringOr(call.Arguments, "job_id"))
+		jobID, perr := s.mcpResolveJobID(ctx, user.OrgID, mcpArgStringOr(call.Arguments, "job_id"))
 		if perr != nil {
-			err = fmt.Errorf("job_id must be a UUID")
+			err = perr
 			break
 		}
 		n := mcpArgInt(call.Arguments, "step", 0)
@@ -556,9 +559,21 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) *rpcResponse {
 		if tail <= 0 {
 			tail = 8192
 		}
+		// The job must belong to the caller's org before its log is read.
+		var runID uuid.UUID
+		runID, _, err = s.Store.JobRunID(ctx, jobID)
+		if err == nil {
+			var run store.Run
+			run, err = s.Store.Run(ctx, runID)
+			if err == nil && run.OrgID != user.OrgID {
+				err = fmt.Errorf("job not found")
+			}
+		}
 		var ref string
 		var size int64
-		ref, size, err = s.Store.StepLogRef(ctx, jobID, n)
+		if err == nil {
+			ref, size, err = s.Store.StepLogRef(ctx, jobID, n)
+		}
 		if err == nil && ref == "" {
 			// Skipped/cancelled steps never posted a log — report the
 			// conclusion as the log body instead of an isError result.
@@ -604,14 +619,14 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) *rpcResponse {
 				store.Runner
 				ActiveJobs []store.Job `json:"active_jobs"`
 			}
+			runnerIDs := make([]uuid.UUID, len(runners))
+			for i := range runners {
+				runnerIDs[i] = runners[i].ID
+			}
+			jobsByRunner, _ := s.Store.RunnerActiveJobsBatch(ctx, runnerIDs)
 			views := []runnerView{}
 			for _, r := range runners {
-				var jobs []store.Job
-				jobs, err = s.Store.RunnerActiveJobs(ctx, r.ID)
-				if err != nil {
-					break
-				}
-				views = append(views, runnerView{Runner: r, ActiveJobs: jobs})
+				views = append(views, runnerView{Runner: r, ActiveJobs: jobsByRunner[r.ID]})
 			}
 			if err == nil {
 				out = views
@@ -745,12 +760,15 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) *rpcResponse {
 			err = fmt.Errorf("token requires the write scope")
 			break
 		}
-		id, perr := uuid.Parse(mcpArgStringOr(call.Arguments, "run_id"))
+		id, perr := s.mcpResolveRunID(c, mcpArgStringOr(call.Arguments, "run_id"))
 		if perr != nil {
-			err = fmt.Errorf("run_id must be a UUID")
+			err = perr
 			break
 		}
 		orig, rerr := s.Store.Run(ctx, id)
+		if rerr == nil && orig.OrgID != user.OrgID {
+			rerr = fmt.Errorf("run not found")
+		}
 		if rerr != nil {
 			err = rerr
 			break
@@ -880,9 +898,18 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) *rpcResponse {
 			err = fmt.Errorf("token requires the %s scope", need)
 			break
 		}
-		id, perr := uuid.Parse(mcpArgStringOr(call.Arguments, "run_id"))
+		id, perr := s.mcpResolveRunID(c, mcpArgStringOr(call.Arguments, "run_id"))
 		if perr != nil {
-			err = fmt.Errorf("run_id must be a UUID")
+			err = perr
+			break
+		}
+		// Tenant check before any mutation: a foreign run id must look
+		// identical to a missing one (#368).
+		if r, rerr := s.Store.Run(ctx, id); rerr != nil {
+			err = rerr
+			break
+		} else if r.OrgID != user.OrgID {
+			err = fmt.Errorf("run not found")
 			break
 		}
 		if call.Name == "kern_approve_run" {
@@ -972,7 +999,7 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) *rpcResponse {
 			break
 		}
 		var fix []string
-		fix, err = s.Store.ApproveRemediation(ctx, jobID, step)
+		fix, err = s.Store.ApproveRemediation(ctx, user.OrgID, jobID, step)
 		if err == nil {
 			s.Store.AuditMeta(ctx, user.OrgID, &user.ID, "remediation.approve",
 				fmt.Sprintf("job %s step %d", jobID, step), map[string]any{"fix": fix})
@@ -986,7 +1013,7 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) *rpcResponse {
 		}
 		var dep store.Deployment
 		var released bool
-		dep, released, err = s.Store.ApproveDeployment(ctx, jobID, user.ID, user.Email, user.Role)
+		dep, released, err = s.Store.ApproveDeployment(ctx, user.OrgID, jobID, user.ID, user.Email, user.Role)
 		if err == nil {
 			s.Store.Audit(ctx, user.OrgID, &user.ID, "deployment.approve",
 				dep.EnvironmentName+" job "+jobID.String())
@@ -1386,7 +1413,7 @@ func (s *Server) mcpDoctor(ctx context.Context, user store.User, project string)
 	out["uptime_seconds"] = int(time.Since(s.Started).Seconds())
 	out["version"] = version.Version
 
-	ov, err := s.Store.Overview(ctx)
+	ov, err := s.Store.Overview(ctx, user.OrgID)
 	if err != nil {
 		return nil, err
 	}
@@ -1419,7 +1446,7 @@ func (s *Server) mcpDoctor(ctx context.Context, user store.User, project string)
 		if err != nil {
 			return nil, err
 		}
-		counts, err := s.Store.RunCounts(ctx, &p.ID, false)
+		counts, err := s.Store.RunCounts(ctx, user.OrgID, &p.ID, false)
 		if err != nil {
 			return nil, err
 		}
@@ -1449,11 +1476,11 @@ func (s *Server) mcpPredictRun(ctx context.Context, user store.User, project, wo
 	if err != nil {
 		return nil, err
 	}
-	counts, err := s.Store.RunCounts(ctx, &p.ID, false)
+	counts, err := s.Store.RunCounts(ctx, user.OrgID, &p.ID, false)
 	if err != nil {
 		return nil, err
 	}
-	ov, err := s.Store.Overview(ctx)
+	ov, err := s.Store.Overview(ctx, user.OrgID)
 	if err != nil {
 		return nil, err
 	}
@@ -1483,11 +1510,11 @@ func (s *Server) mcpOptimizeProject(ctx context.Context, user store.User, projec
 	if err != nil {
 		return nil, err
 	}
-	counts, err := s.Store.RunCounts(ctx, &p.ID, false)
+	counts, err := s.Store.RunCounts(ctx, user.OrgID, &p.ID, false)
 	if err != nil {
 		return nil, err
 	}
-	ov, err := s.Store.Overview(ctx)
+	ov, err := s.Store.Overview(ctx, user.OrgID)
 	if err != nil {
 		return nil, err
 	}
@@ -1643,4 +1670,54 @@ func (s *Server) mcpExecJob(ctx context.Context, user store.User, jobID uuid.UUI
 		"output":    out,
 		"log_size":  size,
 	}, nil
+}
+func (s *Server) mcpResolveRunID(c *gin.Context, raw string) (uuid.UUID, error) {
+	exact, prefix, ok := store.ParseIDPrefix(raw)
+	if !ok {
+		return uuid.Nil, fmt.Errorf("run_id must be a UUID or a 4+ char hex prefix")
+	}
+	if prefix == "" {
+		return exact, nil
+	}
+	user, _ := currentUser(c)
+	cands, err := s.Store.RunPrefix(c.Request.Context(), user.OrgID, prefix)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if projects := tokenProjects(c); len(projects) > 0 {
+		cands, err = s.runsInGrant(c, cands, projects)
+		if err != nil {
+			return uuid.Nil, err
+		}
+	}
+	switch len(cands) {
+	case 0:
+		return uuid.Nil, fmt.Errorf("run %q not found", raw)
+	case 1:
+		return cands[0].ID, nil
+	default:
+		return uuid.Nil, fmt.Errorf("run_id prefix %q is ambiguous (%d matches) — pass more characters", raw, len(cands))
+	}
+}
+
+func (s *Server) mcpResolveJobID(ctx context.Context, orgID uuid.UUID, raw string) (uuid.UUID, error) {
+	exact, prefix, ok := store.ParseIDPrefix(raw)
+	if !ok {
+		return uuid.Nil, fmt.Errorf("job_id must be a UUID or a 4+ char hex prefix")
+	}
+	if prefix == "" {
+		return exact, nil
+	}
+	cands, err := s.Store.JobPrefix(ctx, orgID, prefix)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	switch len(cands) {
+	case 0:
+		return uuid.Nil, fmt.Errorf("job %q not found", raw)
+	case 1:
+		return cands[0], nil
+	default:
+		return uuid.Nil, fmt.Errorf("job_id prefix %q is ambiguous (%d matches) — pass more characters", raw, len(cands))
+	}
 }

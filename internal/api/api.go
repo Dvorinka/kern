@@ -16,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 
 	"github.com/dvorinka/kern/internal/blobs"
 	"github.com/dvorinka/kern/internal/config"
@@ -47,6 +48,29 @@ type Server struct {
 	geoSelfMu sync.Mutex                // serializes the control-plane self-lookup
 	metrics   *kernMetrics
 	ghCache   *ghCacheState
+	// maskers caches each running job's log masker — building one costs 4-6
+	// queries plus AES-GCM per secret, and log chunks arrive every second
+	// (#374). Entries expire in 60s and are evicted on job finish.
+	maskers sync.Map // jobID (uuid) -> maskerCacheEntry
+
+	// webhookQueue feeds the background delivery worker. Persisted rows are
+	// processed off-request so GitHub's 10s ack deadline cannot cancel a
+	// delivery mid-flight (#374); the sweeper reclaims anything dropped.
+	webhookQueue chan webhookTask
+
+	// stepLogBus fans kern_step_log notifications out to SSE followers (#374).
+	stepLogBus *logBus
+}
+
+type webhookTask struct {
+	delivery, event string
+	body            []byte
+	matchedOrg      *uuid.UUID
+}
+
+type maskerCacheEntry struct {
+	m   *secrets.Masker
+	exp time.Time
 }
 
 func New(cfg *config.Config, st *store.Store, orch *orchestrator.Orchestrator, blobStore blobs.Store,
@@ -69,10 +93,22 @@ func New(cfg *config.Config, st *store.Store, orch *orchestrator.Orchestrator, b
 		Geo:    geoip.New(cfg.GeoIPURL),
 		ghApps: make(map[uuid.UUID]*github.App), ghRepoApp: make(map[string]uuid.UUID),
 		metrics: newKernMetrics(), ghCache: newGHCacheState(),
+		webhookQueue: make(chan webhookTask, 128),
+		stepLogBus:   newLogBus(),
 	}
 	s.wireCommitStatus()
 	s.Engine = s.buildRouter()
 	s.sweepGHCacheUploads()
+	go s.webhookWorker()
+	go s.sweepStaleWebhooks()
+	go s.listenStepLog()
+	go func() {
+		// Running only at startup leaked handles and /tmp dirs for every
+		// abandoned upload in long-lived processes (#369).
+		for range time.Tick(10 * time.Minute) {
+			s.sweepGHCacheUploads()
+		}
+	}()
 	return s
 }
 
@@ -167,7 +203,7 @@ func (s *Server) buildRouter() *gin.Engine {
 		gin.SetMode(gin.ReleaseMode)
 	}
 	r := gin.New()
-	r.Use(gin.Recovery(), s.requestLogger(), s.securityHeaders(), s.cors(), s.httpMetrics())
+	r.Use(gin.Recovery(), otelgin.Middleware("kern"), s.requestLogger(), s.securityHeaders(), s.cors(), s.httpMetrics())
 	r.MaxMultipartMemory = 8 << 20
 
 	r.GET("/healthz", s.health)
@@ -279,6 +315,7 @@ func (s *Server) buildRouter() *gin.Engine {
 		admin.POST("/jobs/:id/exec", s.createExec)
 		auth.GET("/exec/:id", s.getExec)
 		admin.POST("/exec/:id/stdin", s.postExecStdin)
+		admin.DELETE("/exec/:id", s.cancelExec)
 
 		auth.GET("/secrets", s.listSecrets)
 		admin.PUT("/secrets/:name", s.putSecret)
