@@ -610,6 +610,9 @@ func (e *executor) startContainer(ctx context.Context) error {
 	if e.cfg.Concurrency <= 1 {
 		e.preJobContainers = containerIDs(ctx)
 	}
+	if e.privileged() {
+		e.ensureBuildxBuilder(ctx)
+	}
 	workRoot := e.workRoot()
 	// GITHUB_EVENT_PATH: third-party actions read github.event.* from this
 	// file. A write failure degrades to today's behaviour (no payload), so
@@ -901,6 +904,14 @@ func (e *executor) jobEnv() map[string]string {
 		"GIT_CONFIG_COUNT":   "1",
 		"GIT_CONFIG_KEY_0":   "safe.directory",
 		"GIT_CONFIG_VALUE_0": "*",
+	}
+	if e.privileged() {
+		// Persistent BuildKit: jobs reuse one docker-container builder and
+		// its cache instead of paying for an isolated buildx_* builder per
+		// job (#372). Only privileged tiers carry the docker socket these
+		// variables can reach.
+		env["DOCKER_BUILDKIT"] = "1"
+		env["BUILDX_BUILDER"] = "kern"
 	}
 	// Host steps inherit os.Environ (hostStepCmd) plus PATH_LINES; a fixed
 	// PATH here would drop toolchain dirs the runner image doesn't control
@@ -1446,6 +1457,28 @@ func seedDockerCLI(dir string) (string, error) {
 func dirExists(p string) bool {
 	st, err := os.Stat(p)
 	return err == nil && st.IsDir()
+}
+
+var buildxOnce sync.Once
+
+// ensureBuildxBuilder creates the runner's persistent docker-container
+// builder once per process — every job then shares it (and its BuildKit
+// cache) instead of provisioning isolated buildx_* builders (#372). A
+// missing buildx plugin on the host just skips the shared builder;
+// jobs fall back to their own builders exactly as before.
+func (e *executor) ensureBuildxBuilder(ctx context.Context) {
+	buildxOnce.Do(func() {
+		if err := exec.CommandContext(ctx, "docker", "buildx", "version").Run(); err != nil {
+			return
+		}
+		if err := exec.CommandContext(ctx, "docker", "buildx", "inspect", "kern").Run(); err == nil {
+			return
+		}
+		if err := exec.CommandContext(ctx, "docker", "buildx", "create",
+			"--name", "kern", "--driver", "docker-container").Run(); err != nil {
+			e.log.Warn("shared buildx builder creation failed", zap.Error(err))
+		}
+	})
 }
 
 func pathExists(p string) bool {
