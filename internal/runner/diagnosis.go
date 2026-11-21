@@ -224,6 +224,15 @@ func diagnose(step StepSpec, exitCode int, logTail, stepErr, jobMemory string, d
 		strings.Contains(lower, "econnreset") ||
 		strings.Contains(lower, "esockettimedout") ||
 		strings.Contains(lower, "etimedout") ||
+		strings.Contains(lower, "eai_again") ||
+		strings.Contains(lower, "epipe") ||
+		strings.Contains(lower, "socket hang up") ||
+		strings.Contains(lower, "unexpected eof") ||
+		strings.Contains(lower, "early eof") ||
+		strings.Contains(lower, "remote end hung up") ||
+		strings.Contains(lower, "hash sum mismatch") ||
+		strings.Contains(lower, "rpc failed") ||
+		strings.Contains(lower, "toomanyrequests") ||
 		strings.Contains(lower, "read timed out") ||
 		strings.Contains(lower, "connect timed out") ||
 		strings.Contains(lower, "too many requests") ||
