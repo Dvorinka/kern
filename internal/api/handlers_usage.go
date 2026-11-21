@@ -62,7 +62,7 @@ func (s *Server) notifications(c *gin.Context) {
 		return
 	}
 	out = append(out, failed...)
-	whf, err := s.Store.WebhookFailures(ctx, 24*time.Hour, 10)
+	whf, err := s.Store.WebhookFailures(ctx, user.OrgID, 24*time.Hour, 10)
 	if err != nil {
 		s.internalError(c, err)
 		return

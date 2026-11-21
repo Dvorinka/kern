@@ -88,11 +88,15 @@ func (s *Store) ArtifactByName(ctx context.Context, runID uuid.UUID, name string
 	return a, err
 }
 
-func (s *Store) Artifact(ctx context.Context, id uuid.UUID) (Artifact, error) {
+func (s *Store) Artifact(ctx context.Context, orgID, id uuid.UUID) (Artifact, error) {
 	var a Artifact
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, run_id, job_id, name, size_bytes, sha256, blob_ref, created_at, expires_at
-		FROM artifacts WHERE id = $1`, id).
+		SELECT a.id, a.run_id, a.job_id, a.name, a.size_bytes, a.sha256, a.blob_ref,
+		       a.created_at, a.expires_at
+		FROM artifacts a
+		JOIN workflow_runs r ON r.id = a.run_id
+		JOIN projects p ON p.id = r.project_id
+		WHERE a.id = $1 AND p.org_id = $2`, id, orgID).
 		Scan(&a.ID, &a.RunID, &a.JobID, &a.Name, &a.SizeBytes, &a.SHA256, &a.BlobRef, &a.CreatedAt, &a.ExpiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Artifact{}, ErrNotFound

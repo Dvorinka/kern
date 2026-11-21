@@ -187,12 +187,50 @@ func resolveCallInputs(decls map[string]callInput, with map[string]any) (map[str
 	return inputs, nil
 }
 
+// composeSecretsMap combines a parent caller's secrets spec with a nested
+// called job's secrets spec so nested calls can only narrow, never widen,
+// secret delivery (e.g. A --inherit--> B --none--> C delivers nothing to C).
+func composeSecretsMap(parent, child map[string]string) map[string]string {
+	if parent == nil {
+		// Parent inherited all secrets; keep child's restriction (nil or map).
+		return child
+	}
+	if len(parent) == 0 {
+		// Parent passed no secrets; child cannot widen beyond empty.
+		return map[string]string{}
+	}
+	if child == nil {
+		// Child inherited parent's secrets map.
+		return parent
+	}
+	if len(child) == 0 {
+		// Child explicitly passed no secrets.
+		return map[string]string{}
+	}
+	// Both parent and child specified explicit maps: keep child entries whose
+	// value references a secret passed by parent (or literal), remapping
+	// ${{ secrets.X }} to parent[X] when present.
+	out := make(map[string]string, len(child))
+	for k, expr := range child {
+		trimmed := strings.TrimSpace(expr)
+		if strings.HasPrefix(trimmed, "${{") && strings.HasSuffix(trimmed, "}}") {
+			inner := strings.TrimSpace(trimmed[3 : len(trimmed)-2])
+			if strings.HasPrefix(inner, "secrets.") {
+				refName := strings.TrimPrefix(inner, "secrets.")
+				if pExpr, ok := parent[refName]; ok {
+					out[k] = pExpr
+				}
+				continue
+			}
+		}
+		out[k] = expr
+	}
+	return out
+}
+
 // expandCallInto folds a compiled called-workflow plan into the caller plan.
-// secretsMap is the caller's jobs.<id>.secrets spec; it is stamped on every
-// expanded job, overwriting deeper call specs — the top-level caller governs
-// what secrets enter the whole called subtree (ceiling: nested explicit maps
-// resolve against the full eligible set rather than the parent's delivered
-// set, matching pre-map behavior).
+// secretsMap is composed with deeper call specs so nested calls can never
+// widen secret delivery or overwrite a deeper call's resolved inputs.
 func expandCallInto(plan *Plan, called *Plan, calledWf *Workflow, spec callSpec, inputs map[string]string, secretsMap map[string]string, c Compiler) {
 	prefix := spec.id + "_"
 	for _, jp := range called.Jobs {
@@ -210,8 +248,10 @@ func expandCallInto(plan *Plan, called *Plan, calledWf *Workflow, spec callSpec,
 		nj.Name = spec.id + "/" + jp.Name
 		nj.Needs = needs
 		nj.If = combineIf(spec.ifCond, jp.If)
-		nj.Inputs = inputs
-		nj.SecretsMap = secretsMap
+		if len(nj.Inputs) == 0 {
+			nj.Inputs = inputs
+		}
+		nj.SecretsMap = composeSecretsMap(secretsMap, jp.SecretsMap)
 		plan.Jobs = append(plan.Jobs, nj)
 	}
 	// The boundary waits on every called job so needs.<called>.outputs is

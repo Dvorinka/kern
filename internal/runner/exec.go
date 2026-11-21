@@ -61,13 +61,16 @@ func (a *Agent) waitJobContainer(ctx context.Context, jobID string) (string, boo
 // runExec wires the docker exec process to the output poster and stdin
 // pump, then reports the exit state.
 func (a *Agent) runExec(ctx context.Context, log *zap.Logger, offer execOffer, container string) {
+	execCtx, execCancel := context.WithCancel(ctx)
+	defer execCancel()
+
 	argv := []string{"exec", "-i", container, "sh", "-c", offer.Command}
 	if offer.Interactive {
 		// Shell resolution mirrors steps: bash when present, sh otherwise.
 		argv = []string{"exec", "-i", container, "sh", "-c",
 			"exec bash -l 2>/dev/null || exec sh -l"}
 	}
-	cmd := exec.CommandContext(ctx, "docker", argv...)
+	cmd := exec.CommandContext(execCtx, "docker", argv...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		a.finishExec(offer.ID, nil, err.Error())
@@ -87,16 +90,17 @@ func (a *Agent) runExec(ctx context.Context, log *zap.Logger, offer execOffer, c
 		defer t.Stop()
 		for {
 			select {
-			case <-ctx.Done():
+			case <-execCtx.Done():
 				return
 			case <-t.C:
 				poster.flush()
 			}
 		}
 	}()
-	go a.pumpExecStdin(ctx, offer.ID, stdin)
+	go a.pumpExecStdin(execCtx, execCancel, offer.ID, stdin)
 
 	err = cmd.Wait()
+	execCancel()
 	<-posterDone
 	poster.flush()
 	var code *int
@@ -123,10 +127,11 @@ func (a *Agent) finishExec(execID string, code *int, errText string) {
 	}
 }
 
-// pumpExecStdin feeds the session's stdin blob into the docker exec pipe.
+// pumpExecStdin feeds the session's stdin blob into the docker exec pipe and
+// cancels the exec process when the control plane marks the session cancelled.
 // ponytail: half-second poll, no PTY framing — a line-mode shell; upgrade
 // to TTY framing when interactive exec needs full-screen programs.
-func (a *Agent) pumpExecStdin(ctx context.Context, execID string, stdin io.WriteCloser) {
+func (a *Agent) pumpExecStdin(ctx context.Context, cancel context.CancelFunc, execID string, stdin io.WriteCloser) {
 	defer stdin.Close()
 	t := time.NewTicker(500 * time.Millisecond)
 	defer t.Stop()
@@ -137,9 +142,13 @@ func (a *Agent) pumpExecStdin(ctx context.Context, execID string, stdin io.Write
 			return
 		case <-t.C:
 		}
-		data, size, closed, err := a.c.execStdin(ctx, execID, off)
+		data, size, closed, cancelled, err := a.c.execStdin(ctx, execID, off)
 		if err != nil {
 			return // control plane unreachable or session finished — cmd.Wait ends us
+		}
+		if cancelled {
+			cancel()
+			return
 		}
 		if len(data) > 0 {
 			if _, err := stdin.Write(data); err != nil {

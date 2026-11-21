@@ -47,6 +47,20 @@ func cacheDir(workRoot string) string {
 	return filepath.Join(workRoot, "_cache")
 }
 
+// jobCacheDir picks the host dir mounted at /kern/cache. Trusted jobs share
+// the runner-level cache (toolchains, pnpm store, gradle init.d). Untrusted
+// fork/PR jobs get a per-job scratch dir instead — the shared tree contains
+// executable material (gradle init scripts, action copies, tool binaries)
+// that a poisoned write would aim at the next trusted job (#369).
+func (e *executor) jobCacheDir() string {
+	if !e.privileged() {
+		dir := filepath.Join(e.cfg.WorkRoot, e.jobID, "cache")
+		_ = os.MkdirAll(dir, 0o777)
+		return dir
+	}
+	return cacheDir(e.cfg.WorkRoot)
+}
+
 // hostCABundle is the trust store some job images do not ship.
 // It is mounted at a KERN-owned path, never at /etc/ssl/certs — a distro
 // package postinst (ca-certificates) replaces that file atomically and a
@@ -588,7 +602,7 @@ func (e *executor) imageUserHome(ctx context.Context) string {
 
 // startContainer creates and starts the idle job container.
 func (e *executor) startContainer(ctx context.Context) error {
-	if e.cfg.Concurrency <= 1 {
+	if !e.cfg.Local && e.cfg.Concurrency <= 1 {
 		e.preJobContainers = containerIDs(ctx)
 	}
 	workRoot := e.workRoot()
@@ -668,7 +682,7 @@ func (e *executor) startContainer(ctx context.Context) error {
 		"-v", scriptDir+":"+containerScriptDir+":ro",
 		"-v", actionsMount,
 		"-v", filepath.Join(e.cfg.WorkRoot, "_node")+":"+containerNodeRoot+":ro",
-		"-v", cacheDir(e.cfg.WorkRoot)+":"+containerCacheDir,
+		"-v", e.jobCacheDir()+":"+containerCacheDir,
 		"-v", filepath.Join(workRoot, "home")+":"+containerActionHome,
 	)
 	if !e.privileged() {
@@ -754,7 +768,7 @@ func (e *executor) startContainer(ctx context.Context) error {
 		// workspace so client paths land on the right host path at any
 		// concurrency. The legacy /github/workspace link stays for jobs
 		// still on the shared path.
-		if dirExists("/github") {
+		if !e.cfg.Local && dirExists("/github") {
 			_ = os.Remove("/github/workspace")
 			_ = os.Symlink(filepath.Join(e.workRoot(), "workspace"), "/github/workspace")
 			wsLinks := filepath.Join("/github", "workspaces")
@@ -1165,12 +1179,14 @@ func (e *executor) cleanup() {
 	if !e.host {
 		_ = exec.CommandContext(ctx, "docker", "rm", "-f", e.container).Run()
 		e.stopServices(ctx)
-		e.reapOrphanContainers(ctx)
+		if !e.cfg.Local {
+			e.reapOrphanContainers(ctx)
+		}
 	} else if len(e.claim.Job.Services) > 0 {
 		e.stopServices(ctx)
 	}
 	_ = os.RemoveAll(e.workRoot())
-	if !e.host && e.privileged() && dirExists("/github") {
+	if !e.cfg.Local && !e.host && e.privileged() && dirExists("/github") {
 		_ = os.Remove(filepath.Join("/github", "workspaces", sanitizeID(e.claim.Job.ID)))
 	}
 }
@@ -1290,10 +1306,15 @@ func apiURL(repoURL string) string {
 	return "https://" + host + "/api/v3"
 }
 
+var seedDockerCLIMu sync.Mutex
+
 // seedDockerCLI copies the runner's own docker client and any cli-plugins
 // into dir (a host-visible work-root path) so privileged job containers can
-// mount them. Idempotent — existing files win.
+// mount them. Serialized with atomic temp+rename so concurrent slots never
+// race with ETXTBSY.
 func seedDockerCLI(dir string) (string, error) {
+	seedDockerCLIMu.Lock()
+	defer seedDockerCLIMu.Unlock()
 	src, err := exec.LookPath("docker")
 	if err != nil {
 		return "", fmt.Errorf("docker cli not on runner PATH: %w", err)
@@ -1304,11 +1325,7 @@ func seedDockerCLI(dir string) (string, error) {
 	}
 	dst := filepath.Join(dir, "docker")
 	if _, err := os.Stat(dst); os.IsNotExist(err) {
-		data, err := os.ReadFile(src)
-		if err != nil {
-			return "", err
-		}
-		if err := os.WriteFile(dst, data, 0o755); err != nil {
+		if err := atomicCopyFile(src, dst, 0o755); err != nil {
 			return "", err
 		}
 	}
@@ -1323,16 +1340,43 @@ func seedDockerCLI(dir string) (string, error) {
 			if _, err := os.Stat(to); err == nil {
 				continue
 			}
-			data, err := os.ReadFile(filepath.Join(cand, en.Name()))
-			if err != nil {
-				continue
-			}
 			_ = os.MkdirAll(pluginDst, 0o755)
-			_ = os.WriteFile(to, data, 0o755)
+			_ = atomicCopyFile(filepath.Join(cand, en.Name()), to, 0o755)
 		}
 		break
 	}
 	return dir, nil
+}
+
+func atomicCopyFile(src, dst string, mode os.FileMode) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(dst), ".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, dst); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
 
 func dirExists(p string) bool {

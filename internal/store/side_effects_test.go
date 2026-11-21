@@ -86,18 +86,18 @@ func TestCacheLookupAndEviction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.CacheLookup(ctx, pid, "sum-key", []string{"", "sum-"}, []string{"trusted"})
+	got, err := s.CacheLookup(ctx, pid, "sum-key", "", []string{"", "sum-"}, []string{"trusted"})
 	if err != nil || got.BlobRef != "blob-exact" {
 		t.Fatalf("exact lookup = %q err=%v, want blob-exact", got.BlobRef, err)
 	}
-	got, err = s.CacheLookup(ctx, pid, "missing", []string{"", "sum-"}, []string{"trusted"})
+	got, err = s.CacheLookup(ctx, pid, "missing", "", []string{"", "sum-"}, []string{"trusted"})
 	if err != nil || got.ID != other.ID {
 		t.Fatalf("prefix lookup = %s err=%v, want newer prefix %s", got.ID, err, other.ID)
 	}
-	if _, err := s.CacheLookup(ctx, pid, "missing", []string{""}, []string{"trusted"}); !errors.Is(err, ErrNotFound) {
+	if _, err := s.CacheLookup(ctx, pid, "missing", "", []string{""}, []string{"trusted"}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("empty prefix = %v, want not found", err)
 	}
-	if _, err := s.CacheLookup(ctx, pid, "sum-key", nil, []string{"fork"}); !errors.Is(err, ErrNotFound) {
+	if _, err := s.CacheLookup(ctx, pid, "sum-key", "", nil, []string{"fork"}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("wrong scope = %v, want not found", err)
 	}
 	if _, err := s.SaveCacheEntry(ctx, pid, "sum-key", "v1", "trusted", "blob-again", 1); !errors.Is(err, ErrExists) {
@@ -141,15 +141,15 @@ func TestCacheLookupAndEviction(t *testing.T) {
 func TestWebhookDeliveryIsIdempotent(t *testing.T) {
 	s, ctx := testStore(t)
 	id := "delivery-" + uuid.NewString()
-	fresh, err := s.SaveWebhookDelivery(ctx, "github", id, "push", []byte(`{"ok":true}`))
+	fresh, err := s.SaveWebhookDelivery(ctx, "github", id, "push", []byte(`{"ok":true}`), nil)
 	if err != nil || !fresh {
 		t.Fatalf("first save fresh=%v err=%v", fresh, err)
 	}
-	again, err := s.SaveWebhookDelivery(ctx, "github", id, "push", []byte(`{"ok":true}`))
+	again, err := s.SaveWebhookDelivery(ctx, "github", id, "push", []byte(`{"ok":true}`), nil)
 	if err != nil || again {
 		t.Fatalf("duplicate fresh=%v err=%v, want false", again, err)
 	}
-	if _, err := s.SaveWebhookDelivery(ctx, "github", id+"-bad", "push", []byte(`not-json`)); !errors.Is(err, errInvalidJSON) {
+	if _, err := s.SaveWebhookDelivery(ctx, "github", id+"-bad", "push", []byte(`not-json`), nil); !errors.Is(err, errInvalidJSON) {
 		t.Fatalf("invalid payload err = %v", err)
 	}
 }
