@@ -716,9 +716,8 @@ func settingsValue(raw json.RawMessage, key, def string) string {
 // applies them before the step. Audit-logged; no secrets are involved.
 func (s *Server) approveRemediation(c *gin.Context) {
 	user, _ := currentUser(c)
-	jobID, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		fail(c, http.StatusBadRequest, "invalid_id", "job id must be a uuid")
+	jobID, ok := s.jobIDParam(c)
+	if !ok {
 		return
 	}
 	var req struct {
@@ -750,9 +749,8 @@ func (s *Server) approveRemediation(c *gin.Context) {
 // leaves the attention feed and the diagnosis stays on the step.
 func (s *Server) dismissRemediation(c *gin.Context) {
 	user, _ := currentUser(c)
-	jobID, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		fail(c, http.StatusBadRequest, "invalid_id", "job id must be a uuid")
+	jobID, ok := s.jobIDParam(c)
+	if !ok {
 		return
 	}
 	var req struct {

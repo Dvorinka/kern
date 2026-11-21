@@ -20,9 +20,8 @@ import (
 // commands. Fork/pull_request runs never get a shell — untrusted code
 // must not invite the operator into its own sandbox.
 func (s *Server) createExec(c *gin.Context) {
-	id, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		fail(c, http.StatusBadRequest, "invalid_id", "job id must be a uuid")
+	id, ok := s.jobIDParam(c)
+	if !ok {
 		return
 	}
 	var req struct {

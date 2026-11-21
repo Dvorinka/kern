@@ -79,7 +79,7 @@ func (c *cli) cmdDiagnose(ctx context.Context, args []string) error {
 		for _, st := range j.Steps {
 			ds := diagStep{step: st}
 			if needsLogTail(st) {
-				text, size, err := c.logTail(ctx, st.ID, tail)
+				text, size, err := c.logTail(ctx, st.ID, st.LogBytes, tail)
 				if err == nil {
 					ds.LogTail, ds.LogSize = text, size
 				}
@@ -109,23 +109,31 @@ func needsLogTail(st step) bool {
 }
 
 // logTail returns up to tail bytes from the end of a step's log plus the
-// full size, so the reader knows what was cut.
-func (c *cli) logTail(ctx context.Context, stepID string, tail int64) (string, int64, error) {
-	var probe stepLog
-	if err := c.api().get(ctx, "/steps/"+stepID+"/logs",
-		url.Values{"offset": {"0"}, "limit": {"1"}}, &probe); err != nil {
-		return "", 0, err
+// full size, so the reader knows what was cut. Uses knownSize from the step
+// metadata to avoid a redundant probe request when > 0.
+func (c *cli) logTail(ctx context.Context, stepID string, knownSize, tail int64) (string, int64, error) {
+	size := knownSize
+	if size <= 0 {
+		var probe stepLog
+		if err := c.api().get(ctx, "/steps/"+stepID+"/logs",
+			url.Values{"offset": {"0"}, "limit": {"1"}}, &probe); err != nil {
+			return "", 0, err
+		}
+		size = probe.Size
 	}
 	offset := int64(0)
-	if probe.Size > tail {
-		offset = probe.Size - tail
+	if size > tail {
+		offset = size - tail
 	}
 	var chunk stepLog
 	if err := c.api().get(ctx, "/steps/"+stepID+"/logs",
 		url.Values{"offset": {fmt.Sprint(offset)}, "limit": {fmt.Sprint(tail)}}, &chunk); err != nil {
-		return "", probe.Size, err
+		return "", size, err
 	}
-	return chunk.Text, probe.Size, nil
+	if chunk.Size > size {
+		size = chunk.Size
+	}
+	return chunk.Text, size, nil
 }
 
 func printDiagnose(b diagnoseBundle, tail int64) {
@@ -193,7 +201,8 @@ func printDiagnose(b diagnoseBundle, tail int64) {
 				}
 			}
 			if st.LogTail != "" {
-				fmt.Printf("   --- log tail (last %s of %s) ---\n", humanBytes(tail), humanBytes(st.LogSize))
+				shown := min(tail, st.LogSize)
+				fmt.Printf("   --- log tail (last %s of %s) ---\n", humanBytes(shown), humanBytes(st.LogSize))
 				fmt.Print(st.LogTail)
 				if !strings.HasSuffix(st.LogTail, "\n") {
 					fmt.Println()

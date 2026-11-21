@@ -119,46 +119,78 @@ func (s *Server) clearCancelledRuns(c *gin.Context) {
 // hex prefix (the short ids `kern runs list` prints). Writes the error
 // response and returns false when the id is invalid, unknown, or ambiguous.
 func (s *Server) runIDParam(c *gin.Context) (uuid.UUID, bool) {
-	raw := strings.ToLower(c.Param("id"))
-	if id, err := uuid.Parse(raw); err == nil {
-		return id, true
-	}
-	if len(raw) < 4 || len(raw) > 32 {
-		fail(c, http.StatusBadRequest, "invalid_id", "run id must be a uuid or an 8+ char prefix")
+	return s.resolveRunID(c, c.Param("id"))
+}
+
+func (s *Server) resolveRunID(c *gin.Context, raw string) (uuid.UUID, bool) {
+	return s.resolveIDPrefix(c, raw, "run", func(prefix string) ([]uuid.UUID, error) {
+		cands, err := s.Store.RunPrefix(c.Request.Context(), prefix)
+		if err != nil {
+			return nil, err
+		}
+		// A project grant must not learn that some other project's run shares
+		// the prefix, so ambiguity is decided only on runs this token can see.
+		if projects := tokenProjects(c); len(projects) > 0 {
+			cands, err = s.runsInGrant(c, cands, projects)
+			if err != nil {
+				return nil, err
+			}
+		}
+		ids := make([]uuid.UUID, len(cands))
+		for i, r := range cands {
+			ids[i] = r.ID
+		}
+		return ids, nil
+	})
+}
+
+func (s *Server) jobIDParam(c *gin.Context) (uuid.UUID, bool) {
+	user, _ := currentUser(c)
+	return s.resolveIDPrefix(c, c.Param("id"), "job", func(prefix string) ([]uuid.UUID, error) {
+		return s.Store.JobPrefix(c.Request.Context(), user.OrgID, prefix)
+	})
+}
+
+func (s *Server) artifactIDParam(c *gin.Context) (uuid.UUID, bool) {
+	user, _ := currentUser(c)
+	return s.resolveIDPrefix(c, c.Param("id"), "artifact", func(prefix string) ([]uuid.UUID, error) {
+		return s.Store.ArtifactPrefix(c.Request.Context(), user.OrgID, prefix)
+	})
+}
+
+func (s *Server) cacheIDParam(c *gin.Context) (uuid.UUID, bool) {
+	user, _ := currentUser(c)
+	return s.resolveIDPrefix(c, c.Param("id"), "cache", func(prefix string) ([]uuid.UUID, error) {
+		return s.Store.CachePrefix(c.Request.Context(), user.OrgID, prefix)
+	})
+}
+
+func (s *Server) resolveIDPrefix(c *gin.Context, raw, kind string, lookup func(prefix string) ([]uuid.UUID, error)) (uuid.UUID, bool) {
+	exact, prefix, ok := store.ParseIDPrefix(raw)
+	if !ok {
+		fail(c, http.StatusBadRequest, "invalid_id", kind+" id must be a uuid or a 4+ char hex prefix")
 		return uuid.Nil, false
 	}
-	for _, r := range raw {
-		if !strings.ContainsRune("0123456789abcdef", r) {
-			fail(c, http.StatusBadRequest, "invalid_id", "run id must be a uuid or an 8+ char prefix")
-			return uuid.Nil, false
-		}
+	if prefix == "" {
+		return exact, true
 	}
-	cands, err := s.Store.RunPrefix(c.Request.Context(), raw)
+	cands, err := lookup(prefix)
 	if err != nil {
 		s.internalError(c, err)
 		return uuid.Nil, false
 	}
-	// A project grant must not learn that some other project's run shares
-	// the prefix, so ambiguity is decided only on runs this token can see.
-	if projects := tokenProjects(c); len(projects) > 0 {
-		cands, err = s.runsInGrant(c, cands, projects)
-		if err != nil {
-			s.internalError(c, err)
-			return uuid.Nil, false
-		}
-	}
 	switch len(cands) {
 	case 0:
-		fail(c, http.StatusNotFound, "not_found", "run not found")
+		fail(c, http.StatusNotFound, "not_found", kind+" not found")
 	case 1:
-		return cands[0].ID, true
+		return cands[0], true
 	default:
 		ids := make([]string, 0, len(cands))
-		for _, r := range cands {
-			ids = append(ids, r.ID.String()[:8])
+		for _, id := range cands {
+			ids = append(ids, id.String()[:8])
 		}
 		fail(c, http.StatusBadRequest, "ambiguous_id",
-			"prefix matches multiple runs: "+strings.Join(ids, ", ")+" — use a longer prefix")
+			"prefix matches multiple "+kind+"s: "+strings.Join(ids, ", ")+" — use a longer prefix")
 	}
 	return uuid.Nil, false
 }

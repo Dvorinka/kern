@@ -50,7 +50,9 @@ func (c *cli) cmdHooks(args []string) error {
 		return err
 	}
 	if dryRun {
-		fmt.Print(prePushHook)
+		c.orJSON(map[string]any{"path": hookPath, "dry_run": true, "content": prePushHook}, func() {
+			fmt.Print(prePushHook)
+		})
 		return nil
 	}
 	if _, err := os.Stat(hookPath); err == nil && !force {
@@ -62,8 +64,10 @@ func (c *cli) cmdHooks(args []string) error {
 	if err := os.WriteFile(hookPath, []byte(prePushHook), 0o755); err != nil {
 		return err
 	}
-	fmt.Printf("installed %s — runs 'kern lint' before every push\n", hookPath)
-	fmt.Println("remove the file to disable")
+	c.orJSON(map[string]any{"installed": true, "path": hookPath}, func() {
+		fmt.Printf("installed %s — runs 'kern lint' before every push\n", hookPath)
+		fmt.Println("remove the file to disable")
+	})
 	return nil
 }
 
