@@ -224,6 +224,15 @@ func diagnose(step StepSpec, exitCode int, logTail, stepErr, jobMemory string, d
 		strings.Contains(lower, "econnreset") ||
 		strings.Contains(lower, "esockettimedout") ||
 		strings.Contains(lower, "etimedout") ||
+		strings.Contains(lower, "eai_again") ||
+		strings.Contains(lower, "epipe") ||
+		strings.Contains(lower, "socket hang up") ||
+		strings.Contains(lower, "unexpected eof") ||
+		strings.Contains(lower, "early eof") ||
+		strings.Contains(lower, "remote end hung up") ||
+		strings.Contains(lower, "hash sum mismatch") ||
+		strings.Contains(lower, "rpc failed") ||
+		strings.Contains(lower, "toomanyrequests") ||
 		strings.Contains(lower, "read timed out") ||
 		strings.Contains(lower, "connect timed out") ||
 		strings.Contains(lower, "too many requests") ||
@@ -271,14 +280,14 @@ func installCommands(pkg string) []string {
 		// ships the JDK under a different name. Headless variants suffice:
 		// steps need the runtime, not the demos or src.zip.
 		return []string{
-			"if command -v apt-get >/dev/null; then apt-get update -qq && apt-get install -y -qq default-jdk-headless" +
+			"if command -v apt-get >/dev/null; then apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq default-jdk-headless" +
 				"; elif command -v apk >/dev/null; then apk add --no-cache openjdk21" +
 				"; elif command -v microdnf >/dev/null; then microdnf install -y java-21-openjdk-headless" +
 				"; else echo 'no supported package manager' >&2; exit 1; fi",
 		}
 	}
 	return []string{
-		"if command -v apt-get >/dev/null; then apt-get update -qq && apt-get install -y -qq " + pkg +
+		"if command -v apt-get >/dev/null; then apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq " + pkg +
 			"; elif command -v apk >/dev/null; then apk add --no-cache " + pkg +
 			"; elif command -v microdnf >/dev/null; then microdnf install -y " + pkg +
 			"; else echo 'no supported package manager' >&2; exit 1; fi",
