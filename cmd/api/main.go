@@ -51,6 +51,16 @@ func run() int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
+	if shutdown, err := telemetry.InitTracing(ctx, "kern-api"); err != nil {
+		log.Error("otel init failed", zap.Error(err))
+	} else if shutdown != nil {
+		defer func() {
+			shCtx, shCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer shCancel()
+			_ = shutdown(shCtx)
+		}()
+	}
+
 	st, err := store.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
 		log.Error("database unavailable", zap.String("dsn", redact(cfg.DatabaseURL)), zap.Error(err))

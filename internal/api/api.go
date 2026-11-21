@@ -16,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 
 	"github.com/dvorinka/kern/internal/blobs"
 	"github.com/dvorinka/kern/internal/config"
@@ -194,7 +195,7 @@ func (s *Server) buildRouter() *gin.Engine {
 		gin.SetMode(gin.ReleaseMode)
 	}
 	r := gin.New()
-	r.Use(gin.Recovery(), s.requestLogger(), s.securityHeaders(), s.cors(), s.httpMetrics())
+	r.Use(gin.Recovery(), otelgin.Middleware("kern"), s.requestLogger(), s.securityHeaders(), s.cors(), s.httpMetrics())
 	r.MaxMultipartMemory = 8 << 20
 
 	r.GET("/healthz", s.health)

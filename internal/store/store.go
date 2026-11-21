@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/exaring/otelpgx"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
@@ -28,6 +29,8 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 	}
 	cfg.MaxConnLifetime = 30 * time.Minute
 	cfg.MaxConns = 16
+	// No-op until an OTLP endpoint is configured; then every query gets a span.
+	cfg.ConnConfig.Tracer = otelpgx.NewTracer()
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("connect database: %w", err)
