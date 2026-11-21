@@ -67,6 +67,9 @@ func (e *executor) runPreHooks(ctx context.Context) {
 		e.preDone = map[string]bool{}
 	}
 	for _, step := range e.claim.Steps {
+		if ctx.Err() != nil || e.cancelled.Load() {
+			break
+		}
 		if step.Uses == "" {
 			continue
 		}
@@ -218,11 +221,12 @@ func (e *executor) hookIf(cond string, step StepSpec) bool {
 	return ok
 }
 
-// drainState removes the GITHUB_STATE file and returns its name=value pairs —
+// drainState truncates the GITHUB_STATE file and returns its name=value pairs —
 // @actions/core's saveState appends there and post hooks read them as STATE_*.
+// Truncating (rather than removing) keeps the file present for subsequent actions.
 func (e *executor) drainState() map[string]string {
 	p := filepath.Join(e.cmdDir(), "GITHUB_STATE")
-	defer os.Remove(p)
+	defer func() { _ = os.Truncate(p, 0) }()
 	data, err := os.ReadFile(p)
 	if err != nil {
 		return nil

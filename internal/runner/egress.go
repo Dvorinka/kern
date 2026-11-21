@@ -210,7 +210,8 @@ func (e *executor) ensureEgress(ctx context.Context) error {
 	// seconds away but poll briefly so a slow start does not flake jobs.
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		if exec.CommandContext(ctx, "docker", "inspect", "-f", "{{.State.Running}}", e.egressProxyName()).Run() == nil {
+		out, err := exec.CommandContext(ctx, "docker", "inspect", "-f", "{{.State.Running}}", e.egressProxyName()).Output()
+		if err == nil && strings.TrimSpace(string(out)) == "true" {
 			break
 		}
 		if time.Now().After(deadline) {

@@ -24,7 +24,9 @@ func (e *executor) startDiskSampler(ctx context.Context) {
 	if budget <= 0 {
 		return
 	}
+	e.stopped.Add(1)
 	go func() {
+		defer e.stopped.Done()
 		// Adaptive cadence (#333): a slow 30s poll lets a fast writer blow
 		// through ENOSPC between samples. Tighten to 5s once usage passes
 		// 70% of the budget; the breach check stays idempotent.
@@ -34,6 +36,8 @@ func (e *executor) startDiskSampler(ctx context.Context) {
 		for {
 			select {
 			case <-ctx.Done():
+				return
+			case <-e.stop:
 				return
 			case <-t.C:
 			}
@@ -169,6 +173,8 @@ func (e *executor) watchSilence(ctx context.Context, step StepSpec, pump *logPum
 // for docker jobs, on the host otherwise — plus a jstack of any JVMs,
 // which is the canonical Gradle-stall diagnostic.
 func (e *executor) procDump(ctx context.Context) string {
+	dctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
 	script := `(ps auxww 2>/dev/null || ps) | head -40
 for p in $(pgrep -x java 2>/dev/null | head -3); do
   echo "--- jstack $p ---"
@@ -177,9 +183,9 @@ done
 true`
 	var cmd *exec.Cmd
 	if e.host {
-		cmd = exec.CommandContext(ctx, "sh", "-c", script)
+		cmd = exec.CommandContext(dctx, "sh", "-c", script)
 	} else {
-		cmd = exec.CommandContext(ctx, "docker", "exec", e.container, "sh", "-c", script)
+		cmd = exec.CommandContext(dctx, "docker", "exec", e.container, "sh", "-c", script)
 	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
