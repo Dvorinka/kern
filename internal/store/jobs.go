@@ -96,6 +96,9 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 			LEFT JOIN proj_caps cap ON cap.project_id = r.project_id
 			LEFT JOIN token_caps tcap ON tcap.token_id = r.dispatch_token_id
 			WHERE j.status = 'queued'
+			  -- Requeue backoff (#373): a transient retry waits out its
+			  -- jittered delay before re-entering the claim pool.
+			  AND (j.not_before IS NULL OR j.not_before <= now())
 			  -- A runner reporting engaged claim gates (disk, memory,
 			  -- overload, updating, retire) must not take work — its own
 			  -- heartbeat may not have landed yet when a queued job races it.
@@ -205,6 +208,7 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 				runner_id = $1,
 				started_at = now(),
 				attempt = j.attempt + 1,
+				not_before = NULL,
 				lease_expires_at = now() + make_interval(secs => $2),
 				error = ''
 			WHERE j.id IN (SELECT id FROM candidate)
@@ -474,10 +478,15 @@ func (s *Store) RequeueJob(ctx context.Context, runnerID, jobID uuid.UUID, reaso
 		return false, err
 	}
 	defer tx.Rollback(ctx)
+	// Jittered exponential backoff on the attempt count: 5s*2^attempt capped
+	// at 2m, scaled by 0.75-1.25 random — transient flaps stop hot-looping
+	// into the same failure instead of pinning a claim slot each retry (#373).
 	tag, err := tx.Exec(ctx, `
 		UPDATE jobs SET status = 'queued', queued_at = now(), runner_id = NULL,
 			lease_expires_at = NULL, started_at = NULL, completed_at = NULL,
-			conclusion = '', error = $3
+			conclusion = '', error = $3,
+			not_before = now() + (interval '1 second' *
+				LEAST(5 * pow(2, attempt), 120) * (0.75 + random() * 0.5))
 		WHERE id = $1 AND runner_id = $2 AND status = 'in_progress'`,
 		jobID, runnerID, reason)
 	if err != nil {

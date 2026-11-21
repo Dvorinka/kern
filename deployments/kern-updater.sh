@@ -112,9 +112,14 @@ while true; do
 		continue
 	fi
 	# Same working directory as the operator recipe, so the compose project
-	# name stays "deployments". The updater service is not in this command,
-	# and neither is the profile-gated runner service.
-	if ! (cd "$SRC/deployments" && KERN_VERSION="$ver" docker compose --env-file "$ENV_FILE" up -d --build --no-deps api); then
+	# name stays "deployments". The updater service is not in this command.
+	# The profile-gated runner service is included when one was deployed —
+	# previously it stayed on the old image after every update (#373).
+	UP="api"; PROF=""
+	if [ -n "$(docker ps -aq --filter label=com.docker.compose.service=runner --filter label=com.docker.compose.project=deployments 2>/dev/null | head -1)" ]; then
+		UP="api runner"; PROF="--profile runner"
+	fi
+	if ! (cd "$SRC/deployments" && KERN_VERSION="$ver" docker compose $PROF --env-file "$ENV_FILE" up -d --build --no-deps $UP); then
 		post error "compose up failed" "$ver"
 		sleep 30
 		continue

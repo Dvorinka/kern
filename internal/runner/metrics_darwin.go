@@ -105,3 +105,4 @@ func vmStatPages() (map[string]uint64, bool) {
 	}
 	return pages, len(pages) > 0
 }
+func cgroupMemAvailable() (int64, bool) { return 0, false }

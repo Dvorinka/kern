@@ -14,3 +14,4 @@ func cgroupPressure() (float64, bool) { return 0, false }
 func cpusVisible() int { return 1 }
 
 func memInfo() (total, available int64, ok bool) { return 0, 0, false }
+func cgroupMemAvailable() (int64, bool) { return 0, false }

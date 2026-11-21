@@ -522,7 +522,13 @@ func (e *executor) resolveActionSHA(ctx context.Context, repoURL, ref string) st
 // official runner downloads actions as tarballs).
 func (e *executor) fetchViaActionCache(ctx context.Context, repoURL string, r actions.RemoteRef, sha, base string) error {
 	cacheKey := nonIDRe.ReplaceAllString(r.Owner+"__"+r.Repo+"__"+sha, "-")
-	src, err := e.ensureActionCache(ctx, repoURL, cacheKey, sha, r.Ref)
+	// Hold the entry lock across ensure+copy: the prune sweep must not delete
+	// the tree between the hit check and the export (#373).
+	mu := actionCacheLock(cacheKey)
+	mu.Lock()
+	defer mu.Unlock()
+	dir := filepath.Join(actionCacheRoot(e.cfg.WorkRoot), cacheKey)
+	src, err := e.ensureActionCacheLocked(ctx, repoURL, dir, sha, r.Ref)
 	if err != nil {
 		return err
 	}
@@ -558,6 +564,13 @@ func (e *executor) ensureActionCache(ctx context.Context, repoURL, cacheKey, sha
 	mu := actionCacheLock(cacheKey)
 	mu.Lock()
 	defer mu.Unlock()
+	return e.ensureActionCacheLocked(ctx, repoURL, dir, sha, ref)
+}
+
+// ensureActionCacheLocked is ensureActionCache with the entry lock already
+// held — fetchViaActionCache keeps it through the copy (#373).
+func (e *executor) ensureActionCacheLocked(ctx context.Context, repoURL, dir, sha, ref string) (string, error) {
+	root := filepath.Dir(dir)
 	if actionCacheGitDir(dir) {
 		touchDir(dir)
 		return dir, nil
@@ -633,7 +646,14 @@ func (e *executor) maybePruneActionCache(root string) {
 		if err != nil || info.ModTime().After(cutoff) {
 			continue
 		}
+		// An entry being fetched or exported mid-job is locked — skip rather
+		// than delete it out from under the copy (#373).
+		mu := actionCacheLock(name)
+		if !mu.TryLock() {
+			continue
+		}
 		_ = os.RemoveAll(filepath.Join(root, name))
+		mu.Unlock()
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"time"
 	"path/filepath"
 	"runtime"
 
@@ -70,6 +71,9 @@ func applyBinaryUpdate(ctx context.Context, ver string, bins map[string]update.B
 	if err := extractRunner(arc, newBin); err != nil {
 		return err
 	}
+	// swapBinary renames newBin away on success; on a busy-abort this defer
+	// is what removes the staged binary — it used to leak (#373).
+	defer os.Remove(newBin)
 	if busy != nil && busy() {
 		return fmt.Errorf("a job started during the download")
 	}
@@ -100,7 +104,9 @@ func downloadFile(ctx context.Context, url, dest string) error {
 	if err != nil {
 		return err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	// Bounded client: a stalled transfer without a timeout used to hang the
+	// whole update window (#373).
+	resp, err := (&http.Client{Timeout: 5 * time.Minute}).Do(req)
 	if err != nil {
 		return err
 	}

@@ -124,3 +124,29 @@ func memInfo() (total, available int64, ok bool) {
 	}
 	return total * 1024, available * 1024, total > 0
 }
+
+// cgroupMemAvailable reports headroom under the runner's own cgroup v2 memory
+// limit (memory.max - memory.current). ok=false without cgroup v2 or with an
+// unbounded ("max") limit — /proc/meminfo stays the fallback.
+func cgroupMemAvailable() (int64, bool) {
+	maxRaw, err := os.ReadFile("/sys/fs/cgroup/memory.max")
+	if err != nil {
+		return 0, false
+	}
+	max, err := strconv.ParseInt(strings.TrimSpace(string(maxRaw)), 10, 64)
+	if err != nil || max <= 0 {
+		return 0, false // "max" or unreadable — no cgroup cap
+	}
+	curRaw, err := os.ReadFile("/sys/fs/cgroup/memory.current")
+	if err != nil {
+		return 0, false
+	}
+	cur, err := strconv.ParseInt(strings.TrimSpace(string(curRaw)), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	if avail := max - cur; avail >= 0 {
+		return avail, true
+	}
+	return 0, true // already over the ceiling
+}

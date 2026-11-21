@@ -806,8 +806,10 @@ func (p *logPump) append(line []byte) {
 	p.mu.Lock()
 	p.buf = append(p.buf, line...)
 	p.tail = append(p.tail, line...)
-	if len(p.tail) > 8<<10 {
-		p.tail = p.tail[len(p.tail)-8<<10:]
+	// 64 KiB tail: 8 KiB truncated away multi-line tracebacks and the
+	// error-line context diagnosis needs (#373).
+	if len(p.tail) > 64<<10 {
+		p.tail = p.tail[len(p.tail)-64<<10:]
 	}
 	full := len(p.buf) >= logFlushBytes
 	p.mu.Unlock()
