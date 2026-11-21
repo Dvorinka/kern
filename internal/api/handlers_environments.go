@@ -187,12 +187,11 @@ func (s *Server) listDeployments(c *gin.Context) {
 // reviewer list means any org member; owners and admins bypass a named list.
 func (s *Server) approveDeployment(c *gin.Context) {
 	user, _ := currentUser(c)
-	jobID, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		fail(c, http.StatusBadRequest, "invalid_id", "job id must be a uuid")
+	jobID, ok := s.jobIDParam(c)
+	if !ok {
 		return
 	}
-	dep, released, err := s.Store.ApproveDeployment(c.Request.Context(), jobID, user.ID, user.Email, user.Role)
+	dep, released, err := s.Store.ApproveDeployment(c.Request.Context(), user.OrgID, jobID, user.ID, user.Email, user.Role)
 	if err != nil {
 		if errors.Is(err, store.ErrNotReviewer) {
 			fail(c, http.StatusForbidden, "not_reviewer", err.Error())
@@ -213,12 +212,11 @@ func (s *Server) approveDeployment(c *gin.Context) {
 // rejectDeployment refuses a pending deployment; the job is cancelled.
 func (s *Server) rejectDeployment(c *gin.Context) {
 	user, _ := currentUser(c)
-	jobID, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		fail(c, http.StatusBadRequest, "invalid_id", "job id must be a uuid")
+	jobID, ok := s.jobIDParam(c)
+	if !ok {
 		return
 	}
-	dep, err := s.Store.RejectDeployment(c.Request.Context(), jobID, user.ID, user.Role)
+	dep, err := s.Store.RejectDeployment(c.Request.Context(), user.OrgID, jobID, user.ID, user.Role)
 	if err != nil {
 		if errors.Is(err, store.ErrNotReviewer) {
 			fail(c, http.StatusForbidden, "not_reviewer", err.Error())

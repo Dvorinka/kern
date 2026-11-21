@@ -59,7 +59,7 @@ func (s *Server) searchLogs(c *gin.Context) {
 			runID = id
 		} else {
 			// CLI users pass the short printed id; accept an unambiguous prefix.
-			cands, cerr := s.Store.RunPrefix(c.Request.Context(), v)
+			cands, cerr := s.Store.RunPrefix(c.Request.Context(), user.OrgID, v)
 			if cerr != nil || len(cands) != 1 {
 				fail(c, http.StatusBadRequest, "invalid_run", "run must be a uuid or unambiguous prefix")
 				return

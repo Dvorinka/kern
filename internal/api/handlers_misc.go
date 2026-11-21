@@ -24,18 +24,19 @@ import (
 )
 
 func (s *Server) overview(c *gin.Context) {
+	user, _ := currentUser(c)
 	ctx, cancel := contextWithTimeout(c, 5*time.Second)
 	defer cancel()
-	o, err := s.Store.Overview(ctx)
+	o, err := s.Store.Overview(ctx, user.OrgID)
 	if err != nil {
 		s.internalError(c, err)
 		return
 	}
-	series, _ := s.Store.QueueSeries(ctx)
-	failures, _ := s.Store.RecentFailures(ctx, 5)
-	cacheEntries, cacheBytes, _ := s.Store.CacheStats(ctx)
-	whfCount, whfErr, _ := s.Store.WebhookFailureSummary(ctx, 24*time.Hour)
-	unmatched, _ := s.Store.UnmatchedQueuedJobs(ctx)
+	series, _ := s.Store.QueueSeries(ctx, user.OrgID)
+	failures, _ := s.Store.RecentFailures(ctx, user.OrgID, 5)
+	cacheEntries, cacheBytes, _ := s.Store.CacheStats(ctx, user.OrgID)
+	whfCount, whfErr, _ := s.Store.WebhookFailureSummary(ctx, user.OrgID, 24*time.Hour)
+	unmatched, _ := s.Store.UnmatchedQueuedJobs(ctx, user.OrgID)
 	c.JSON(http.StatusOK, gin.H{
 		"overview":         o,
 		"series":           series,
@@ -48,9 +49,10 @@ func (s *Server) overview(c *gin.Context) {
 
 // prometheus exposes a minimal text exposition format for scraping.
 func (s *Server) prometheus(c *gin.Context) {
+	user, _ := currentUser(c)
 	ctx, cancel := contextWithTimeout(c, 3*time.Second)
 	defer cancel()
-	o, err := s.Store.Overview(ctx)
+	o, err := s.Store.Overview(ctx, user.OrgID)
 	if err != nil {
 		fail(c, http.StatusServiceUnavailable, "metrics_unavailable", "could not read metrics")
 		return
@@ -69,25 +71,25 @@ func (s *Server) prometheus(c *gin.Context) {
 	writeMetric("kern_job_queue_seconds_avg", "Average queue wait over 24h", "gauge", o.AvgQueueSeconds)
 	writeMetric("kern_job_queue_seconds_p95", "p95 queue wait over 24h", "gauge", o.P95QueueSeconds)
 	writeMetric("kern_run_seconds_avg", "Average run duration", "gauge", o.AvgRunSeconds)
-	if unmatched, err := s.Store.UnmatchedQueuedJobs(ctx); err == nil {
+	if unmatched, err := s.Store.UnmatchedQueuedJobs(ctx, user.OrgID); err == nil {
 		writeMetric("kern_jobs_unmatched", "Queued jobs no online runner can claim", "gauge", float64(len(unmatched)))
 	}
 
 	// Store-backed series. A failure on an optional query degrades to the
 	// series being absent rather than failing the whole scrape.
-	if h, err := s.Store.QueueWaitHistogram(ctx); err != nil {
+	if h, err := s.Store.QueueWaitHistogram(ctx, user.OrgID); err != nil {
 		s.Log.Warn("metrics: queue wait histogram", zap.Error(err))
 	} else {
 		writeDurationHistogram(&b, "kern_job_queue_wait_seconds",
 			"Job queue wait (queued to claimed), last 24h", h)
 	}
-	if h, err := s.Store.StepDurationHistogram(ctx); err != nil {
+	if h, err := s.Store.StepDurationHistogram(ctx, user.OrgID); err != nil {
 		s.Log.Warn("metrics: step duration histogram", zap.Error(err))
 	} else {
 		writeDurationHistogram(&b, "kern_step_duration_seconds",
 			"Step execution duration, last 24h", h)
 	}
-	if runners, err := s.Store.RunnerUtilization(ctx); err != nil {
+	if runners, err := s.Store.RunnerUtilization(ctx, user.OrgID); err != nil {
 		s.Log.Warn("metrics: runner utilization", zap.Error(err))
 	} else {
 		b.WriteString("# HELP kern_runner_active_jobs Jobs in progress on the runner\n" +
@@ -152,10 +154,14 @@ func (s *Server) githubWebhook(c *gin.Context) {
 		return
 	}
 	signature := c.GetHeader("X-Hub-Signature-256")
+	var matchedOrg *uuid.UUID
 	valid := false
-	for _, secret := range secrets {
-		if validSignature(secret, body, signature) {
+	for _, sec := range secrets {
+		if validSignature(sec.value, body, signature) {
 			valid = true
+			if sec.orgID != uuid.Nil {
+				matchedOrg = &sec.orgID
+			}
 			break
 		}
 	}
@@ -169,7 +175,7 @@ func (s *Server) githubWebhook(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "missing_headers", "X-GitHub-Delivery and X-GitHub-Event are required")
 		return
 	}
-	inserted, err := s.Store.SaveWebhookDelivery(c.Request.Context(), "github", delivery, event, body)
+	inserted, err := s.Store.SaveWebhookDelivery(c.Request.Context(), "github", delivery, event, body, matchedOrg)
 	if err != nil {
 		s.internalError(c, err)
 		return
@@ -182,6 +188,14 @@ func (s *Server) githubWebhook(c *gin.Context) {
 	status, detail := s.processGithubDelivery(c, delivery, event, body)
 	if s.metrics != nil {
 		s.metrics.observeWebhook(time.Since(webhookStart))
+	}
+	// Bind the delivery to the org that owns the payload's repository once
+	// it resolves to a project — unmatched deliveries stay org-less rather
+	// than leaking into every tenant's delivery views (#368).
+	if orgID, ok := s.deliveryOrg(c.Request.Context(), body, matchedOrg); ok {
+		if err := s.Store.SetWebhookDeliveryOrg(c.Request.Context(), delivery, orgID); err != nil {
+			s.Log.Warn("webhook delivery org", zap.Error(err))
+		}
 	}
 	if err := s.Store.MarkWebhookProcessed(c.Request.Context(), delivery, status, detail); err != nil {
 		s.Log.Error("mark webhook processed", zap.Error(err))
@@ -716,9 +730,8 @@ func settingsValue(raw json.RawMessage, key, def string) string {
 // applies them before the step. Audit-logged; no secrets are involved.
 func (s *Server) approveRemediation(c *gin.Context) {
 	user, _ := currentUser(c)
-	jobID, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		fail(c, http.StatusBadRequest, "invalid_id", "job id must be a uuid")
+	jobID, ok := s.jobIDParam(c)
+	if !ok {
 		return
 	}
 	var req struct {
@@ -728,7 +741,7 @@ func (s *Server) approveRemediation(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_body", "step number is required")
 		return
 	}
-	fix, err := s.Store.ApproveRemediation(c.Request.Context(), jobID, req.Step)
+	fix, err := s.Store.ApproveRemediation(c.Request.Context(), user.OrgID, jobID, req.Step)
 	if err != nil {
 		if strings.Contains(err.Error(), "no remediation proposal") {
 			fail(c, http.StatusNotFound, "no_proposal", err.Error())
@@ -750,9 +763,8 @@ func (s *Server) approveRemediation(c *gin.Context) {
 // leaves the attention feed and the diagnosis stays on the step.
 func (s *Server) dismissRemediation(c *gin.Context) {
 	user, _ := currentUser(c)
-	jobID, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		fail(c, http.StatusBadRequest, "invalid_id", "job id must be a uuid")
+	jobID, ok := s.jobIDParam(c)
+	if !ok {
 		return
 	}
 	var req struct {
@@ -762,7 +774,7 @@ func (s *Server) dismissRemediation(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_body", "step number is required")
 		return
 	}
-	if err := s.Store.DismissRemediation(c.Request.Context(), jobID, req.Step); err != nil {
+	if err := s.Store.DismissRemediation(c.Request.Context(), user.OrgID, jobID, req.Step); err != nil {
 		if strings.Contains(err.Error(), "no remediation proposal") {
 			fail(c, http.StatusNotFound, "no_proposal", err.Error())
 			return

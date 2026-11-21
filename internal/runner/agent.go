@@ -98,6 +98,9 @@ type Config struct {
 	// processes on the runner host. Host mode has no isolation and the
 	// control plane only lets it claim trusted trust tiers. Empty means
 	// docker.
+	// Local marks an in-process `kern testbox` run on a developer machine:
+	// disables host-wide orphan container reaping and /github symlink mutation.
+	Local bool
 	Executor string
 	// CacheMaxBytes caps the persistent _cache tree (language caches,
 	// _toolcache, _actions). When the tree exceeds it, the oldest files are

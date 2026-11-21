@@ -135,17 +135,17 @@ func (s *S3) Put(key string, r io.Reader) (int64, string, error) {
 	if err != nil {
 		return 0, "", err
 	}
+	// Stream with unknown length so minio-go uses its multipart path instead
+	// of buffering the whole object in heap — artifacts reach 4 GiB (#369).
+	// PartSize bounds the in-flight buffer; TeeReader fills the hash as the
+	// SDK consumes the stream.
 	h := sha256.New()
-	var buf bytes.Buffer
-	n, err := io.Copy(io.MultiWriter(&buf, h), r)
+	info, err := s.client.PutObject(context.Background(), s.bucket, k,
+		io.TeeReader(r, h), -1, minio.PutObjectOptions{PartSize: 64 << 20})
 	if err != nil {
 		return 0, "", err
 	}
-	_, err = s.client.PutObject(context.Background(), s.bucket, k, bytes.NewReader(buf.Bytes()), n, minio.PutObjectOptions{})
-	if err != nil {
-		return 0, "", err
-	}
-	return n, hex.EncodeToString(h.Sum(nil)), nil
+	return info.Size, hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func (s *S3) ReadFrom(key string, offset int64, max int) ([]byte, int64, error) {
@@ -224,5 +224,11 @@ func (s *S3) Delete(key string) error {
 	if err != nil {
 		return err
 	}
+	// Drop the per-key append lock too — lockFor leaks one mutex per key
+	// otherwise (#369). A concurrent Append after this re-creates it.
+	lock := s.lockFor(k)
+	lock.Lock()
+	s.locks.Delete(k)
+	lock.Unlock()
 	return s.client.RemoveObject(context.Background(), s.bucket, k, minio.RemoveObjectOptions{})
 }

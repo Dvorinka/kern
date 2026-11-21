@@ -20,9 +20,8 @@ import (
 // commands. Fork/pull_request runs never get a shell — untrusted code
 // must not invite the operator into its own sandbox.
 func (s *Server) createExec(c *gin.Context) {
-	id, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		fail(c, http.StatusBadRequest, "invalid_id", "job id must be a uuid")
+	id, ok := s.jobIDParam(c)
+	if !ok {
 		return
 	}
 	var req struct {
@@ -46,13 +45,20 @@ func (s *Server) createExec(c *gin.Context) {
 		s.internalError(c, err)
 		return
 	}
-	if job.Status != "in_progress" || job.RunnerID == nil {
-		fail(c, http.StatusConflict, "job_not_running", "job is not running on a runner")
-		return
-	}
+	// Tenant check before the status check so a foreign job id answers the
+	// same 404 as a missing one — no existence/status oracle (#368).
 	run, err := s.Store.Run(c.Request.Context(), job.RunID)
 	if err != nil {
 		s.internalError(c, err)
+		return
+	}
+	user, _ := currentUser(c)
+	if run.OrgID != user.OrgID {
+		fail(c, http.StatusNotFound, "not_found", "job not found")
+		return
+	}
+	if job.Status != "in_progress" || job.RunnerID == nil {
+		fail(c, http.StatusConflict, "job_not_running", "job is not running on a runner")
 		return
 	}
 	if run.TrustLevel == "fork" || run.TrustLevel == "pull_request" {
@@ -68,7 +74,6 @@ func (s *Server) createExec(c *gin.Context) {
 		fail(c, http.StatusConflict, "host_executor", "exec needs the docker executor; this job runs on a host executor")
 		return
 	}
-	user, _ := currentUser(c)
 	createdBy := &user.ID
 	ex, err := s.Store.CreateExec(c.Request.Context(), job.ID, req.Command, req.Interactive, createdBy)
 	if err != nil {
@@ -95,6 +100,23 @@ func (s *Server) execForUser(c *gin.Context) (store.ExecRequest, bool) {
 		s.internalError(c, err)
 		return ex, false
 	}
+	// The exec's job must belong to the caller's org — exec ids are
+	// unguessable but not authorization (#368).
+	user, _ := currentUser(c)
+	runID, _, rerr := s.Store.JobRunID(c.Request.Context(), ex.JobID)
+	if rerr != nil {
+		s.internalError(c, rerr)
+		return ex, false
+	}
+	run, rerr := s.Store.Run(c.Request.Context(), runID)
+	if rerr != nil {
+		s.internalError(c, rerr)
+		return ex, false
+	}
+	if run.OrgID != user.OrgID {
+		fail(c, http.StatusNotFound, "not_found", "exec session not found")
+		return ex, false
+	}
 	return ex, true
 }
 
@@ -115,6 +137,7 @@ func (s *Server) getExec(c *gin.Context) {
 		}
 		resp["data"] = base64.StdEncoding.EncodeToString(chunk)
 		resp["size"] = size
+		resp["next_offset"] = after + int64(len(chunk))
 	}
 	c.JSON(http.StatusOK, resp)
 }
@@ -150,6 +173,23 @@ func (s *Server) postExecStdin(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+// cancelExec marks a pending or running exec session cancelled so the runner
+// kills the remote docker exec when the client disconnects (e.g. Ctrl-C).
+func (s *Server) cancelExec(c *gin.Context) {
+	ex, ok := s.execForUser(c)
+	if !ok {
+		return
+	}
+	if err := s.Store.CancelExec(c.Request.Context(), ex.ID); err != nil {
+		s.internalError(c, err)
+		return
+	}
+	if user, ok := currentUser(c); ok {
+		s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "exec.cancel", ex.ID.String())
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
 // runnerExec resolves an exec request for the runner-facing routes and
 // verifies the exec's job is still leased to this runner.
 func (s *Server) runnerExec(c *gin.Context) (store.ExecRequest, store.Job, store.Runner, bool) {
@@ -178,6 +218,17 @@ func (s *Server) runnerExec(c *gin.Context) (store.ExecRequest, store.Job, store
 		return ex, job, runner, false
 	}
 	if job.RunnerID == nil || *job.RunnerID != runner.ID {
+		fail(c, http.StatusNotFound, "not_found", "job is not leased to this runner")
+		return ex, job, runner, false
+	}
+	// Defense in depth behind the lease check: the job's project must
+	// belong to the runner's org (#368).
+	run, rerr := s.Store.Run(c.Request.Context(), job.RunID)
+	if rerr != nil {
+		s.internalError(c, rerr)
+		return ex, job, runner, false
+	}
+	if run.OrgID != runner.OrgID {
 		fail(c, http.StatusNotFound, "not_found", "job is not leased to this runner")
 		return ex, job, runner, false
 	}
@@ -235,9 +286,11 @@ func (s *Server) execStdinFeed(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"data":   base64.StdEncoding.EncodeToString(chunk),
-		"size":   size,
-		"closed": ex.StdinClosed,
+		"data":        base64.StdEncoding.EncodeToString(chunk),
+		"size":        size,
+		"next_offset": after + int64(len(chunk)),
+		"closed":      ex.StdinClosed,
+		"cancelled":   ex.State == "cancelled",
 	})
 }
 

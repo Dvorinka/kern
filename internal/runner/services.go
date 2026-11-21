@@ -10,6 +10,7 @@ package runner
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -122,12 +123,17 @@ func (e *executor) startServices(ctx context.Context) error {
 }
 
 func (e *executor) pullService(ctx context.Context, svc ClaimService) error {
+	var pullArgs []string
 	if svc.Credentials != nil && svc.Credentials.Username != "" {
-		if err := e.registryLogin(ctx, svc.Image, svc.Credentials.Username, svc.Credentials.Password); err != nil {
+		cfgDir, cleanup, err := e.registryLogin(ctx, svc.Image, svc.Credentials.Username, svc.Credentials.Password)
+		if err != nil {
 			return fmt.Errorf("registry login: %w", err)
 		}
+		defer cleanup()
+		pullArgs = append(pullArgs, "--config", cfgDir)
 	}
-	if err := e.docker(ctx, "pull", "-q", svc.Image); err != nil {
+	pullArgs = append(pullArgs, "pull", "-q", svc.Image)
+	if err := e.docker(ctx, pullArgs...); err != nil {
 		return err
 	}
 	recordImageUse(e.cfg.WorkRoot, svc.Image)
@@ -135,15 +141,14 @@ func (e *executor) pullService(ctx context.Context, svc ClaimService) error {
 }
 
 // registryLogin authenticates docker against the registry embedded in image
-// for one pull. The credential lives only in a throwaway --config dir that
-// is deleted on return — it never touches the runner user's docker config,
-// so a hostile workflow cannot exfiltrate it from a later job's image.
-func (e *executor) registryLogin(ctx context.Context, image, user, pass string) error {
+// for one pull. The credential lives only in a throwaway --config dir whose
+// cleanup func is invoked by the caller after docker pull completes — it never
+// touches the runner user's docker config.
+func (e *executor) registryLogin(ctx context.Context, image, user, pass string) (string, func(), error) {
 	dir, err := os.MkdirTemp("", "kern-regcred-")
 	if err != nil {
-		return err
+		return "", nil, err
 	}
-	defer os.RemoveAll(dir)
 	args := []string{"--config", dir, "login"}
 	if reg := registryHost(image); reg != "" {
 		args = append(args, reg)
@@ -152,9 +157,10 @@ func (e *executor) registryLogin(ctx context.Context, image, user, pass string) 
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Stdin = strings.NewReader(pass)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("docker login: %s", tailStr(string(out), 200))
+		_ = os.RemoveAll(dir)
+		return "", nil, fmt.Errorf("docker login: %s", tailStr(string(out), 200))
 	}
-	return nil
+	return dir, func() { _ = os.RemoveAll(dir) }, nil
 }
 
 // registryHost extracts the registry authority from an image reference:
@@ -587,14 +593,30 @@ func (e *executor) svcLogLine(svc, line string) {
 	msg := []byte("service:" + svc + " | " + line + "\n")
 	e.svcLogMu.Lock()
 	if len(e.svcLogPending)+len(msg) > svcLogPendingCap {
-		cut := len(e.svcLogPending) - svcLogPendingCap/4
-		if cut < 0 {
-			cut = 0
-		}
-		e.svcLogPending = append([]byte("service:log | ... truncated ...\n"), e.svcLogPending[cut:]...)
+		e.svcLogPending = trimServiceLogCap(e.svcLogPending, svcLogPendingCap-len(msg))
 	}
 	e.svcLogPending = append(e.svcLogPending, msg...)
 	e.svcLogMu.Unlock()
+}
+
+// trimServiceLogCap drops the oldest bytes on a newline boundary so UTF-8
+// runes and log lines are never split in half.
+func trimServiceLogCap(buf []byte, keep int) []byte {
+	marker := []byte("service:log | ... truncated ...\n")
+	if keep <= len(marker) {
+		return marker
+	}
+	target := keep - len(marker)
+	if len(buf) <= target {
+		return buf
+	}
+	cut := len(buf) - target
+	if nl := bytes.IndexByte(buf[cut:], '\n'); nl >= 0 {
+		cut += nl + 1
+	} else {
+		cut = len(buf)
+	}
+	return append(marker, buf[cut:]...)
 }
 
 // flushServiceLogs posts buffered service output to the most recently
@@ -608,7 +630,11 @@ func (e *executor) flushServiceLogs() {
 	if len(data) == 0 || n <= 0 {
 		if len(data) > 0 {
 			e.svcLogMu.Lock()
-			e.svcLogPending = append(data, e.svcLogPending...)
+			combined := append(data, e.svcLogPending...)
+			if len(combined) > svcLogPendingCap {
+				combined = trimServiceLogCap(combined, svcLogPendingCap)
+			}
+			e.svcLogPending = combined
 			e.svcLogMu.Unlock()
 		}
 		return
