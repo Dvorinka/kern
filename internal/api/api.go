@@ -60,6 +60,11 @@ type Server struct {
 
 	// stepLogBus fans kern_step_log notifications out to SSE followers (#374).
 	stepLogBus *logBus
+
+	// mcpSessions holds live streamable-HTTP sessions minted at initialize:
+	// session id -> *mcpSession. In-process by design — a restart ends
+	// sessions, which clients handle by re-initializing (#377).
+	mcpSessions sync.Map
 }
 
 type webhookTask struct {
@@ -305,10 +310,10 @@ func (s *Server) buildRouter() *gin.Engine {
 		auth.GET("/geo/reverse", s.geoReverse)
 		auth.GET("/metrics", s.prometheus)
 		auth.POST("/mcp", s.mcp)
-		// Streamable-HTTP mounts: GET would open SSE (stateless server — 405),
-		// DELETE tears down a session that is never minted.
-		auth.GET("/mcp", s.mcpMethodNotAllowed)
-		auth.DELETE("/mcp", s.mcpMethodNotAllowed)
+		// Streamable-HTTP session mounts (#377): GET opens the session's
+		// server->client SSE channel, DELETE tears the session down.
+		auth.GET("/mcp", s.mcpOpenStream)
+		auth.DELETE("/mcp", s.mcpCloseSession)
 		auth.GET("/projects/:project/settings", s.getProjectSettings)
 		admin.PUT("/projects/:project/settings", s.putProjectSettings)
 		auth.GET("/projects/:project/icon", s.projectIcon)

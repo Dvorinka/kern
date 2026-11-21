@@ -111,6 +111,16 @@ func (s *Server) mcp(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, rpcErr(nil, -32600, "invalid request"))
 		return
 	}
+	// A session id the client echoes must name a live session; an id the
+	// server never minted (or one that expired) is a 404 per the spec.
+	sess, sessOK := s.mcpSessionFor(c)
+	if !sessOK {
+		c.JSON(http.StatusNotFound, rpcErr(nil, -32600, "unknown or expired Mcp-Session-Id"))
+		return
+	}
+	if sess != nil {
+		c.Set(mcpSessionCtxKey, sess)
+	}
 	var reqs []rpcRequest
 	batch := trim[0] == '['
 	if batch {
@@ -167,6 +177,13 @@ func (s *Server) mcpHandle(c *gin.Context, req rpcRequest) *rpcResponse {
 				"prompts":   map[string]any{},
 			},
 		})
+		// Mint the streamable-HTTP session: clients echo this id back in
+		// Mcp-Session-Id on later requests and on the GET/DELETE stream.
+		user, _ := currentUser(c)
+		sess := &mcpSession{id: uuid.NewString(), userID: user.ID,
+			created: time.Now(), notify: make(chan []byte, 32)}
+		s.mcpSessions.Store(sess.id, sess)
+		c.Header("Mcp-Session-Id", sess.id)
 	case "ping":
 		resp = rpcOK(req.ID, map[string]any{})
 	case "tools/list":
@@ -976,7 +993,8 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) *rpcResponse {
 		if timeout <= 0 || timeout > 600 {
 			timeout = 120
 		}
-		out, err = s.mcpWaitRun(ctx, runID, time.Duration(timeout)*time.Second)
+		out, err = s.mcpWaitRun(ctx, runID, time.Duration(timeout)*time.Second,
+			s.mcpProgressFn(c, req))
 	case "kern_list_artifacts":
 		runID, perr := uuid.Parse(mcpArgStringOr(call.Arguments, "run_id"))
 		if perr != nil {
@@ -1376,7 +1394,8 @@ func mcpRunContext(run store.Run) map[string]any {
 
 // mcpWaitRun polls until the run reaches a terminal status or the timeout
 // lapses — an agent blocking on a result burns one call instead of polling.
-func (s *Server) mcpWaitRun(ctx context.Context, runID uuid.UUID, timeout time.Duration) (map[string]any, error) {
+func (s *Server) mcpWaitRun(ctx context.Context, runID uuid.UUID, timeout time.Duration,
+	progress func(total, done int, msg string)) (map[string]any, error) {
 	deadline := time.Now().Add(timeout)
 	for {
 		run, err := s.Store.Run(ctx, runID)
@@ -1386,6 +1405,16 @@ func (s *Server) mcpWaitRun(ctx context.Context, runID uuid.UUID, timeout time.D
 		switch run.Status {
 		case "completed", "cancelled":
 			return map[string]any{"run": run, "terminal": true}, nil
+		}
+		if progress != nil {
+			jobs, _ := s.Store.JobsForRun(ctx, runID)
+			done := 0
+			for _, j := range jobs {
+				if j.Status == "completed" {
+					done++
+				}
+			}
+			progress(len(jobs), done, "run "+run.Status)
 		}
 		if time.Now().After(deadline) {
 			return map[string]any{"run": run, "terminal": false}, nil
@@ -1721,3 +1750,137 @@ func (s *Server) mcpResolveJobID(ctx context.Context, orgID uuid.UUID, raw strin
 		return uuid.Nil, fmt.Errorf("job_id prefix %q is ambiguous (%d matches) — pass more characters", raw, len(cands))
 	}
 }
+
+// --- Streamable-HTTP sessions (#377) -------------------------------------
+// initialize mints a session id the client echoes back in Mcp-Session-Id.
+// GET /mcp opens the server->client SSE channel for notifications
+// (progress events); DELETE ends the session. Sessions live in-process:
+// a restart drops them and clients re-initialize, matching the spec's
+// MAY-not-MUST stance on resumability.
+
+const mcpSessionTTL = 24 * time.Hour
+
+type mcpSession struct {
+	id      string
+	userID  uuid.UUID
+	created time.Time
+	notify  chan []byte // buffered; slow clients drop notifications
+}
+
+func (s *Server) mcpSessionFor(c *gin.Context) (*mcpSession, bool) {
+	sid := c.GetHeader("Mcp-Session-Id")
+	if sid == "" {
+		return nil, true // stateless request — allowed
+	}
+	v, ok := s.mcpSessions.Load(sid)
+	if !ok {
+		return nil, false
+	}
+	sess := v.(*mcpSession)
+	if time.Since(sess.created) > mcpSessionTTL {
+		s.mcpSessions.Delete(sid)
+		return nil, false
+	}
+	return sess, true
+}
+
+func (s *Server) mcpNotify(sess *mcpSession, msg map[string]any) {
+	if sess == nil {
+		return
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return
+	}
+	select {
+	case sess.notify <- data:
+	default: // drop for slow consumers — never block the caller
+	}
+}
+
+// mcpOpenStream serves GET /mcp: the session's server->client channel.
+func (s *Server) mcpOpenStream(c *gin.Context) {
+	sess, ok := s.mcpSessionFor(c)
+	if !ok {
+		fail(c, http.StatusNotFound, "unknown_session", "unknown or expired Mcp-Session-Id")
+		return
+	}
+	if sess == nil {
+		fail(c, http.StatusBadRequest, "session_required", "GET requires a Mcp-Session-Id from initialize")
+		return
+	}
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Status(http.StatusOK)
+	flusher, _ := c.Writer.(http.Flusher)
+	ping := time.NewTicker(25 * time.Second)
+	defer ping.Stop()
+	for {
+		select {
+		case <-c.Request.Context().Done():
+			return
+		case data := <-sess.notify:
+			c.Writer.WriteString("data: ")
+			c.Writer.Write(data)
+			c.Writer.WriteString("\n\n")
+			if flusher != nil {
+				flusher.Flush()
+			}
+		case <-ping.C:
+			c.Writer.WriteString(": ping\n\n")
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}
+}
+
+// mcpCloseSession serves DELETE /mcp.
+func (s *Server) mcpCloseSession(c *gin.Context) {
+	sid := c.GetHeader("Mcp-Session-Id")
+	if sid == "" {
+		fail(c, http.StatusBadRequest, "session_required", "DELETE requires Mcp-Session-Id")
+		return
+	}
+	if _, ok := s.mcpSessions.LoadAndDelete(sid); !ok {
+		fail(c, http.StatusNotFound, "unknown_session", "unknown or expired Mcp-Session-Id")
+		return
+	}
+	c.Status(http.StatusOK)
+}
+
+const mcpSessionCtxKey = "kern.mcp_session"
+
+// mcpProgressFn returns the progress publisher for this call when the
+// request carries params._meta.progressToken AND the client holds a live
+// session — otherwise nil so callers skip the extra bookkeeping.
+func (s *Server) mcpProgressFn(c *gin.Context, req rpcRequest) func(total, done int, msg string) {
+	var params struct {
+		Meta struct {
+			Token json.RawMessage `json:"progressToken"`
+		} `json:"_meta"`
+	}
+	if json.Unmarshal(req.Params, &params) != nil || len(params.Meta.Token) == 0 {
+		return nil
+	}
+	v, ok := c.Get(mcpSessionCtxKey)
+	if !ok {
+		return nil
+	}
+	sess := v.(*mcpSession)
+	return func(total, done int, msg string) {
+		// Progress is best-effort — drop for slow consumers.
+		s.mcpNotify(sess, map[string]any{
+			"jsonrpc": "2.0",
+			"method":  "notifications/progress",
+			"params": map[string]any{
+				"progressToken": params.Meta.Token,
+				"progress":      done,
+				"total":         total,
+				"message":       msg,
+			},
+		})
+	}
+}
+
