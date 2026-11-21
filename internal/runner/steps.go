@@ -62,6 +62,11 @@ func (e *executor) runStep(ctx context.Context, step StepSpec) (string, error) {
 		return "", fmt.Errorf("start step %d: %w", step.Number, err)
 	}
 
+	// Reset per-step watchdog latches so a prior continue-on-error step
+	// cannot misclassify a later failure.
+	e.hangDetected.Store(false)
+	e.diskQuotaExceeded.Store(false)
+
 	outcome, code, stepErr := e.runStepUnit(ctx, step)
 
 	var diag *diagnosis
@@ -176,6 +181,9 @@ func (e *executor) runStepUnit(ctx context.Context, step StepSpec) (string, int,
 		e.logStep(step, "KERN: "+stepErr.Error())
 		return outcome, code, stepErr
 	}
+	if outcome == "cancelled" || e.cancelled.Load() {
+		return "cancelled", code, nil
+	}
 	if step.Uses != "" {
 		e.logStep(step, usesStepHeader(step))
 		outcome, code = e.runUsesStep(ctx, step)
@@ -224,8 +232,17 @@ func (e *executor) runStepBody(ctx context.Context, step StepSpec) (string, int,
 	}
 
 	pump := newLogPump(e.c, e.jobID, step.Number, e.logMask, &e.ann)
-	defer pump.close()
-	go e.watchSilence(stepCtx, step, pump)
+	watchCtx, watchCancel := context.WithCancel(stepCtx)
+	watchDone := make(chan struct{})
+	go func() {
+		defer close(watchDone)
+		e.watchSilence(watchCtx, step, pump)
+	}()
+	defer func() {
+		watchCancel()
+		<-watchDone
+		pump.close()
+	}()
 	if hdr := runStepHeader(step); hdr != "" {
 		pump.write([]byte(hdr))
 	}
@@ -716,19 +733,22 @@ type logPump struct {
 	// step's streams; nil disables parsing.
 	anns *annotationSink
 
-	mu     sync.Mutex
-	buf    []byte
-	tail   []byte // last bytes seen, for failure diagnosis
-	stop   chan struct{}
-	closed sync.WaitGroup
+	mu      sync.Mutex
+	flushMu sync.Mutex
+	buf     []byte
+	tail    []byte // last bytes seen, for failure diagnosis
+	stop    chan struct{}
+	closed  sync.WaitGroup
 	// lastWrite is the unix-nano timestamp of the most recent chunk; the
 	// silence watchdog reads it to tell a live-but-quiet step from a hang.
 	lastWrite atomic.Int64
 }
 
 const (
-	logFlushBytes    = 256 << 10
-	logFlushInterval = time.Second
+	logFlushBytes     = 256 << 10
+	logMaxChunkBytes  = 512 << 10
+	logMaxRetainBytes = 2 << 20
+	logFlushInterval  = time.Second
 )
 
 func newLogPump(c *client, jobID string, step int, mask *secrets.Masker, anns *annotationSink) *logPump {
@@ -787,24 +807,39 @@ func (p *logPump) append(line []byte) {
 }
 
 func (p *logPump) flush() {
-	p.mu.Lock()
-	if len(p.buf) == 0 {
+	p.flushMu.Lock()
+	defer p.flushMu.Unlock()
+	for {
+		p.mu.Lock()
+		if len(p.buf) == 0 {
+			p.mu.Unlock()
+			return
+		}
+		n := min(len(p.buf), logMaxChunkBytes)
+		chunk := make([]byte, n)
+		copy(chunk, p.buf[:n])
+		p.buf = p.buf[n:]
 		p.mu.Unlock()
-		return
-	}
-	data := p.buf
-	p.buf = nil
-	p.mu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := p.c.appendLog(ctx, p.jobID, p.step, data); err != nil {
-		// Losing a chunk is acceptable; the next flush retries with fresh bytes.
-		buf := make([]byte, 0, len(data)+64)
-		lines := strings.SplitN(string(data), "\n", 2)
-		if len(lines) == 2 {
-			buf = append(buf, []byte(lines[0])...)
-			buf = append(buf, '\n')
-			_ = p.c.appendLog(context.Background(), p.jobID, p.step, buf)
+
+		var err error
+		for attempt := 0; attempt < 3; attempt++ {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			err = p.c.appendLog(ctx, p.jobID, p.step, chunk)
+			cancel()
+			if err == nil {
+				break
+			}
+			time.Sleep(time.Duration(attempt+1) * 200 * time.Millisecond)
+		}
+		if err != nil {
+			// Re-prepend failed chunk up to cap so the next flush retries
+			// in order without growing memory unboundedly.
+			p.mu.Lock()
+			if len(chunk)+len(p.buf) <= logMaxRetainBytes {
+				p.buf = append(chunk, p.buf...)
+			}
+			p.mu.Unlock()
+			return
 		}
 	}
 }
@@ -822,16 +857,22 @@ func (p *logPump) close() {
 	p.flush()
 }
 
-// streamInto copies a reader into the pump line by line.
+// streamInto copies a reader into the pump using bounded 64 KiB slices so a
+// single giant line without '\n' cannot allocate unbounded memory.
 func streamInto(r io.Reader, p *logPump) {
-	br := bufio.NewReaderSize(r, 1<<20)
+	br := bufio.NewReaderSize(r, 64<<10)
 	for {
-		line, err := br.ReadString('\n')
-		if len(line) > 0 {
-			p.write([]byte(line))
+		chunk, err := br.ReadSlice('\n')
+		if len(chunk) > 0 {
+			cp := make([]byte, len(chunk))
+			copy(cp, chunk)
+			p.write(cp)
+		}
+		if err == bufio.ErrBufferFull {
+			continue
 		}
 		if err != nil {
-			if err != io.EOF && len(line) > 0 {
+			if err != io.EOF && len(chunk) > 0 {
 				p.write([]byte("\n")) // terminate a partial trailing line
 			}
 			return

@@ -10,6 +10,7 @@ package runner
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -515,14 +516,30 @@ func (e *executor) svcLogLine(svc, line string) {
 	msg := []byte("service:" + svc + " | " + line + "\n")
 	e.svcLogMu.Lock()
 	if len(e.svcLogPending)+len(msg) > svcLogPendingCap {
-		cut := len(e.svcLogPending) - svcLogPendingCap/4
-		if cut < 0 {
-			cut = 0
-		}
-		e.svcLogPending = append([]byte("service:log | ... truncated ...\n"), e.svcLogPending[cut:]...)
+		e.svcLogPending = trimServiceLogCap(e.svcLogPending, svcLogPendingCap-len(msg))
 	}
 	e.svcLogPending = append(e.svcLogPending, msg...)
 	e.svcLogMu.Unlock()
+}
+
+// trimServiceLogCap drops the oldest bytes on a newline boundary so UTF-8
+// runes and log lines are never split in half.
+func trimServiceLogCap(buf []byte, keep int) []byte {
+	marker := []byte("service:log | ... truncated ...\n")
+	if keep <= len(marker) {
+		return marker
+	}
+	target := keep - len(marker)
+	if len(buf) <= target {
+		return buf
+	}
+	cut := len(buf) - target
+	if nl := bytes.IndexByte(buf[cut:], '\n'); nl >= 0 {
+		cut += nl + 1
+	} else {
+		cut = len(buf)
+	}
+	return append(marker, buf[cut:]...)
 }
 
 // flushServiceLogs posts buffered service output to the most recently
@@ -536,7 +553,11 @@ func (e *executor) flushServiceLogs() {
 	if len(data) == 0 || n <= 0 {
 		if len(data) > 0 {
 			e.svcLogMu.Lock()
-			e.svcLogPending = append(data, e.svcLogPending...)
+			combined := append(data, e.svcLogPending...)
+			if len(combined) > svcLogPendingCap {
+				combined = trimServiceLogCap(combined, svcLogPendingCap)
+			}
+			e.svcLogPending = combined
 			e.svcLogMu.Unlock()
 		}
 		return
