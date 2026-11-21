@@ -44,7 +44,7 @@ Runs:
   runs wait <run-id> [--interval 5s] [--timeout 30m]   block until the run concludes
   runs remediate <job-id> --step N        approve a remediation proposal
   logs <run-id> [-f]                      alias for runs logs; -f follows
-  diagnose <run-id> [--tail N] [--job K]  pasteable failure bundle
+  diagnose <run-id> [--tail N] [--job K] [-i]  pasteable failure bundle
   doctor                                  control-plane + fleet health check
 
 Remote offload:
@@ -112,7 +112,7 @@ func commandUsage(name string) string {
   runs logs <run-id> [--job KEY] [--step N] [--follow] [--out DIR]
   runs remediate <job-id> --step N     approve a remediation proposal
   logs <run-id> [-f]                   alias for runs logs
-  diagnose <run-id> [--tail N] [--job K]
+  diagnose <run-id> [--tail N] [--job K] [-i]
 
 Run ids accept the full uuid or the unambiguous short prefix printed by
 runs list. --ref matches refs/heads/<branch> or a full ref; --pr matches
