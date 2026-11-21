@@ -26,6 +26,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/dvorinka/kern/internal/auth"
+	"github.com/dvorinka/kern/internal/blobs"
 	"github.com/dvorinka/kern/internal/store"
 	"github.com/dvorinka/kern/internal/version"
 	"github.com/dvorinka/kern/internal/workflows"
@@ -387,6 +388,18 @@ func mcpTools() []mcpTool {
 			InputSchema: func() map[string]any {
 				p := props(map[string]map[string]any{"project": str("project slug")})
 				p["required"] = []string{"project"}
+				return p
+			}()},
+		{Name: "kern_exec_job", Description: "Run a command inside a live job's container and return its output. Trusted, running docker jobs only.",
+			Annotations: mcpAnn(false, false, false),
+			InputSchema: func() map[string]any {
+				p := props(map[string]map[string]any{
+					"job_id":  str("job UUID (must be in_progress on a docker runner)"),
+					"command": str("shell command to run"),
+					"timeout": num("seconds to wait for completion, default 60, max 120"),
+					"tail":    num("output bytes to return, default 8192, max 65536"),
+				})
+				p["required"] = []string{"job_id", "command"}
 				return p
 			}()},
 		{Name: "kern_mint_agent_token", Description: "Mint a short-lived scoped API token for an agent session. Grants are narrowed to the caller's own.",
@@ -986,6 +999,16 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) *rpcResponse {
 			mcpArgStringOr(call.Arguments, "workflow"))
 	case "kern_optimize_project":
 		out, err = s.mcpOptimizeProject(ctx, user, mcpArgStringOr(call.Arguments, "project"))
+	case "kern_exec_job":
+		jobID, perr := uuid.Parse(mcpArgStringOr(call.Arguments, "job_id"))
+		command := strings.TrimSpace(mcpArgStringOr(call.Arguments, "command"))
+		if perr != nil || command == "" {
+			err = fmt.Errorf("job_id must be a UUID and command is required")
+			break
+		}
+		out, err = s.mcpExecJob(ctx, user, jobID, command,
+			mcpArgInt(call.Arguments, "timeout", 60),
+			mcpArgInt(call.Arguments, "tail", 8192))
 	case "kern_mint_agent_token":
 		out, err = s.mcpMintAgentToken(c, user, call.Arguments)
 	default:
@@ -1058,7 +1081,7 @@ func (s *Server) mcpToolAllowed(c *gin.Context, name string, args map[string]jso
 		if !grantHas(granted, mcpArgStringOr(args, "project")) {
 			return projectDenied
 		}
-	case "kern_remediate_job", "kern_approve_deployment":
+	case "kern_remediate_job", "kern_approve_deployment", "kern_exec_job":
 		jobID, perr := uuid.Parse(mcpArgStringOr(args, "job_id"))
 		if perr != nil {
 			return fmt.Errorf("job_id must be a UUID")
@@ -1562,5 +1585,62 @@ func (s *Server) mcpMintAgentToken(c *gin.Context, user store.User, args map[str
 		"labels":     labels,
 		"expires_at": expires.UTC().Format(time.RFC3339),
 		"note":       "shown once — store it securely",
+	}, nil
+}
+
+// mcpExecJob runs a command inside a live job's container through the exec
+// subsystem — the same gates the HTTP route enforces (trusted run, docker
+// executor, job in progress) — and returns the finished output tail.
+func (s *Server) mcpExecJob(ctx context.Context, user store.User, jobID uuid.UUID, command string, timeout, tail int) (map[string]any, error) {
+	if timeout <= 0 || timeout > 120 {
+		timeout = 60
+	}
+	if tail <= 0 || tail > 64<<10 {
+		tail = 8192
+	}
+	ex, err := s.createExecSession(ctx, user, jobID, command, false)
+	if err != nil {
+		return nil, err
+	}
+	deadline := time.Now().Add(time.Duration(timeout) * time.Second)
+	for {
+		ex, err = s.Store.Exec(ctx, ex.ID)
+		if err != nil {
+			return nil, err
+		}
+		if ex.State == "done" || ex.State == "failed" || ex.State == "cancelled" {
+			break
+		}
+		if time.Now().After(deadline) {
+			return map[string]any{
+				"exec_id": ex.ID, "state": ex.State,
+				"timed_out": true, "note": "session still running — output may grow",
+			}, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+	key := blobs.ExecOutKey(ex.JobID.String(), ex.ID.String())
+	_, size, err := s.Blobs.ReadFrom(key, 0, 0)
+	out := ""
+	if err == nil && size > 0 {
+		off := size - int64(tail)
+		if off < 0 {
+			off = 0
+		}
+		if data, _, rerr := s.Blobs.ReadFrom(key, off, tail); rerr == nil {
+			out = string(data)
+		}
+	}
+	return map[string]any{
+		"exec_id":   ex.ID,
+		"state":     ex.State,
+		"exit_code": ex.ExitCode,
+		"error":     ex.Error,
+		"output":    out,
+		"log_size":  size,
 	}, nil
 }
