@@ -64,13 +64,16 @@ func (e *executor) jobCacheDir() string {
 }
 
 // ensureCacheMountLink points the in-container cache path at the runner's
-// persistent cache on hosts where the agent is not itself containerized.
-// checkoutViaMirror runs git on the host but records container paths
-// (/kern/cache) into worktree .git files; without the link the mirror
-// lands in an unrelated host directory the job container never mounts, and
-// every git command inside the job fails with "not a git repository".
+// persistent cache. checkoutViaMirror runs git on the host but records
+// container paths (/kern/cache) into worktree .git files; without the link
+// the mirror lands in an unrelated directory the job container never
+// mounts, and every git command inside the job fails with "not a git
+// repository". This applies equally to native hosts and to containerized
+// runners whose agent container does not bind-mount the work cache — in
+// the latter case WorkRoot is mounted at the same path, so the link target
+// is still the shared cache the job containers see.
 func (a *Agent) ensureCacheMountLink() {
-	if runtime.GOOS != "linux" || inContainer() {
+	if runtime.GOOS != "linux" {
 		return
 	}
 	target := cacheDir(a.cfg.WorkRoot)
