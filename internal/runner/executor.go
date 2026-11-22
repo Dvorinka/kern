@@ -1214,7 +1214,9 @@ func (e *executor) checkoutViaMirror(ctx context.Context, run ClaimRun, ws strin
 		basic := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + run.CloneToken))
 		fetch = append(fetch, "-c", "http.extraHeader=Authorization: Basic "+basic)
 	}
-	fetch = append(fetch, "fetch", "--filter=blob:none", "--prune", "origin", target)
+	// --tags --force mirrors git clone's tag visibility so release tools
+	// (GoReleaser, git describe) see current and re-tagged refs in worktrees.
+	fetch = append(fetch, "fetch", "--filter=blob:none", "--prune", "--tags", "--force", "origin", target)
 	if out, err := exec.CommandContext(ctx, "git", fetch...).CombinedOutput(); err != nil {
 		// Hosts without partial-clone support reject --filter; retry full.
 		full := make([]string, 0, len(fetch))

@@ -731,3 +731,82 @@ func TestRewriteWorktreeGitdir(t *testing.T) {
 		t.Fatalf("unrelated gitdir rewritten: %q", got3)
 	}
 }
+
+// checkoutViaMirror fetches by SHA on tag runs too; without --tags --force,
+// release tools like GoReleaser see zero tags in the worktree or fail on a
+// moved tag.
+func TestCheckoutViaMirrorFetchesTags(t *testing.T) {
+	root := t.TempDir()
+	origin := filepath.Join(root, "origin.git")
+	src := filepath.Join(root, "src")
+
+	gitRun := func(dir string, args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
+			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com",
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v (%s)", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(root, "init", "--bare", "--quiet", origin)
+	gitRun(src, "init", "--quiet")
+	gitRun(src, "remote", "add", "origin", origin)
+	if err := os.WriteFile(filepath.Join(src, "a.txt"), []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(src, "add", "a.txt")
+	gitRun(src, "commit", "-q", "-m", "first")
+	sha1 := gitRun(src, "rev-parse", "HEAD")
+	gitRun(src, "tag", "v1.0.0")
+	gitRun(src, "push", "-q", "origin", "HEAD:refs/heads/master", "--tags")
+
+	workDir := filepath.Join(root, "work")
+	e := &executor{
+		cfg:  Config{WorkRoot: workDir},
+		host: true,
+		log:  zap.NewNop(),
+	}
+	ws1 := filepath.Join(root, "ws1")
+	if err := e.checkoutViaMirror(context.Background(), ClaimRun{
+		RepoURL: origin,
+		Ref:     "refs/tags/v1.0.0",
+		SHA:     sha1,
+	}, ws1); err != nil {
+		t.Fatalf("first checkoutViaMirror: %v", err)
+	}
+	if got := gitRun(ws1, "describe", "--tags", "--exact-match"); got != "v1.0.0" {
+		t.Fatalf("tag = %q, want v1.0.0", got)
+	}
+
+	// Moving an existing tag on origin must update cleanly (--force) rather
+	// than failing with "would clobber existing tag".
+	if err := os.WriteFile(filepath.Join(src, "a.txt"), []byte("two\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(src, "commit", "-aq", "-m", "second")
+	sha2 := gitRun(src, "rev-parse", "HEAD")
+	gitRun(src, "tag", "-f", "v1.0.0")
+	gitRun(src, "push", "-q", "-f", "origin", "HEAD:refs/heads/master", "refs/tags/v1.0.0")
+
+	ws2 := filepath.Join(root, "ws2")
+	if err := e.checkoutViaMirror(context.Background(), ClaimRun{
+		RepoURL: origin,
+		Ref:     "refs/tags/v1.0.0",
+		SHA:     sha2,
+	}, ws2); err != nil {
+		t.Fatalf("second checkoutViaMirror after re-tag: %v", err)
+	}
+	if got := gitRun(ws2, "describe", "--tags", "--exact-match"); got != "v1.0.0" {
+		t.Fatalf("re-tagged describe = %q, want v1.0.0", got)
+	}
+}
