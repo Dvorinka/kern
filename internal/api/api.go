@@ -142,7 +142,14 @@ func (s *Server) wireCommitStatus() {
 			jobs = nil
 		}
 		target := s.runPageURL(ctx, run)
-		if err := cl.PostCommitStatus(ctx, repo, run.SHA, state,
+		// Commit statuses accept only error|failure|pending|success —
+		// "cancelled" is a check-run conclusion, not a status state, and
+		// GitHub 422s the post (#incident: cancelled runs spammed warn logs).
+		ghState := state
+		if ghState == "cancelled" {
+			ghState = "error"
+		}
+		if err := cl.PostCommitStatus(ctx, repo, run.SHA, ghState,
 			"kern/"+run.WorkflowName, target, statusDescription(run, state, jobs)); err != nil {
 			s.Log.Warn("commit status failed", zap.String("repo", repo), zap.Error(err))
 		}
