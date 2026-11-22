@@ -5,6 +5,14 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-11-22
+
+### Fixed
+- Startup panic: `0037_runner_concurrency.sql` and
+  `0037_webhook_delivery_org.sql` shared goose version 37 after merging
+  from parallel PRs, crash-looping the API at migrate. Renumbered to
+  0042; neither file was applied anywhere yet.
+
 ## [0.18.0] - 2026-11-22
 
 ### Security
