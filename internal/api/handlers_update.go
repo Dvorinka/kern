@@ -393,6 +393,13 @@ func (s *Server) offerRunnerUpdate(ctx context.Context, runner store.Runner, opt
 	if !info.ManifestOK || info.RunnerImage == "" {
 		return "", "", nil, false
 	}
+	if !update.Newer(runner.Version, info.Latest) {
+		// At or past the release: if this runner still holds the lease it
+		// just finished updating — release so the next runner is not stuck
+		// waiting out the hold (#412).
+		runnerOffer.Release(runner.ID.String())
+		return "", "", nil, false
+	}
 	if !update.RunnerShouldOffer(optedIn, active, runner.Draining, runner.Version, info.Latest) {
 		return "", "", nil, false
 	}
