@@ -124,6 +124,23 @@ func TestLeaseOneAtATime(t *testing.T) {
 	}
 }
 
+func TestLeaseRelease(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	l := &Lease{Now: func() time.Time { return now }}
+	if !l.Allow("a", 15*time.Minute) {
+		t.Fatal("a")
+	}
+	// A non-holder release must not free the window.
+	l.Release("b")
+	if l.Allow("b", time.Minute) {
+		t.Fatal("b should still wait")
+	}
+	l.Release("a")
+	if !l.Allow("b", time.Minute) {
+		t.Fatal("b takes the released window")
+	}
+}
+
 func TestManifestBinaries(t *testing.T) {
 	raw := []byte(`{"version":"v0.4.0","git_sha":"0123456789abcdef0123456789abcdef01234567","runner_image":"ghcr.io/dvorinka/kern-runner","runner_digest":"sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","binaries":{"darwin-amd64":{"url":"https://github.com/x/releases/download/v0.4.0/kern-v0.4.0-darwin-amd64.tar.gz","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}`)
 	m, err := Parse(raw)

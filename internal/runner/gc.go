@@ -14,10 +14,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sync"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -130,6 +130,23 @@ func (a *Agent) sweepImagesOlder(ctx context.Context, maxAge time.Duration) {
 		writeImageLedger(a.cfg.WorkRoot, ledger)
 		imageLedgerMu.Unlock()
 	}
+}
+
+// pruneUnusedImages removes every image no container references. The ledger
+// only knows images KERN pulled itself; images fetched by steps through the
+// mounted docker socket or left behind by in-job docker builds have no
+// ledger entry and would otherwise sit until manual cleanup (#412). Critical
+// tier only — the caller is already idle-gated, and a queued job simply
+// re-pulls what it needs.
+func (a *Agent) pruneUnusedImages(ctx context.Context) {
+	ctxCmd, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	out, err := exec.CommandContext(ctxCmd, "docker", "image", "prune", "-af").CombinedOutput()
+	cancel()
+	if err != nil {
+		a.log.Warn("critical image prune failed", zap.String("docker", tailStr(string(out), 200)))
+		return
+	}
+	a.log.Info("critical image prune", zap.String("out", tailStr(strings.TrimSpace(string(out)), 200)))
 }
 
 // --- disk hygiene ---------------------------------------------------------
@@ -729,6 +746,7 @@ func (a *Agent) maybePruneDisk(ctx context.Context) {
 			zap.Int64("critical_floor_bytes", a.cfg.DiskCriticalFloorBytes))
 		if hasDocker {
 			a.sweepImagesOlder(ctx, criticalImageAge)
+			a.pruneUnusedImages(ctx)
 		}
 		a.sweepWorkspacesOlderThan(criticalWorkspaceAge)
 		a.sweepBoundedCacheTo(a.cfg.CacheMaxBytes / 2)

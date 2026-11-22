@@ -100,7 +100,7 @@ type Config struct {
 	// docker.
 	// Local marks an in-process `kern testbox` run on a developer machine:
 	// disables host-wide orphan container reaping and /github symlink mutation.
-	Local bool
+	Local    bool
 	Executor string
 	// CacheMaxBytes caps the persistent _cache tree (language caches,
 	// _toolcache, _actions). When the tree exceeds it, the oldest files are
@@ -584,6 +584,18 @@ func (a *Agent) maybeSelfUpdate(ctx context.Context, offer *updateOffer) {
 	uctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	busy := func() bool { return a.active.Load() != 0 || a.claiming.Load() != 0 }
+	// The offer only arrives while the server sees this runner idle, but a
+	// claim long-poll or job teardown can still be in flight here. Wait
+	// briefly for busy() to clear instead of burning the attempt on a
+	// transient — the 15-minute failure backoff otherwise stalls the whole
+	// fleet's rollout (#412). updating stays set during the wait, which
+	// also pauses new claims so the runner can actually go idle.
+	if busy() {
+		deadline := time.Now().Add(4 * time.Minute)
+		for busy() && time.Now().Before(deadline) && ctx.Err() == nil {
+			time.Sleep(5 * time.Second)
+		}
+	}
 	var err error
 	if inContainer() {
 		err = applySelfUpdate(uctx, offer.Image, busy)
