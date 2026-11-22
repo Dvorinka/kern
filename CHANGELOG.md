@@ -6,6 +6,13 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 ## [0.19.3] - 2026-11-22
 
 ### Fixed
+- The shared `kern` buildx builder is now registered under the runner
+  home (`<WorkRoot>/home/.docker`) that job containers mount at
+  `/github/home`. Previously the instance lived in the agent's own
+  home, so `BUILDX_BUILDER=kern` failed inside every privileged job
+  with `no builder "kern" found` (observed: cloudreve Release `server`
+  GoReleaser docker builds). Orphaned `buildx_buildkit_kern0`
+  containers from agent-home registrations are removed on recreate.
 - Mirror checkout now passes `--tags --force` when fetching, matching
   `git clone` tag visibility. GoReleaser and other release tooling
   require tags to exist locally; the mirror previously fetched only the

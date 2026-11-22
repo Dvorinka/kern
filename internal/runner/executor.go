@@ -1640,11 +1640,29 @@ func (e *executor) ensureBuildxBuilder(ctx context.Context) {
 		if err := exec.CommandContext(ctx, "docker", "buildx", "version").Run(); err != nil {
 			return
 		}
-		if err := exec.CommandContext(ctx, "docker", "buildx", "inspect", "kern").Run(); err == nil {
+		// Job containers mount the runner home at /github/home — keep the
+		// builder instance in that shared .docker dir so BUILDX_BUILDER=kern
+		// resolves inside jobs, not only in this agent's own home.
+		dockerCfg := filepath.Join(e.workRoot(), "home", ".docker")
+		if err := os.MkdirAll(dockerCfg, 0o777); err != nil {
+			e.log.Warn("buildx config dir failed", zap.String("path", dockerCfg), zap.Error(err))
 			return
 		}
-		if err := exec.CommandContext(ctx, "docker", "buildx", "create",
-			"--name", "kern", "--driver", "docker-container").Run(); err != nil {
+		env := append(os.Environ(), "DOCKER_CONFIG="+dockerCfg)
+		run := func(args ...string) error {
+			cmd := exec.CommandContext(ctx, "docker", args...)
+			cmd.Env = env
+			return cmd.Run()
+		}
+		if err := run("buildx", "inspect", "kern"); err == nil {
+			return
+		}
+		// An earlier agent may have created the builder in its own home —
+		// invisible to jobs — leaving an orphaned buildx_buildkit_kern0
+		// container that blocks recreating the shared instance.
+		_ = exec.CommandContext(ctx, "docker", "rm", "-f", "buildx_buildkit_kern0").Run()
+		if err := run("buildx", "create",
+			"--name", "kern", "--driver", "docker-container"); err != nil {
 			e.log.Warn("shared buildx builder creation failed", zap.Error(err))
 		}
 	})
