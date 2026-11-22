@@ -3,6 +3,21 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
+## [0.19.1] - 2026-11-22
+
+### Fixed
+- Runner disk autoheal: images pulled by steps through the docker socket
+  or left by in-job `docker build` have no ledger entry and accumulated
+  unbounded (observed: 254 images / ~38G on one runner at 95% disk). The
+  critical tier now also runs `docker image prune -af`, idle-gated, so
+  unreferenced images are reclaimed instead of only dangling layers.
+- Fleet self-update convergence: the offer lease held its full 15-minute
+  window even after the holder reached the target version — the lease is
+  now released when a heartbeat reports the runner at/past the release,
+  and runners wait up to 4 minutes for a transient busy state (claim
+  long-poll, job teardown) before failing the attempt and backing off.
+
+
 ## [0.19.0] - 2026-11-22
 
 ### Added
