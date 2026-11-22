@@ -448,6 +448,13 @@ func (a *Agent) sweepBoundedCacheTo(limit int64) {
 			return nil
 		}
 		if d.IsDir() {
+			// _repos mirrors back live job worktrees — evicting one
+			// mid-run leaves .git pointers dangling. They are small
+			// (blobless bare clones) and correctness-critical, so they
+			// sit outside the bound entirely.
+			if path == filepath.Join(root, "_repos") {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		info, err := d.Info()

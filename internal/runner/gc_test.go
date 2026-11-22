@@ -160,6 +160,38 @@ func TestSweepBoundedCacheAtomicUnits(t *testing.T) {
 	}
 }
 
+// _repos mirrors back live job worktrees: they sit outside the cache bound
+// entirely — an evicted mirror leaves every running job's .git dangling.
+func TestSweepBoundedCacheKeepsRepos(t *testing.T) {
+	root := t.TempDir()
+	cache := filepath.Join(root, "_cache")
+	old := time.Now().Add(-48 * time.Hour)
+	write := func(name string, size int, mtime time.Time) {
+		p := filepath.Join(cache, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, make([]byte, size), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(p, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("_repos/54b6061956feb41d.git/objects/aa/bb", 500, old)
+	write("gocache/aa/old", 600, old)
+
+	a := &Agent{cfg: Config{WorkRoot: root, CacheMaxBytes: 100}, log: zap.NewNop()}
+	a.sweepBoundedCache()
+
+	if _, err := os.Stat(filepath.Join(cache, "_repos/54b6061956feb41d.git/objects/aa/bb")); err != nil {
+		t.Error("_repos mirror must survive cache eviction")
+	}
+	if _, err := os.Stat(filepath.Join(cache, "gocache/aa/old")); !os.IsNotExist(err) {
+		t.Error("ordinary cache entries should still be evicted")
+	}
+}
+
 func TestCacheEvictionUnit(t *testing.T) {
 	cases := []struct {
 		rel  string

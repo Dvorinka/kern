@@ -63,6 +63,60 @@ func (e *executor) jobCacheDir() string {
 	return cacheDir(e.cfg.WorkRoot)
 }
 
+// ensureCacheMountLink points the in-container cache path at the runner's
+// persistent cache on hosts where the agent is not itself containerized.
+// checkoutViaMirror runs git on the host but records container paths
+// (/kern/cache) into worktree .git files; without the link the mirror
+// lands in an unrelated host directory the job container never mounts, and
+// every git command inside the job fails with "not a git repository".
+func (a *Agent) ensureCacheMountLink() {
+	if runtime.GOOS != "linux" || inContainer() {
+		return
+	}
+	target := cacheDir(a.cfg.WorkRoot)
+	if err := linkCachePath(containerCacheDir, target, a.log); err != nil {
+		a.log.Warn("cache link failed", zap.String("path", containerCacheDir), zap.String("target", target), zap.Error(err))
+	}
+}
+
+// linkCachePath makes link resolve to target. An existing directory that is
+// not the target is moved aside (never deleted — it may hold warm caches);
+// a wrong symlink or file is removed. No-op when link already resolves to
+// target, e.g. a bind mount or containerized runner.
+func linkCachePath(link, target string, log *zap.Logger) error {
+	if err := os.MkdirAll(target, 0o777); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		return err
+	}
+	if st, err := os.Lstat(link); err == nil {
+		if tt, terr := os.Stat(target); terr == nil {
+			if rst, rerr := os.Stat(link); rerr == nil && os.SameFile(rst, tt) {
+				return nil
+			}
+		}
+		if st.IsDir() {
+			aside := fmt.Sprintf("%s.legacy-%d", link, time.Now().Unix())
+			if rerr := os.Rename(link, aside); rerr != nil {
+				return rerr
+			}
+			if log != nil {
+				log.Info("cache link: moved stale dir aside", zap.String("from", link), zap.String("to", aside))
+			}
+		} else {
+			_ = os.Remove(link)
+		}
+	}
+	if err := os.Symlink(target, link); err != nil {
+		return err
+	}
+	if log != nil {
+		log.Info("cache link: created", zap.String("path", link), zap.String("target", target))
+	}
+	return nil
+}
+
 // hostCABundle is the trust store some job images do not ship.
 // It is mounted at a KERN-owned path, never at /etc/ssl/certs — a distro
 // package postinst (ca-certificates) replaces that file atomically and a
@@ -1081,7 +1135,10 @@ func (e *executor) checkout(ctx context.Context) error {
 	if run.RepoURL == "" {
 		return fmt.Errorf("run has neither repo_url nor local_path; there is nothing to check out")
 	}
-	if os.Getenv("KERN_GIT_MIRRORS") != "0" {
+	// Mirror checkouts only work when the job container mounts the shared
+	// runner cache: untrusted docker jobs get a per-job cache dir, so a
+	// shared _repos mirror would be invisible inside the container.
+	if (e.host || e.privileged()) && os.Getenv("KERN_GIT_MIRRORS") != "0" {
 		if err := e.checkoutViaMirror(ctx, run, ws); err == nil {
 			e.persistGitPushAuth(ctx, ws)
 			return nil

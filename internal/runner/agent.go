@@ -460,6 +460,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		}()
 	}
 	if a.executor() == "docker" {
+		a.ensureCacheMountLink()
 		if a.cfg.ImageMaxAge > 0 {
 			wg.Add(1)
 			go func() {

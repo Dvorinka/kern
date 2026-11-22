@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -613,5 +614,56 @@ func TestGithubEnvPropagatesAcrossHostSteps(t *testing.T) {
 	}
 	if got := e.enc.persisted()["KERN_PROPAGATED"]; got != "works-123" {
 		t.Fatalf("persisted KERN_PROPAGATED = %q", got)
+	}
+}
+
+// Native docker-executor runners need /kern/cache to resolve into the
+// mounted work cache: checkoutViaMirror records container paths into
+// worktree .git files, so a stale real directory breaks every in-job git
+// command. linkCachePath links, moves stale dirs aside, and no-ops when
+// the link already resolves to the target.
+func TestLinkCachePath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ")
+	}
+	root := t.TempDir()
+	target := filepath.Join(root, "work", "_cache")
+	link := filepath.Join(root, "kern", "cache")
+
+	// Fresh link.
+	if err := linkCachePath(link, target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if resolved, err := filepath.EvalSymlinks(link); err != nil || resolved != target {
+		t.Fatalf("link resolves to %q, err=%v", resolved, err)
+	}
+
+	// Idempotent: second call is a no-op.
+	if err := linkCachePath(link, target, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// A real directory that is not the target moves aside, content kept.
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(link, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(link, "warm"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := linkCachePath(link, target, nil); err != nil {
+		t.Fatal(err)
+	}
+	if resolved, _ := filepath.EvalSymlinks(link); resolved != target {
+		t.Fatalf("link resolves to %q after stale dir", resolved)
+	}
+	matches, _ := filepath.Glob(link + ".legacy-*")
+	if len(matches) != 1 {
+		t.Fatalf("expected one .legacy dir, got %v", matches)
+	}
+	if _, err := os.Stat(filepath.Join(matches[0], "warm")); err != nil {
+		t.Error("stale cache dir should be preserved, not deleted")
 	}
 }
