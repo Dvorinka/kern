@@ -667,3 +667,67 @@ func TestLinkCachePath(t *testing.T) {
 		t.Error("stale cache dir should be preserved, not deleted")
 	}
 }
+
+// git records the mirror's realpath into the worktree .git file; when
+// /kern/cache is a symlink that path is invisible inside the job
+// container. rewriteWorktreeGitdir swaps the resolved prefix for the
+// container path and leaves already-correct or unrelated pointers alone.
+func TestRewriteWorktreeGitdir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ")
+	}
+	root := t.TempDir()
+	realCache := filepath.Join(root, "opt", "kern", "work", "_cache")
+	mirror := filepath.Join(realCache, "_repos", "abc123.git")
+	if err := os.MkdirAll(mirror, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// /kern/cache stands in for the container path; link it to the real
+	// cache so EvalSymlinks resolves like a containerized agent sees.
+	containerCache := filepath.Join(root, "kern", "cache")
+	if err := os.MkdirAll(filepath.Dir(containerCache), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realCache, containerCache); err != nil {
+		t.Fatal(err)
+	}
+
+	ws := filepath.Join(root, "ws")
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitdirFile := filepath.Join(ws, ".git")
+
+	// gitdir as git would write it through the symlink: resolved path.
+	recorded := filepath.Join(mirror, "worktrees", "workspace")
+	if err := os.WriteFile(gitdirFile, []byte("gitdir: "+recorded+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rewriteWorktreeGitdir(gitdirFile, filepath.Join(containerCache, "_repos", "abc123.git"), containerCache, nil)
+	got, err := os.ReadFile(gitdirFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "gitdir: " + filepath.Join(containerCache, "_repos", "abc123.git", "worktrees", "workspace") + "\n"
+	if string(got) != want {
+		t.Fatalf("gitdir = %q, want %q", got, want)
+	}
+
+	// Second run is a no-op.
+	rewriteWorktreeGitdir(gitdirFile, filepath.Join(containerCache, "_repos", "abc123.git"), containerCache, nil)
+	got2, _ := os.ReadFile(gitdirFile)
+	if string(got2) != want {
+		t.Fatalf("gitdir changed on second run: %q", got2)
+	}
+
+	// A gitdir outside the mirror is left untouched.
+	outside := "gitdir: /elsewhere/repo.git\n"
+	if err := os.WriteFile(gitdirFile, []byte(outside), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rewriteWorktreeGitdir(gitdirFile, filepath.Join(containerCache, "_repos", "abc123.git"), containerCache, nil)
+	got3, _ := os.ReadFile(gitdirFile)
+	if string(got3) != outside {
+		t.Fatalf("unrelated gitdir rewritten: %q", got3)
+	}
+}

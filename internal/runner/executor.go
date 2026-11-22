@@ -1239,7 +1239,49 @@ func (e *executor) checkoutViaMirror(ctx context.Context, run ClaimRun, ws strin
 	// The worktree's origin is the local mirror path — restore the real
 	// remote so step git ops and push auth behave like a normal clone.
 	_ = exec.CommandContext(ctx, "git", "-C", ws, "remote", "set-url", "origin", run.RepoURL).Run()
+	e.fixWorktreeGitdir(ws, mirror)
 	return nil
+}
+
+// fixWorktreeGitdir rewrites the worktree's .git pointer to the path the
+// job container actually mounts. git records the mirror's realpath — when
+// /kern/cache is a symlink into the work cache (containerized agent), that
+// realpath is a host path the job container cannot see, and every in-job
+// git command fails with "not a git repository". The mirror's worktree
+// admin dir resolves relative to the mirror, so only the prefix needs to
+// become the container path; agent-side git still resolves it through the
+// same link.
+func (e *executor) fixWorktreeGitdir(ws, mirror string) {
+	rewriteWorktreeGitdir(filepath.Join(ws, ".git"), mirror, e.cachePath(), e.log)
+}
+
+func rewriteWorktreeGitdir(gitdirFile, mirror, containerCache string, log *zap.Logger) {
+	raw, err := os.ReadFile(gitdirFile)
+	if err != nil {
+		return
+	}
+	line := strings.TrimSpace(string(raw))
+	if !strings.HasPrefix(line, "gitdir: ") {
+		return
+	}
+	recorded := strings.TrimSpace(strings.TrimPrefix(line, "gitdir: "))
+	resolved, err := filepath.EvalSymlinks(mirror)
+	if err != nil {
+		return
+	}
+	rel, err := filepath.Rel(resolved, recorded)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return
+	}
+	fixed := filepath.Join(containerCache, "_repos", filepath.Base(mirror), rel)
+	if fixed == recorded {
+		return
+	}
+	if err := os.WriteFile(gitdirFile, []byte("gitdir: "+fixed+"\n"), 0o644); err != nil {
+		if log != nil {
+			log.Warn("worktree gitdir rewrite failed", zap.String("path", gitdirFile), zap.Error(err))
+		}
+	}
 }
 
 // persistGitPushAuth mirrors actions/checkout: on trust tiers that receive a
