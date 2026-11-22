@@ -5,6 +5,21 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 
 ## [Unreleased]
 
+### Fixed
+- Privileged jobs declaring `services:` failed every retry with
+  `network kern-svc-<job> not found` — the per-job bridge was only
+  created on the unprivileged path (#410).
+- Root-run docker actions poisoned the shared `/kern/cache` with
+  root-owned files, breaking later uid-1000 `npm ci`/`pnpm` steps; the
+  runner now hands cache ownership back after each action, docker
+  actions mount the job-scoped cache, and `EACCES` cache failures
+  classify as `cache_permissions` instead of `missing_binary` (#411).
+- CLI/diagnose polish: single `v` version prefix everywhere, jobs stamp
+  runner name/version at claim time so `kern runs show`/`diagnose`
+  report historical identity, successful `continue-on-error` steps no
+  longer dump 8KB log tails, and undefined `secrets.*`/`vars.*`
+  references warn in step setup and `kern diagnose` (#413).
+
 ### Added
 - Automatic concurrency grouping for workflows that declare none: CI
   events (`pull_request*`, `push`) get a platform default group per

@@ -78,6 +78,35 @@ func trustedExecutor(ports []string) *executor {
 	return e
 }
 
+// The #410 regression: privileged docker jobs with services ride the
+// per-job bridge, so the network must be created for them too — the old
+// code only ran ensureServiceNet on the unprivileged path.
+func TestNeedsServiceNetPrivilegedBridgeJob(t *testing.T) {
+	e := &executor{claim: &Claim{}, log: zap.NewNop()}
+	e.claim.Run.TrustLevel = "trusted"
+	e.claim.Job.ID = "job-1"
+	e.claim.Job.Services = []ClaimService{{Name: "pg", Image: "postgres:16", Ports: []string{"5432:5432"}}}
+	if !e.serviceBridgeJob() {
+		t.Fatal("precondition: privileged docker job with services must bridge")
+	}
+	if !e.needsServiceNet() {
+		t.Fatal("privileged serviceBridgeJob must require the service network")
+	}
+
+	// No services: host networking, no bridge.
+	e.claim.Job.Services = nil
+	if e.needsServiceNet() {
+		t.Fatal("privileged job without services must not require the service network")
+	}
+
+	// Unprivileged port-less service still needs the bridge.
+	e.claim.Run.TrustLevel = "fork"
+	e.claim.Job.Services = []ClaimService{{Name: "redis", Image: "redis:7"}}
+	if !e.needsServiceNet() {
+		t.Fatal("unprivileged port-less service must require the service network")
+	}
+}
+
 func TestAcquireServicePortsBridgePrivilegedSkips(t *testing.T) {
 	e := &executor{claim: &Claim{}, log: zap.NewNop()} // docker executor
 	e.claim.Run.TrustLevel = "trusted"

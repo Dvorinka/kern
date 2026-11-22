@@ -18,7 +18,9 @@ func TestNeedsLogTail(t *testing.T) {
 		{"success", step{Conclusion: "success"}, false},
 		{"skipped", step{Conclusion: "skipped"}, false},
 		{"running no diag", step{Status: "running"}, false},
-		{"success with diagnosis", step{Conclusion: "success", Diagnosis: diag}, true},
+		{"success with diagnosis", step{Conclusion: "success", Diagnosis: diag}, false},
+		{"skipped with diagnosis", step{Conclusion: "skipped", Diagnosis: diag}, false},
+		{"inconclusive with diagnosis", step{Status: "in_progress", Diagnosis: diag}, true},
 		{"failure with null diagnosis", step{Conclusion: "failure", Diagnosis: json.RawMessage("null")}, true},
 	}
 	for _, tc := range cases {

@@ -65,12 +65,15 @@ type Claim struct {
 		// runner token is the fallback.
 		CacheToken string `json:"cache_token"`
 	} `json:"job"`
-	Run          ClaimRun            `json:"run"`
-	Steps        []StepSpec          `json:"steps"`
-	Secrets      []string            `json:"secrets"`
-	LeaseEnds    time.Time           `json:"lease_expires_at"`
-	Remediations map[string][]string `json:"remediations"`
-	SelfHeal     string              `json:"self_heal"`
+	Run     ClaimRun   `json:"run"`
+	Steps   []StepSpec `json:"steps"`
+	Secrets []string   `json:"secrets"`
+	// ConfigWarnings lists secrets.*/vars.* references that resolved to
+	// nothing at claim time; surfaced in the first step's env audit (#413).
+	ConfigWarnings []string            `json:"config_warnings"`
+	LeaseEnds      time.Time           `json:"lease_expires_at"`
+	Remediations   map[string][]string `json:"remediations"`
+	SelfHeal       string              `json:"self_heal"`
 }
 
 // ClaimRun carries run identity and checkout source. CloneToken is minted by

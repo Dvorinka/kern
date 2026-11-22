@@ -57,16 +57,26 @@ func (e *executor) networkedServices() []ClaimService {
 	return out
 }
 
+// needsServiceNet reports whether this job requires a per-job bridge:
+// any port-less service, every host-executor service set (inter-service
+// DNS), and privileged docker jobs with services — those ride the bridge
+// via serviceBridgeJob and startContainer names the network at docker
+// create time, so it must exist first (#410).
+func (e *executor) needsServiceNet() bool {
+	return len(e.networkedServices()) > 0 ||
+		(e.host && len(e.claim.Job.Services) > 0) ||
+		e.serviceBridgeJob()
+}
+
 // ensureServiceNet creates the per-job bridge when any service needs it.
-// It runs before the job container so the container can join the net.
+// It runs before the job container so the container can join the net —
+// prepare() calls it for every executor, privileged included (#410).
 // Host executors need it for every service set — inter-service DNS is the
 // only name resolution available there, even for port-declaring services.
 func (e *executor) ensureServiceNet(ctx context.Context) error {
 	// The egress network is created --internal by ensureEgress; creating it
 	// here as a normal bridge would silently lift the egress restriction.
-	needsNet := len(e.networkedServices()) > 0 || (e.host && len(e.claim.Job.Services) > 0) ||
-		e.serviceBridgeJob()
-	if e.egressRestricted() || !needsNet {
+	if e.egressRestricted() || !e.needsServiceNet() {
 		return nil
 	}
 	out, err := exec.CommandContext(ctx, "docker", "network", "create", e.serviceNet()).CombinedOutput()

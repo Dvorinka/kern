@@ -206,6 +206,10 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 			UPDATE jobs j SET
 				status = 'in_progress',
 				runner_id = $1,
+				-- Stamp the runner's identity at claim time so historical
+				-- jobs keep name/version after fleet churn (#413).
+				runner_name = (SELECT name FROM runners WHERE id = $1),
+				runner_version = (SELECT version FROM runners WHERE id = $1),
 				started_at = now(),
 				attempt = j.attempt + 1,
 				not_before = NULL,
@@ -238,6 +242,7 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 		       j.fail_fast, j.priority, j.attempt, j.runner_id, j.queued_at, j.started_at, j.completed_at,
 		       j.lease_expires_at, j.error, j.outputs, j.outputs_spec, j.environment, j.environment_url,
 		       j.inputs, j.services, j.permissions, j.classification,
+		       j.runner_name, j.runner_version, j.config_warnings,
 		       r.id, r.project_id, r.workflow_id, r.workflow_version_id, r.run_number, r.event,
 		       r.ref, r.sha, r.commit_message, r.actor, r.status, r.conclusion, r.trust_level,
 		       r.source, r.concurrency_group, r.started_at, r.completed_at, r.created_at,
@@ -256,6 +261,7 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 			&out.Job.StartedAt, &out.Job.CompletedAt, &out.Job.LeaseExpiresAt, &out.Job.Error,
 			&out.Job.Outputs, &out.Job.OutputsSpec, &out.Job.Environment, &out.Job.EnvironmentURL,
 			&out.Job.Inputs, &out.Job.Services, &out.Job.Permissions, &out.Job.Classification,
+			&out.Job.RunnerName, &out.Job.RunnerVersion, &out.Job.ConfigWarnings,
 			&out.Run.ID, &out.Run.ProjectID, &runID, &versionID, &out.Run.RunNumber, &out.Run.Event,
 			&out.Run.Ref, &out.Run.SHA, &out.Run.CommitMessage, &out.Run.Actor, &out.Run.Status,
 			&out.Run.Conclusion, &out.Run.TrustLevel, &out.Run.Source, &out.Run.ConcurrencyGroup,
@@ -778,6 +784,14 @@ func (s *Store) CancelOrphanedJobs(ctx context.Context) (int64, error) {
 func (s *Store) SetJobQueued(ctx context.Context, jobID uuid.UUID) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE jobs SET status = 'queued', queued_at = now() WHERE id = $1 AND status = 'waiting'`, jobID)
+	return err
+}
+
+// SetJobConfigWarnings records claim-time findings (secrets.*/vars.*
+// references that resolved to nothing) so `kern diagnose` can surface them
+// on historical runs (#413).
+func (s *Store) SetJobConfigWarnings(ctx context.Context, jobID uuid.UUID, warnings []string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE jobs SET config_warnings = $2 WHERE id = $1`, jobID, warnings)
 	return err
 }
 

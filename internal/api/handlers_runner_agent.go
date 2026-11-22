@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -85,7 +86,7 @@ func (s *Server) registerRunner(c *gin.Context) {
 	}
 	runner, err := s.Store.RegisterRunner(c.Request.Context(), store.RegisterRunnerParams{
 		Concurrency: req.Concurrency,
-		OrgID: orgID, Name: req.Name, Hostname: req.Hostname, OS: req.OS, Arch: req.Arch,
+		OrgID:       orgID, Name: req.Name, Hostname: req.Hostname, OS: req.OS, Arch: req.Arch,
 		CPUs: req.CPUs, MemoryBytes: req.MemoryBytes, DiskBytes: req.DiskBytes,
 		Labels: req.Labels, Version: req.Version, TokenHash: hash, Ephemeral: req.Ephemeral,
 		Executor: req.Executor,
@@ -363,18 +364,37 @@ func (s *Server) respondWithClaim(c *gin.Context, claimed *store.ClaimedJob, run
 		})
 	}
 	secretNames := []string{}
+	definedSecrets := map[string]bool{}
+	definedVars := map[string]bool{}
 	if project, err := s.Store.ProjectByID(c.Request.Context(), claimed.Run.ProjectID); err == nil {
 		if secretRows, err := s.Store.SecretsForProject(c.Request.Context(), project.OrgID, project.ID); err == nil {
 			for _, sec := range secretRows {
 				secretNames = append(secretNames, sec.Name)
+				definedSecrets[sec.Name] = true
 			}
 		}
 		if claimed.Job.Environment != "" {
 			if envRows, err := s.Store.SecretsForEnvironment(c.Request.Context(), project.ID, claimed.Job.Environment); err == nil {
 				for _, sec := range envRows {
 					secretNames = append(secretNames, sec.Name)
+					definedSecrets[sec.Name] = true
 				}
 			}
+		}
+		if varRows, err := s.Store.VarsForProject(c.Request.Context(), project.ID); err == nil {
+			for _, v := range varRows {
+				definedVars[v.Name] = true
+			}
+		}
+	}
+	// Undefined secrets.*/vars.* references expand to "" silently; record
+	// them on the job so step setup and `kern diagnose` can warn (#413).
+	// Untrusted runs never receive secrets by design — only vars warn.
+	configWarnings := missingConfigRefs(claimed.WorkflowContent, definedSecrets, definedVars,
+		secretsEligibleTrust(claimed.Run.TrustLevel))
+	if len(configWarnings) > 0 {
+		if err := s.Store.SetJobConfigWarnings(c.Request.Context(), claimed.Job.ID, configWarnings); err != nil {
+			s.Log.Warn("record config warnings", zap.String("job", claimed.Job.ID.String()), zap.Error(err))
 		}
 	}
 	// needs.* context: the runner resolves needs.<id>.outputs in step bodies and
@@ -469,10 +489,41 @@ func (s *Server) respondWithClaim(c *gin.Context, claimed *store.ClaimedJob, run
 		},
 		"steps":            steps,
 		"secrets":          secretNames,
+		"config_warnings":  configWarnings,
 		"lease_expires_at": claimed.LeaseExpiresAt,
 		"remediations":     remediations,
 		"self_heal":        policy,
 	})
+}
+
+// configRefRe finds secrets.NAME / vars.NAME references in workflow source.
+// Scanning raw YAML can catch a mention inside a comment — acceptable: a
+// false positive warns, never blocks.
+var configRefRe = regexp.MustCompile(`\b(secrets|vars)\.([A-Za-z_][A-Za-z0-9_]*)`)
+
+// missingConfigRefs returns sorted "secrets.NAME"/"vars.NAME" refs found in
+// the workflow that have no matching defined secret/var. checkSecrets=false
+// (untrusted runs) skips the secrets half: those runs receive no secrets by
+// design, so every secrets.* ref would warn spuriously.
+func missingConfigRefs(content string, definedSecrets, definedVars map[string]bool, checkSecrets bool) []string {
+	missing := map[string]bool{}
+	for _, m := range configRefRe.FindAllStringSubmatch(content, -1) {
+		kind, name := m[1], m[2]
+		if kind == "secrets" {
+			if !checkSecrets || definedSecrets[name] {
+				continue
+			}
+		} else if definedVars[name] {
+			continue
+		}
+		missing[kind+"."+name] = true
+	}
+	out := make([]string, 0, len(missing))
+	for k := range missing {
+		out = append(out, k)
+	}
+	slices.Sort(out)
+	return out
 }
 
 func (s *Server) renewJobLease(c *gin.Context) {

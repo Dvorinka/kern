@@ -402,10 +402,13 @@ func (e *executor) prepare(ctx context.Context) error {
 			e.goStop()
 			return fmt.Errorf("egress policy: %w", err)
 		}
-		if err := e.ensureServiceNet(ctx); err != nil {
-			e.goStop()
-			return fmt.Errorf("service network: %w", err)
-		}
+	}
+	// Privileged jobs with services ride the per-job bridge too
+	// (serviceBridgeJob) — the network must exist before docker create
+	// references it, same as the unprivileged path (#410).
+	if err := e.ensureServiceNet(ctx); err != nil {
+		e.goStop()
+		return fmt.Errorf("service network: %w", err)
 	}
 	if err := e.startContainer(ctx); err != nil {
 		e.goStop()
@@ -510,6 +513,12 @@ func (e *executor) envAuditLine() string {
 	if names := sortedKeys(e.vars); len(names) > 0 {
 		b.WriteString(" | vars: ")
 		b.WriteString(strings.Join(names, " "))
+	}
+	if len(e.claim.ConfigWarnings) > 0 {
+		// Referenced-but-undefined secrets.*/vars.* expand to "" silently;
+		// name them here so the failure is a 30-second diagnosis (#413).
+		b.WriteString(" | undefined refs: ")
+		b.WriteString(strings.Join(e.claim.ConfigWarnings, " "))
 	}
 	return b.String()
 }
