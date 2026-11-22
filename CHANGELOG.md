@@ -5,6 +5,16 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
 
 ## [Unreleased]
 
+### Added
+- Automatic concurrency grouping for workflows that declare none: CI
+  events (`pull_request*`, `push`) get a platform default group per
+  (workflow, PR|branch) so a new commit supersedes the stale run
+  instead of piling up — `pull_request*` cancels in-progress, `push`
+  cancels on non-default branches and serializes on the default branch.
+  `auto_concurrency: "off"` in project or org settings disables;
+  explicit `concurrency:` always wins.
+
+
 ## [0.18.1] - 2026-11-22
 
 ### Fixed

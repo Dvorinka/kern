@@ -168,6 +168,17 @@ func (o *Orchestrator) StartRun(ctx context.Context, p store.CreateRunParams) (s
 	}
 
 	p.CancelInProgress = res.Plan.CancelInProgress
+	if p.ConcurrencyGroup == "" {
+		// Workflows that declare no `concurrency:` still get an automatic
+		// group per (workflow, PR|branch) for CI events — a new commit
+		// supersedes the stale run instead of piling up beside it (#platform).
+		// Explicit workflow concurrency always wins; project/org setting
+		// "auto_concurrency": "off" disables the default entirely.
+		if group, cancel := o.autoConcurrency(ctx, p); group != "" {
+			p.ConcurrencyGroup = group
+			p.CancelInProgress = cancel
+		}
+	}
 	seeds := make([]store.JobSeed, 0, len(res.Plan.Jobs))
 	for _, jp := range res.Plan.Jobs {
 		// Dispatch inputs merge over plan (workflow_call) inputs and take part
@@ -865,4 +876,83 @@ func triggerContext(p *store.CreateRunParams, workflowName string, vars map[stri
 		"inputs": inputs,
 		"vars":   vars,
 	}
+}
+
+// autoConcurrency assigns the platform default concurrency group for CI
+// events when the workflow declares none (#platform). Semantics mirror the
+// documented GitHub recommendation `group: ${{ github.workflow }}-${{ github.ref }}`
+// with cancel-in-progress tuned per event:
+//
+//   - pull_request / pull_request_target: one group per (workflow, PR) with
+//     cancel-in-progress — the PR head moved, the old run is dead weight.
+//   - push: one group per (workflow, ref). Non-default branches cancel
+//     in-progress runs; the default branch serializes instead (deploys and
+//     main-branch builds must not be killed mid-flight) — the queue depth
+//     cap of one still applies either way.
+//   - everything else (schedule, workflow_dispatch, api): no group — manual
+//     and scheduled runs are deliberate and must not cancel each other.
+//
+// "auto_concurrency": "off" in project settings (falling back to org
+// settings) disables the default; any other value keeps it on.
+func (o *Orchestrator) autoConcurrency(ctx context.Context, p store.CreateRunParams) (string, bool) {
+	prNumber, _ := p.Source["pr_number"].(float64)
+	var defaultBranch string
+	if p.Event == "push" {
+		if proj, err := o.Store.ProjectByID(ctx, p.ProjectID); err == nil {
+			defaultBranch = proj.DefaultBranch
+		}
+	}
+	scope, cancel := autoConcurrencyScope(p.Event, p.Ref, int64(prNumber), defaultBranch)
+	if scope == "" || !o.autoConcurrencyEnabled(ctx, p.ProjectID) {
+		return "", false
+	}
+	return fmt.Sprintf("auto:%s:%s", p.WorkflowID, scope), cancel
+}
+
+// autoConcurrencyScope is the pure decision half of autoConcurrency: which
+// runs get a group and whether it cancels in-progress. defaultBranch is
+// empty when the project lookup failed — push then serializes (safe side).
+func autoConcurrencyScope(event, ref string, prNumber int64, defaultBranch string) (scope string, cancel bool) {
+	switch event {
+	case "pull_request", "pull_request_target":
+		if prNumber == 0 {
+			return "", false // malformed source — don't guess a scope
+		}
+		return fmt.Sprintf("pr:%d", prNumber), true
+	case "push":
+		if ref == "" {
+			return "", false
+		}
+		// p.Ref arrives as refs/heads/<branch>; DefaultBranch is bare.
+		// An empty defaultBranch means the project lookup failed — serialize
+		// rather than risk cancelling a deploy mid-flight.
+		branch := strings.TrimPrefix(ref, "refs/heads/")
+		return "ref:" + ref, defaultBranch != "" && branch != defaultBranch
+	default:
+		return "", false
+	}
+}
+
+// autoConcurrencyEnabled resolves the project-then-org "auto_concurrency"
+// setting. Only the literal "off" disables — absent or any other value is on.
+func (o *Orchestrator) autoConcurrencyEnabled(ctx context.Context, projectID uuid.UUID) bool {
+	projSettings, _ := o.Store.ProjectSettings(ctx, projectID)
+	if autoConcurrencyOff(projSettings) {
+		return false
+	}
+	proj, err := o.Store.ProjectByID(ctx, projectID)
+	if err != nil {
+		return true // can't resolve org — default stays on
+	}
+	orgSettings, _ := o.Store.OrgSettings(ctx, proj.OrgID)
+	return !autoConcurrencyOff(orgSettings)
+}
+
+func autoConcurrencyOff(raw json.RawMessage) bool {
+	var m map[string]any
+	if json.Unmarshal(raw, &m) != nil {
+		return false
+	}
+	v, _ := m["auto_concurrency"].(string)
+	return v == "off"
 }
