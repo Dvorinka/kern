@@ -3,6 +3,26 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
+## [0.19.2] - 2026-11-22
+
+### Fixed
+- Git checkouts on native docker-executor runners: `checkoutViaMirror`
+  ran git against the literal container path `/kern/cache`, which on
+  hosts where the agent is not itself containerized resolved to a stale
+  unrelated directory — mirrors and worktree admin dirs never reached
+  the tree job containers mount, so every in-job git command failed with
+  `fatal: not a git repository` (observed: cloudreve Release
+  prepare/server jobs, CI `dorny/paths-filter`). The agent now links
+  `/kern/cache` to `<WorkRoot>/_cache` at startup; stale real
+  directories are moved aside, never deleted.
+- Untrusted docker jobs (per-job cache mount) now skip mirror checkout
+  and take the direct-clone path — a shared `_repos` mirror can never be
+  visible inside their container.
+- `_repos` mirrors are exempt from the bounded-cache sweep: they back
+  live job worktrees, and the idle gate cannot be trusted across agent
+  restarts.
+
+
 ## [0.19.1] - 2026-11-22
 
 ### Fixed
