@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/exaring/otelpgx"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
@@ -178,15 +178,21 @@ type Job struct {
 	Attempt         int             `json:"attempt"`
 	RunnerID        *uuid.UUID      `json:"runner_id"`
 	RunnerName      string          `json:"runner_name"`
-	QueuedAt        time.Time       `json:"queued_at"`
-	StartedAt       *time.Time      `json:"started_at"`
-	CompletedAt     *time.Time      `json:"completed_at"`
-	LeaseExpiresAt  *time.Time      `json:"lease_expires_at"`
-	Error           string          `json:"error"`
-	Outputs         json.RawMessage `json:"outputs"`
-	OutputsSpec     json.RawMessage `json:"outputs_spec"`
-	Inputs          json.RawMessage `json:"inputs"`
-	Services        json.RawMessage `json:"services"`
+	// RunnerVersion is the version the claiming runner reported at claim
+	// time — historical runs keep it after the runner self-updates (#413).
+	RunnerVersion string `json:"runner_version"`
+	// ConfigWarnings lists secrets.*/vars.* references that resolved to
+	// nothing at claim time ("secrets:FOO", "vars:BAR").
+	ConfigWarnings []string        `json:"config_warnings,omitempty"`
+	QueuedAt       time.Time       `json:"queued_at"`
+	StartedAt      *time.Time      `json:"started_at"`
+	CompletedAt    *time.Time      `json:"completed_at"`
+	LeaseExpiresAt *time.Time      `json:"lease_expires_at"`
+	Error          string          `json:"error"`
+	Outputs        json.RawMessage `json:"outputs"`
+	OutputsSpec    json.RawMessage `json:"outputs_spec"`
+	Inputs         json.RawMessage `json:"inputs"`
+	Services       json.RawMessage `json:"services"`
 	// Permissions is the job's GitHub Actions permissions ceiling, used to
 	// scope the per-run GITHUB_TOKEN at claim time.
 	Permissions    json.RawMessage `json:"permissions"`
@@ -271,7 +277,7 @@ type Runner struct {
 	// ClaimsPaused carries the runner's live claim-gate reasons
 	// (disk,memory,overload; '' = claiming normally), reported on each
 	// heartbeat so a gated runner stops reading as merely idle.
-	ClaimsPaused    string     `json:"claims_paused"`
+	ClaimsPaused string `json:"claims_paused"`
 	// Concurrency is the runner's worker-slot count as reported at
 	// register/heartbeat time; defaults to 1 for pre-#372 runners.
 	Concurrency     int        `json:"concurrency"`

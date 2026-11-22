@@ -88,6 +88,8 @@ type job struct {
 	Conclusion     string          `json:"conclusion"`
 	RunnerID       string          `json:"runner_id"`
 	RunnerName     string          `json:"runner_name"`
+	RunnerVersion  string          `json:"runner_version"`
+	ConfigWarnings []string        `json:"config_warnings"`
 	Attempt        int             `json:"attempt"`
 	Error          string          `json:"error"`
 	Classification string          `json:"classification,omitempty"`

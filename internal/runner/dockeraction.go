@@ -187,7 +187,10 @@ func (e *executor) dockerActionRun(ctx context.Context, step StepSpec, image, en
 		"-v", e.cmdDir() + ":" + containerCmdDir,
 		"-v", filepath.Join(e.workRoot(), "actions") + ":" + containerActionsDir + ":ro",
 		"-v", home + ":" + containerActionHome,
-		"-v", cacheDir(e.cfg.WorkRoot) + ":" + containerCacheDir,
+		// jobCacheDir, not the shared _cache: untrusted jobs get a per-job
+		// scratch mount so a root-run action container cannot plant
+		// root-owned files that poison later uid-1000 steps (#411, #369).
+		"-v", e.jobCacheDir() + ":" + containerCacheDir,
 		"-w", e.wsContainer(),
 		"--env-file", e.stepEnvPath(step),
 		// Multi-line env values cannot ride the env file; mirror the
@@ -234,6 +237,10 @@ func (e *executor) dockerActionRun(ctx context.Context, step StepSpec, image, en
 	dargs = append(dargs, image)
 	dargs = append(dargs, args...)
 
+	// Action containers run as root and the cache mount is shared with
+	// uid-1000 job steps; hand whatever they wrote back to the job user so
+	// a root-owned npm/pnpm entry cannot EACCES the next job (#411).
+	defer chownTree(e.jobCacheDir(), jobUID)
 	pump := newLogPump(e.c, e.jobID, step.Number, e.logMask, &e.ann)
 	defer pump.close()
 	stepCtx, cancel := context.WithCancel(ctx)

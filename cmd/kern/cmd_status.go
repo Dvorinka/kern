@@ -11,6 +11,19 @@ import (
 	"github.com/dvorinka/kern/internal/version"
 )
 
+// dispVersion renders a version with exactly one leading "v" — stored
+// versions already carry it, so naive "v%s" formatting printed "vv0.18.1".
+func dispVersion(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return v
+	}
+	if !strings.HasPrefix(v, "v") {
+		v = "v" + v
+	}
+	return v
+}
+
 var versionSkewOnce sync.Once
 
 // warnVersionSkew flags CLI/server drift on major.minor: an old binary
@@ -34,8 +47,8 @@ func warnVersionSkew(server string) {
 		return
 	}
 	versionSkewOnce.Do(func() {
-		fmt.Fprintf(os.Stderr, "kern: warning: CLI v%s vs server v%s — some commands may not work; upgrade the CLI\n",
-			version.Version, server)
+		fmt.Fprintf(os.Stderr, "kern: warning: CLI %s vs server %s — some commands may not work; upgrade the CLI\n",
+			dispVersion(version.Version), dispVersion(server))
 	})
 }
 

@@ -5,13 +5,13 @@ package main
 // log. Built entirely from the public /api/v1 surface; no server changes.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
-	"bytes"
 	"fmt"
 	"io"
-	"os"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -57,8 +57,8 @@ func (c *cli) cmdDiagnose(ctx context.Context, args []string) error {
 	// One endpoint carries the whole bundle — the old path fanned out to
 	// 2+2N sequential calls (#376).
 	var resp struct {
-		Run     run `json:"run"`
-		Jobs    []struct {
+		Run  run `json:"run"`
+		Jobs []struct {
 			Job   job        `json:"job"`
 			Steps []diagStep `json:"steps"`
 		} `json:"jobs"`
@@ -100,11 +100,14 @@ func (c *cli) cmdDiagnose(ctx context.Context, args []string) error {
 }
 
 // needsLogTail selects the steps worth tailing: terminal failures plus
-// anything carrying a diagnosis. Success and skipped steps have nothing to
-// diagnose.
+// inconclusive steps carrying a diagnosis. Successful and skipped steps
+// never tail — a continue-on-error step records success with a diagnosis
+// payload and its log is noise, not signal (#413).
 func needsLogTail(st step) bool {
-	switch st.Conclusion {
-	case "failure", "cancelled", "timed_out":
+	if st.Conclusion == "success" || st.Conclusion == "skipped" {
+		return false
+	}
+	if st.Conclusion != "" {
 		return true
 	}
 	return len(st.Diagnosis) > 0 && string(st.Diagnosis) != "null"
@@ -127,9 +130,27 @@ func writeDiagnose(w io.Writer, b diagnoseBundle, tail int64) {
 			concl = j.Status
 		}
 		line := fmt.Sprintf("\n== job %q (%s) — %s", j.Name, j.JobKey, concl)
-		if dj.Runner != nil {
-			rn := dj.Runner
-			line += fmt.Sprintf("  @%s (%s %s %s v%s)", rn.Name, rn.OS, rn.Arch, rn.Hostname, rn.Version)
+		// Runner name/version stamped at claim time win over the live
+		// runners map: historical runs keep the version that actually ran
+		// them, and deleted runners still resolve (#413).
+		rn := dj.Runner
+		dispName, dispVer := "", ""
+		if rn != nil {
+			dispName, dispVer = rn.Name, rn.Version
+		}
+		if j.RunnerName != "" {
+			dispName = j.RunnerName
+		}
+		if j.RunnerVersion != "" {
+			dispVer = j.RunnerVersion
+		}
+		if rn != nil {
+			line += fmt.Sprintf("  @%s (%s %s %s %s)", dispName, rn.OS, rn.Arch, rn.Hostname, dispVersion(dispVer))
+		} else if dispName != "" || dispVer != "" {
+			line += fmt.Sprintf("  @%s %s", dispName, dispVersion(dispVer))
+		}
+		if len(j.ConfigWarnings) > 0 {
+			line += "  config: " + strings.Join(j.ConfigWarnings, ", ")
 		}
 		if j.Attempt > 1 {
 			line += fmt.Sprintf("  attempt %d", j.Attempt)

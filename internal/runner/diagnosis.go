@@ -126,6 +126,14 @@ func diagnose(step StepSpec, exitCode int, logTail, stepErr, jobMemory string, d
 		return fail("ghcr_token",
 			"GHCR denied the push — GITHUB_TOKEN is a GitHub App installation token, which GHCR rejects for package writes",
 			"create a classic PAT with write:packages, store it as a project secret (e.g. GHCR_TOKEN), and use it for docker login instead of GITHUB_TOKEN")
+	case strings.Contains(lower, "eacces") &&
+		(strings.Contains(lower, "/kern/cache") || strings.Contains(lower, "root-owned files")):
+		// npm/pnpm EACCES under the shared cache: a root-run docker action
+		// poisoned entries the uid-1000 job user cannot write (#411). Not a
+		// missing binary — the command exists, the cache does not.
+		return fail("cache_permissions",
+			"The shared runner cache contains root-owned files the job user cannot write",
+			"the runner restores cache ownership after root-run actions; clear /kern/cache on the runner once to repair entries written before the fix")
 	case strings.Contains(lower, "permission denied"):
 		return fail("permission_denied", "A file or operation returned permission denied",
 			"check file ownership in the workspace or run the command with the right user")

@@ -632,7 +632,14 @@ func (s *Server) runDiagnose(c *gin.Context) {
 		Steps []diagStep `json:"steps"`
 	}
 	failed := func(st store.Step) bool {
-		if st.Conclusion != "" && st.Conclusion != "success" && st.Conclusion != "skipped" {
+		// Successful steps never tail — a continue-on-error step records
+		// conclusion=success with a diagnosis payload, and tailing it dumps
+		// 8KB of noise that buries the real failure (#413). The diagnosis
+		// JSON itself still ships; only the log tail is skipped.
+		if st.Conclusion == "success" || st.Conclusion == "skipped" {
+			return false
+		}
+		if st.Conclusion != "" {
 			return true
 		}
 		return len(st.Diagnosis) > 0 && string(st.Diagnosis) != "null"
