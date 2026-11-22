@@ -3,6 +3,16 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
+## [0.19.3] - 2026-11-22
+
+### Fixed
+- Mirror checkout now passes `--tags --force` when fetching, matching
+  `git clone` tag visibility. GoReleaser and other release tooling
+  require tags to exist locally; the mirror previously fetched only the
+  target ref, so release jobs failed with `git doesn't contain any
+  tags` (observed: cloudreve Release `server` job). Worktrees share
+  mirror refs, so fetched tags are visible inside the job.
+
 ## [0.19.2] - 2026-11-22
 
 ### Fixed
