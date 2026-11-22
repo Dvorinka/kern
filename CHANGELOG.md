@@ -3,7 +3,16 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
-## [Unreleased]
+## [0.19.0] - 2026-11-22
+
+### Added
+- Automatic concurrency grouping for workflows that declare none: CI
+  events (`pull_request*`, `push`) get a platform default group per
+  (workflow, PR|branch) so a new commit supersedes the stale run
+  instead of piling up — `pull_request*` cancels in-progress, `push`
+  cancels on non-default branches and serializes on the default branch.
+  `auto_concurrency: "off"` in project or org settings disables;
+  explicit `concurrency:` always wins.
 
 ### Fixed
 - Privileged jobs declaring `services:` failed every retry with
@@ -19,15 +28,6 @@ versions follow [SemVer](https://semver.org/) — minor bumps for features, patc
   report historical identity, successful `continue-on-error` steps no
   longer dump 8KB log tails, and undefined `secrets.*`/`vars.*`
   references warn in step setup and `kern diagnose` (#413).
-
-### Added
-- Automatic concurrency grouping for workflows that declare none: CI
-  events (`pull_request*`, `push`) get a platform default group per
-  (workflow, PR|branch) so a new commit supersedes the stale run
-  instead of piling up — `pull_request*` cancels in-progress, `push`
-  cancels on non-default branches and serializes on the default branch.
-  `auto_concurrency: "off"` in project or org settings disables;
-  explicit `concurrency:` always wins.
 
 
 ## [0.18.1] - 2026-11-22
