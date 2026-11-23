@@ -389,24 +389,20 @@ func (s *Server) ghCacheCommit(c *gin.Context) {
 		Size int64 `json:"size"`
 	}
 	_ = c.ShouldBindJSON(&req)
-	// The DELETE is the claim: exactly one commit wins on any replica.
+	// Atomically claim the reservation and read its chunks before CASCADE
+	// deletes gh_cache_upload_chunks.
 	id, perr := strconv.ParseInt(c.Param("cacheID"), 10, 64)
 	if perr != nil {
 		fail(c, http.StatusBadRequest, "invalid_id", "cache id must be numeric")
 		return
 	}
-	up, found, err := s.Store.DeleteGHUpload(c.Request.Context(), id)
+	up, chunks, found, err := s.Store.ClaimGHUpload(c.Request.Context(), id, job.ID)
 	if err != nil {
 		s.internalError(c, err)
 		return
 	}
-	if !found || up.JobID != job.ID {
+	if !found {
 		fail(c, http.StatusNotFound, "not_found", "cache reservation not found")
-		return
-	}
-	chunks, err := s.Store.GHChunks(c.Request.Context(), up.ID)
-	if err != nil {
-		s.internalError(c, err)
 		return
 	}
 	cleanup := func() { s.dropUploadChunks(up.ID, chunks) }

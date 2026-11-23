@@ -23,6 +23,7 @@ const SECTIONS: { id: string; label: string }[] = [
 	{ id: "s-github", label: "GitHub" },
 	{ id: "s-public", label: "Public runs" },
 	{ id: "s-heal", label: "Self-heal" },
+	{ id: "s-fleet", label: "Scheduling" },
 	{ id: "s-auto", label: "Auto-update" },
 	{ id: "s-wake", label: "Wake on demand" },
 	{ id: "s-members", label: "Members" },
@@ -58,6 +59,7 @@ export function SettingsPage() {
 			<div id="s-github"><GitHubCard /></div>
 			<div id="s-public"><PublicCICard /></div>
 			<div id="s-heal"><SelfHealCard /></div>
+			<div id="s-fleet"><SchedulingCard /></div>
 			<div id="s-auto"><AutoUpdateCard /></div>
 			<div id="s-wake"><WakeOnDemandCard /></div>
 			<div id="s-members"><MembersCard /></div>
@@ -306,6 +308,118 @@ function SelfHealCard() {
 			</Row>
 			{setHeal.error && (
 				<div className="px-4 py-2 text-xs text-[var(--err)]">{setHeal.error.message}</div>
+			)}
+		</Card>
+	);
+}
+
+function SchedulingCard() {
+	const qc = useQueryClient();
+	const { data } = useQuery({
+		queryKey: ["settings"],
+		queryFn: () =>
+			api.get<{
+				auto_concurrency: string;
+				max_transient_retries: string;
+				disk_alert_pct: string;
+				toolset: string;
+			}>("/settings"),
+	});
+	const save = useMutation({
+		mutationFn: (body: Record<string, string>) => api.put("/settings", body),
+		onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
+	});
+	return (
+		<Card className="mb-4">
+			<CardHeader
+				title="Scheduling &amp; fleet resilience"
+				sub="Auto-concurrency, transient retries, disk protection, and host toolset verification"
+			/>
+			<Row>
+				<span className="min-w-0 flex-1 text-xs text-[var(--dim)]">
+					<b className="font-medium text-[var(--ink)]">Auto-concurrency</b> — cancel superseded
+					in-progress runs on the same ref when a workflow omits a{" "}
+					<span className="font-mono">concurrency:</span> block.
+				</span>
+				<select
+					className="fsel"
+					aria-label="Auto-concurrency"
+					value={data?.auto_concurrency ?? "on"}
+					disabled={save.isPending}
+					onChange={(e) => save.mutate({ auto_concurrency: e.target.value })}
+				>
+					<option value="on">on</option>
+					<option value="off">off</option>
+				</select>
+			</Row>
+			<Row>
+				<span className="min-w-0 flex-1 text-xs text-[var(--dim)]">
+					<b className="font-medium text-[var(--ink)]">Transient retries</b> — automatically requeue
+					jobs on another runner after transient infra or network failures.
+				</span>
+				<select
+					className="fsel"
+					aria-label="Max transient retries"
+					value={data?.max_transient_retries ?? "1"}
+					disabled={save.isPending}
+					onChange={(e) => save.mutate({ max_transient_retries: e.target.value })}
+				>
+					{[0, 1, 2, 3, 5, 10].map((n) => (
+						<option key={n} value={String(n)}>
+							{n === 0 ? "0 (off)" : String(n)}
+						</option>
+					))}
+				</select>
+			</Row>
+			<Row>
+				<span className="min-w-0 flex-1 text-xs text-[var(--dim)]">
+					<b className="font-medium text-[var(--ink)]">Disk alert threshold</b> — alert when a
+					runner&apos;s free disk percentage drops below this limit (0 = off).
+				</span>
+				<span className="flex items-center gap-1.5">
+					<input
+						className="fsel w-20 text-right font-mono"
+						type="number"
+						min={0}
+						max={100}
+						aria-label="Disk alert threshold percent"
+						key={`disk-${data?.disk_alert_pct ?? "10"}`}
+						defaultValue={data?.disk_alert_pct ?? "10"}
+						onKeyDown={(e) => {
+							if (e.key === "Enter")
+								save.mutate({ disk_alert_pct: (e.target as HTMLInputElement).value.trim() || "0" });
+						}}
+						onBlur={(e) => {
+							const v = e.target.value.trim() || "0";
+							if (v !== (data?.disk_alert_pct ?? "10")) save.mutate({ disk_alert_pct: v });
+						}}
+					/>
+					<span className="text-xs text-[var(--faint)]">%</span>
+				</span>
+			</Row>
+			<Row>
+				<span className="min-w-0 flex-1 text-xs text-[var(--dim)]">
+					<b className="font-medium text-[var(--ink)]">Declared host toolset</b> — comma-separated
+					binaries verified on host-executor heartbeats to detect runner drift.
+				</span>
+				<input
+					className="fsel w-56 font-mono"
+					aria-label="Declared toolset"
+					placeholder="e.g. go,node,pnpm,docker,gh"
+					key={`tools-${data?.toolset ?? ""}`}
+					defaultValue={data?.toolset ?? ""}
+					onKeyDown={(e) => {
+						if (e.key === "Enter")
+							save.mutate({ toolset: (e.target as HTMLInputElement).value.trim() });
+					}}
+					onBlur={(e) => {
+						const v = e.target.value.trim();
+						if (v !== (data?.toolset ?? "")) save.mutate({ toolset: v });
+					}}
+				/>
+			</Row>
+			{save.error && (
+				<div className="px-4 py-2 text-xs text-[var(--err)]">{save.error.message}</div>
 			)}
 		</Card>
 	);

@@ -142,6 +142,9 @@ export interface Job {
   continue_on_error: boolean;
   attempt: number;
   runner_id: string | null;
+  runner_name?: string;
+  runner_version?: string;
+  config_warnings?: string[];
   queued_at: string;
   started_at: string | null;
   completed_at: string | null;
@@ -226,6 +229,10 @@ export interface Runner {
   draining: boolean;
   auto_update: boolean;
   wake_on_demand: boolean;
+  concurrency?: number;
+  executor?: "docker" | "host" | string;
+  missing_tools?: string[] | null;
+  disk_alerted?: boolean;
   last_heartbeat_at: string | null;
   cpu_percent: number | null;
   mem_used_bytes: number | null;

@@ -573,7 +573,7 @@ func TestFleetSlots(t *testing.T) {
 		t.Helper()
 		if _, err := s.RegisterRunner(ctx, RegisterRunnerParams{
 			OrgID: org.ID, Name: name, Hostname: name, OS: "linux", Arch: "amd64",
-			CPUs: cpus, Labels: labels, TokenHash: "h-" + name,
+			CPUs: cpus, Concurrency: cpus, Labels: labels, TokenHash: "h-" + name,
 		}); err != nil {
 			t.Fatal(err)
 		}

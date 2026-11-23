@@ -160,10 +160,23 @@ func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 	sub, rest := args[0], args[1:]
 	switch sub {
 	case "list":
-		opts, pos := parseFlags(rest, "status", "limit", "offset", "project", "ref", "pr", "workflow", "classification")
+		norm := make([]string, 0, len(rest))
+		for _, a := range rest {
+			if a == "-b" {
+				a = "--branch"
+			}
+			norm = append(norm, a)
+		}
+		opts, pos := parseFlags(norm, "status", "limit", "offset", "project", "ref", "branch", "pr", "workflow", "classification", "cause")
 		project := first(opts["project"], c.project)
 		q := url.Values{}
-		for _, k := range []string{"status", "limit", "offset", "ref", "pr", "workflow", "classification"} {
+		if v := first(opts["ref"], opts["branch"]); v != "" {
+			q.Set("ref", v)
+		}
+		if v := first(opts["classification"], opts["cause"]); v != "" {
+			q.Set("classification", v)
+		}
+		for _, k := range []string{"status", "limit", "offset", "pr", "workflow"} {
 			if v := opts[k]; v != "" {
 				q.Set(k, v)
 			}
@@ -184,10 +197,22 @@ func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 		c.orJSON(out.Runs, func() {
 			rows := make([][]string, 0, len(out.Runs))
 			for _, r := range out.Runs {
-				rows = append(rows, []string{shortID(r.ID), fmt.Sprintf("%d", r.RunNumber),
-					r.ProjectSlug, r.WorkflowName, r.Status, r.Conclusion, r.Event, relT(r.CreatedAt)})
+				branch := strings.TrimPrefix(strings.TrimPrefix(r.Ref, "refs/heads/"), "refs/tags/")
+				if branch == "" {
+					branch = "-"
+				}
+				d := "-"
+				if r.StartedAt != nil {
+					d = dur(*r.StartedAt, r.CompletedAt)
+				}
+				state := r.Conclusion
+				if state == "" {
+					state = r.Status
+				}
+				rows = append(rows, []string{shortID(r.ID), fmt.Sprintf("#%d", r.RunNumber),
+					r.ProjectSlug, r.WorkflowName, branch, styleStatus(state), d, relT(r.CreatedAt)})
 			}
-			table([]string{"ID", "#", "PROJECT", "WORKFLOW", "STATUS", "CONCL", "EVENT", "AGE"}, rows)
+			table([]string{"ID", "RUN", "PROJECT", "WORKFLOW", "BRANCH", "STATUS", "DUR", "AGE"}, rows)
 		})
 	case "show":
 		id, err := strarg(rest, 0, "run id")
@@ -205,7 +230,45 @@ func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 		}
 		return c.waitRun(ctx, id, opts["interval"], opts["timeout"])
 	case "trigger":
-		opts, pos := parseFlagsEx(rest, []string{"each-runner"}, "event", "ref", "sha", "inputs", "workflow-path")
+		// Extract repeatable -f/--field key=value inputs and short -w/--watch before standard parsing.
+		kvInputs := map[string]any{}
+		var norm []string
+		for i := 0; i < len(rest); i++ {
+			a := rest[i]
+			if a == "--" {
+				norm = append(norm, rest[i:]...)
+				break
+			}
+			if a == "-w" {
+				norm = append(norm, "--watch")
+				continue
+			}
+			if a == "-f" || a == "--field" {
+				if i+1 >= len(rest) {
+					return fmt.Errorf("%s requires key=value", a)
+				}
+				i++
+				k, v, ok := strings.Cut(rest[i], "=")
+				if !ok || strings.TrimSpace(k) == "" {
+					return fmt.Errorf("%s expects key=value, got %q", a, rest[i])
+				}
+				kvInputs[strings.TrimSpace(k)] = v
+				continue
+			}
+			if strings.HasPrefix(a, "--field=") {
+				raw := strings.TrimPrefix(a, "--field=")
+				k, v, ok := strings.Cut(raw, "=")
+				if !ok || strings.TrimSpace(k) == "" {
+					return fmt.Errorf("--field expects key=value, got %q", raw)
+				}
+				kvInputs[strings.TrimSpace(k)] = v
+				continue
+			}
+			norm = append(norm, a)
+		}
+		opts, pos := parseFlagsEx(norm,
+			[]string{"each-runner", "split-auto", "watch", "open"},
+			"event", "ref", "sha", "inputs", "workflow-path", "runners", "split", "interval", "timeout")
 		var slug, wf string
 		switch len(pos) {
 		case 0:
@@ -215,10 +278,10 @@ func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 		case 2:
 			slug, wf = pos[0], pos[1]
 		default:
-			return fmt.Errorf("usage: kern runs trigger [<project>] <workflow> [--event] [--ref] [--sha] [--inputs '{\"k\":\"v\"}'] [--workflow-path P] [--each-runner]")
+			return fmt.Errorf("usage: kern runs trigger [<project>] <workflow> [--ref R] [-f k=v] [--each-runner] [--runners a,b] [--split N|--split-auto] [--watch] [--open]")
 		}
 		if slug == "" {
-			return fmt.Errorf("project required — positional arg, --project or kern config set project")
+			return fmt.Errorf("project required — positional arg, -p/--project, or `kern config set project <slug>`")
 		}
 		body := map[string]any{
 			"event": opts["event"], "ref": opts["ref"], "sha": opts["sha"],
@@ -226,11 +289,24 @@ func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 		if opts["each-runner"] == "true" {
 			body["each_runner"] = true
 		}
+		if rs := splitCSV(opts["runners"]); len(rs) > 0 {
+			body["runners"] = rs
+		}
+		if opts["split-auto"] == "true" {
+			body["split_auto"] = true
+		} else if s := atoi(opts["split"]); s > 1 {
+			body["split"] = s
+		}
+		inputs := map[string]any{}
 		if raw := opts["inputs"]; raw != "" {
-			var inputs map[string]any
 			if err := json.Unmarshal([]byte(raw), &inputs); err != nil {
 				return fmt.Errorf("--inputs must be a JSON object: %w", err)
 			}
+		}
+		for k, v := range kvInputs {
+			inputs[k] = v
+		}
+		if len(inputs) > 0 {
 			body["inputs"] = inputs
 		}
 		var out struct {
@@ -244,7 +320,7 @@ func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 			err = c.api().post(ctx, "/projects/"+slug+"/runs", body, &out)
 		} else {
 			if wf == "" {
-				return fmt.Errorf("usage: kern runs trigger [<project>] <workflow> [--event] [--ref] [--sha] [--inputs '{\"k\":\"v\"}'] [--workflow-path P] [--each-runner]")
+				return fmt.Errorf("usage: kern runs trigger [<project>] <workflow> [--ref R] [-f k=v] [--each-runner] [--runners a,b] [--split N|--split-auto] [--watch] [--open]")
 			}
 			workflowID, werr := c.resolveWorkflow(ctx, slug, wf)
 			if werr != nil {
@@ -255,10 +331,20 @@ func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
+		if opts["open"] == "true" {
+			_ = openBrowser(strings.TrimRight(c.server, "/") + "/runs/" + out.Run.ID)
+		}
+		if opts["watch"] == "true" {
+			if !c.json {
+				fmt.Fprintf(os.Stderr, "run %s (#%d) triggered — waiting…\n", shortID(out.Run.ID), out.Run.RunNumber)
+			}
+			return c.waitRun(ctx, out.Run.ID, opts["interval"], opts["timeout"])
+		}
 		if c.json {
 			printJSON(out.Run)
 		} else {
-			fmt.Printf("run %s (#%d) triggered\n", out.Run.ID, out.Run.RunNumber)
+			fmt.Printf("run %s (#%d) triggered  %s\n", styleBold(shortID(out.Run.ID)), out.Run.RunNumber,
+				styleDim(strings.TrimRight(c.server, "/")+"/runs/"+out.Run.ID))
 		}
 	case "rerun":
 		id, err := strarg(rest, 0, "run id")
@@ -326,7 +412,7 @@ func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 		}
 		return c.runLogs(ctx, id, opts["job"], opts["step"], follow, opts["out"])
 	case "remediate":
-		opts, pos := parseFlags(rest, "step")
+		opts, pos := parseFlagsEx(rest, []string{"dismiss"}, "step")
 		jobID, err := strarg(pos, 0, "job id")
 		if err != nil {
 			return err
@@ -335,6 +421,16 @@ func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 		if n <= 0 {
 			return fmt.Errorf("--step N is required")
 		}
+		if opts["dismiss"] == "true" {
+			if err := c.api().post(ctx, "/jobs/"+jobID+"/remediate-dismiss",
+				map[string]any{"step": n}, nil); err != nil {
+				return err
+			}
+			c.orJSON(map[string]any{"dismissed": true, "job_id": jobID, "step": n}, func() {
+				fmt.Println("remediation dismissed")
+			})
+			return nil
+		}
 		var out struct {
 			Requeued bool `json:"requeued"`
 		}
@@ -342,7 +438,9 @@ func (c *cli) cmdRuns(ctx context.Context, args []string) error {
 			map[string]any{"step": n}, &out); err != nil {
 			return err
 		}
-		fmt.Println("remediation approved; job requeued")
+		c.orJSON(out, func() {
+			fmt.Println("remediation approved; job requeued")
+		})
 	default:
 		return fmt.Errorf("unknown runs subcommand %q", sub)
 	}

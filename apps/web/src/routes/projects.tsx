@@ -1,10 +1,10 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams, Link } from "react-router-dom";
-import { useState, type FormEvent } from "react";
-import { FolderGit2, Play, RefreshCw } from "lucide-react";
+import { useMemo, useState, type FormEvent } from "react";
+import { FolderGit2, Play, RefreshCw, SlidersHorizontal } from "lucide-react";
 import { api } from "../lib/api";
 import { connectGitHubApp } from "../lib/github";
-import type { Project, Run, Workflow } from "../lib/types";
+import type { Project, Run, Runner, Workflow } from "../lib/types";
 import { Button, EmptyState, Input, KV, PageHeader, ProjectIcon, Spinner } from "../components/ui";
 import { StatusSq } from "../components/status";
 import { Row } from "../components/layout";
@@ -118,8 +118,12 @@ export function ProjectsPage() {
                 <div className="pt2">
                   <ProjTile p={p} iconPath={icons[p.slug]} />
                   <div className="min-w-0">
-                    <b className="truncate" style={{ color: projectColor(p.slug) }}>
-                      {p.name}
+                    <b className="flex items-center gap-2 truncate">
+                      <span
+                        className="proj-dot"
+                        style={{ background: projectColor(p.slug) }}
+                      />
+                      <span className="truncate">{p.name}</span>
                     </b>
                     <small>{p.repo_full_name || p.local_path || p.repo_url || p.slug}</small>
                   </div>
@@ -274,12 +278,21 @@ export function ProjectDetailPage() {
         self_heal: string;
         fork_gate: string;
         pr_trust?: string;
+        auto_concurrency?: string;
         icon_path?: string;
         notify_url?: string;
         artifact_quota_mb?: string;
         artifact_bytes?: number;
         max_concurrent_jobs?: string;
+        max_transient_retries?: string;
+        prime_workflow?: string;
+        prime_auto?: string;
       }>(`/projects/${slug}/settings`),
+  });
+  const { data: runnersData } = useQuery({
+    queryKey: ["runners"],
+    queryFn: () => api.get<{ runners: Runner[] }>("/runners"),
+    staleTime: 15_000,
   });
   const { data: iconScan } = useQuery({
     queryKey: ["project-icons", slug],
@@ -314,6 +327,22 @@ export function ProjectDetailPage() {
     mutationFn: (v: string) => api.put(`/projects/${slug}/settings`, { pr_trust: v }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["project-settings", slug] }),
   });
+  const setAutoConc = useMutation({
+    mutationFn: (v: string) => api.put(`/projects/${slug}/settings`, { auto_concurrency: v }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["project-settings", slug] }),
+  });
+  const setRetries = useMutation({
+    mutationFn: (v: string) => api.put(`/projects/${slug}/settings`, { max_transient_retries: v }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["project-settings", slug] }),
+  });
+  const setPrimeWf = useMutation({
+    mutationFn: (v: string) => api.put(`/projects/${slug}/settings`, { prime_workflow: v }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["project-settings", slug] }),
+  });
+  const setPrimeAuto = useMutation({
+    mutationFn: (v: string) => api.put(`/projects/${slug}/settings`, { prime_auto: v }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["project-settings", slug] }),
+  });
   const setNotify = useMutation({
     mutationFn: (v: string) => api.put(`/projects/${slug}/settings`, { notify_url: v }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["project-settings", slug] }),
@@ -333,12 +362,28 @@ export function ProjectDetailPage() {
       qc.invalidateQueries({ queryKey: ["projects"] });
     },
   });
+  const [dispatchWf, setDispatchWf] = useState<string | null>(null);
   const trigger = useMutation({
-    mutationFn: (wfID: string) =>
-      api.post<{ run: { id: string } }>(`/projects/${slug}/workflows/${wfID}/runs`, {
+    mutationFn: (args: {
+      wfID: string;
+      ref?: string;
+      each_runner?: boolean;
+      runners?: string[];
+      split?: number;
+      split_auto?: boolean;
+    }) =>
+      api.post<{ run: { id: string } }>(`/projects/${slug}/workflows/${args.wfID}/runs`, {
         event: "workflow_dispatch",
+        ...(args.ref ? { ref: args.ref } : {}),
+        ...(args.each_runner ? { each_runner: true } : {}),
+        ...(args.runners && args.runners.length > 0 ? { runners: args.runners } : {}),
+        ...(args.split && args.split > 1 ? { split: args.split } : {}),
+        ...(args.split_auto ? { split_auto: true } : {}),
       }),
-    onSuccess: (res) => nav(`/runs/${res.run.id}`),
+    onSuccess: (res) => {
+      setDispatchWf(null);
+      nav(`/runs/${res.run.id}`);
+    },
   });
   const setDisabled = useMutation({
     mutationFn: (v: { id: string; disabled: boolean }) =>
@@ -551,6 +596,71 @@ export function ProjectDetailPage() {
               </span>
             }
           />
+          <KV
+            k="Auto-concurrency"
+            v={
+              <select
+                className="rounded border border-[var(--line)] bg-transparent px-2 py-0.5 text-xs"
+                value={psettings?.auto_concurrency ?? "inherit"}
+                disabled={setAutoConc.isPending}
+                onChange={(e) => setAutoConc.mutate(e.target.value)}
+              >
+                <option value="inherit">inherit org</option>
+                <option value="on">on — cancel superseded</option>
+                <option value="off">off</option>
+              </select>
+            }
+          />
+          <KV
+            k="Transient retries"
+            v={
+              <select
+                className="rounded border border-[var(--line)] bg-transparent px-2 py-0.5 text-xs"
+                value={psettings?.max_transient_retries ?? "inherit"}
+                disabled={setRetries.isPending}
+                onChange={(e) => setRetries.mutate(e.target.value)}
+              >
+                <option value="inherit">inherit org</option>
+                {[0, 1, 2, 3, 5].map((n) => (
+                  <option key={n} value={String(n)}>
+                    {n === 0 ? "0 (off)" : String(n)}
+                  </option>
+                ))}
+              </select>
+            }
+          />
+          <KV
+            k="Prime workflow"
+            v={
+              <span className="flex flex-wrap items-center gap-2">
+                <select
+                  className="max-w-44 rounded border border-[var(--line)] bg-transparent px-2 py-0.5 text-xs"
+                  value={psettings?.prime_workflow ?? ""}
+                  disabled={setPrimeWf.isPending}
+                  onChange={(e) => setPrimeWf.mutate(e.target.value)}
+                >
+                  <option value="">off</option>
+                  {workflows.map((w) => (
+                    <option key={w.id} value={w.path}>
+                      {w.name}
+                    </option>
+                  ))}
+                </select>
+                {psettings?.prime_workflow && (
+                  <select
+                    className="rounded border border-[var(--line)] bg-transparent px-2 py-0.5 text-xs"
+                    aria-label="Auto-prime new runners"
+                    value={psettings?.prime_auto ?? "off"}
+                    disabled={setPrimeAuto.isPending}
+                    onChange={(e) => setPrimeAuto.mutate(e.target.value)}
+                  >
+                    <option value="off">manual</option>
+                    <option value="on">auto-prime</option>
+                  </select>
+                )}
+              </span>
+            }
+          />
         </div>
       </div>
 
@@ -606,49 +716,69 @@ export function ProjectDetailPage() {
           />
         ) : (
           workflows.map((w) => (
-            <Row key={w.id}>
-              <span
-                className={`min-w-0 flex-1 truncate font-medium ${w.disabled ? "text-[var(--faint)]" : ""}`}
-                style={w.disabled ? undefined : { color: jobTint(w.name) }}
-              >
-                {w.name}
-              </span>
-              {w.disabled && (
-                <span className="text-[11px] uppercase tracking-wide text-[var(--warn)]">
-                  disabled
-                </span>
-              )}
-              <span className="font-mono flex-1 truncate text-xs text-[var(--faint)]">
-                {w.path}
-              </span>
-              {w.disabled ? (
-                <Button
-                  size="sm"
-                  onClick={() => setDisabled.mutate({ id: w.id, disabled: false })}
-                  disabled={setDisabled.isPending}
+            <div key={w.id} className="border-b border-[var(--line)] last:border-0">
+              <Row className="border-0">
+                <span
+                  className={`min-w-0 flex-1 truncate font-medium ${w.disabled ? "text-[var(--faint)]" : ""}`}
+                  style={w.disabled ? undefined : { color: jobTint(w.name) }}
                 >
-                  Enable
-                </Button>
-              ) : (
-                <>
+                  {w.name}
+                </span>
+                {w.disabled && (
+                  <span className="text-[11px] uppercase tracking-wide text-[var(--warn)]">
+                    disabled
+                  </span>
+                )}
+                <span className="font-mono flex-1 truncate text-xs text-[var(--faint)]">
+                  {w.path}
+                </span>
+                {w.disabled ? (
                   <Button
                     size="sm"
-                    onClick={() => trigger.mutate(w.id)}
-                    disabled={trigger.isPending}
-                  >
-                    <Play size={12} /> Run
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setDisabled.mutate({ id: w.id, disabled: true })}
+                    onClick={() => setDisabled.mutate({ id: w.id, disabled: false })}
                     disabled={setDisabled.isPending}
                   >
-                    Disable
+                    Enable
                   </Button>
-                </>
+                ) : (
+                  <>
+                    <Button
+                      size="sm"
+                      onClick={() => trigger.mutate({ wfID: w.id })}
+                      disabled={trigger.isPending}
+                    >
+                      <Play size={12} /> Run
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={dispatchWf === w.id ? "primary" : "ghost"}
+                      title="Dispatch options: branch, multi-runner fan-out, and dynamic splitting"
+                      onClick={() => setDispatchWf((cur) => (cur === w.id ? null : w.id))}
+                    >
+                      <SlidersHorizontal size={12} /> Dispatch
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setDisabled.mutate({ id: w.id, disabled: true })}
+                      disabled={setDisabled.isPending}
+                    >
+                      Disable
+                    </Button>
+                  </>
+                )}
+              </Row>
+              {dispatchWf === w.id && (
+                <DispatchPanel
+                  defaultBranch={project.default_branch || "main"}
+                  runners={runnersData?.runners ?? []}
+                  busy={trigger.isPending}
+                  error={trigger.error?.message}
+                  onRun={(opts) => trigger.mutate({ wfID: w.id, ...opts })}
+                  onClose={() => setDispatchWf(null)}
+                />
               )}
-            </Row>
+            </div>
           ))
         )}
       </div>
@@ -693,6 +823,147 @@ export function ProjectDetailPage() {
         )}
       </div>
     </>
+  );
+}
+
+function DispatchPanel({
+  defaultBranch,
+  runners,
+  busy,
+  error,
+  onRun,
+  onClose,
+}: {
+  defaultBranch: string;
+  runners: Runner[];
+  busy: boolean;
+  error?: string;
+  onRun: (opts: {
+    ref?: string;
+    each_runner?: boolean;
+    runners?: string[];
+    split?: number;
+    split_auto?: boolean;
+  }) => void;
+  onClose: () => void;
+}) {
+  const [ref, setRef] = useState(defaultBranch);
+  const [targetMode, setTargetMode] = useState<"auto" | "each" | "selected">("auto");
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [splitMode, setSplitMode] = useState<"default" | "auto" | "fixed">("default");
+  const [splitCount, setSplitCount] = useState(3);
+  const onlineRunners = useMemo(
+    () => runners.filter((r) => r.status === "online"),
+    [runners],
+  );
+
+  const toggleRunner = (name: string) =>
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+
+  const submit = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    onRun({
+      ref: ref.trim() ? (ref.trim().startsWith("refs/") ? ref.trim() : `refs/heads/${ref.trim()}`) : undefined,
+      each_runner: targetMode === "each",
+      runners: targetMode === "selected" ? [...picked] : undefined,
+      split_auto: splitMode === "auto",
+      split: splitMode === "fixed" ? Math.max(2, Math.min(16, splitCount)) : undefined,
+    });
+  };
+
+  return (
+    <form onSubmit={submit} className="dispatch-box">
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="flex items-center gap-2 text-xs text-[var(--dim)]">
+          <span>Branch / ref</span>
+          <Input
+            value={ref}
+            onChange={(e) => setRef(e.target.value)}
+            placeholder={defaultBranch}
+            className="h-8 w-40 font-mono text-xs"
+          />
+        </label>
+        <label className="flex items-center gap-2 text-xs text-[var(--dim)]">
+          <span>Placement</span>
+          <select
+            className="fsel"
+            value={targetMode}
+            onChange={(e) => setTargetMode(e.target.value as "auto" | "each" | "selected")}
+          >
+            <option value="auto">Auto-assign best runner</option>
+            <option value="each">Multi-run on every online runner ({onlineRunners.length})</option>
+            <option value="selected">Target specific runners…</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-2 text-xs text-[var(--dim)]">
+          <span>Sharding</span>
+          <select
+            className="fsel"
+            value={splitMode}
+            onChange={(e) => setSplitMode(e.target.value as "default" | "auto" | "fixed")}
+          >
+            <option value="default">Workflow default</option>
+            <option value="auto">Auto-split across fleet slots</option>
+            <option value="fixed">Fixed shard count</option>
+          </select>
+        </label>
+        {splitMode === "fixed" && (
+          <Input
+            type="number"
+            min={2}
+            max={16}
+            value={splitCount}
+            onChange={(e) => setSplitCount(parseInt(e.target.value, 10) || 2)}
+            className="h-8 w-20 font-mono text-xs"
+            aria-label="Shard count"
+          />
+        )}
+      </div>
+
+      {targetMode === "selected" && (
+        <div className="mt-2.5 flex flex-wrap items-center gap-2">
+          {runners.length === 0 ? (
+            <span className="text-xs text-[var(--faint)]">No runners enrolled.</span>
+          ) : (
+            runners.map((r) => (
+              <label
+                key={r.id}
+                className="rpill cursor-pointer select-none"
+                style={picked.has(r.name) ? { borderColor: "var(--ink)", color: "var(--ink)" } : undefined}
+              >
+                <input
+                  type="checkbox"
+                  checked={picked.has(r.name)}
+                  onChange={() => toggleRunner(r.name)}
+                />
+                {r.name}
+                <span className="text-[10px] text-[var(--faint)]">({r.status})</span>
+              </label>
+            ))
+          )}
+        </div>
+      )}
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Button
+          type="submit"
+          size="sm"
+          variant="primary"
+          disabled={busy || (targetMode === "selected" && picked.size === 0)}
+        >
+          <Play size={12} /> {busy ? "Dispatching…" : "Dispatch run"}
+        </Button>
+        <Button type="button" size="sm" variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        {error && <span className="text-xs text-[var(--err)]">{error}</span>}
+      </div>
+    </form>
   );
 }
 

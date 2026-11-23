@@ -23,6 +23,10 @@ func TestClaimRetryAntiAffinity(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("requeue: ok=%v err=%v", ok, err)
 	}
+	// Fast-forward requeue backoff (#373) so this test exercises anti-affinity directly.
+	if _, err := s.pool.Exec(ctx, `UPDATE jobs SET not_before = NULL WHERE id = $1`, jobs[0].ID); err != nil {
+		t.Fatalf("clear not_before: %v", err)
+	}
 
 	// The runner it failed on must not reclaim while a peer is eligible.
 	if c, err := s.ClaimJob(ctx, fat.ID, 30*time.Second); err != nil || c != nil {
@@ -59,6 +63,9 @@ func TestClaimRetryAntiAffinitySolo(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("requeue: ok=%v err=%v", ok, err)
 	}
+	if _, err := s.pool.Exec(ctx, `UPDATE jobs SET not_before = NULL WHERE id = $1`, jobs[0].ID); err != nil {
+		t.Fatalf("clear not_before: %v", err)
+	}
 	c, err = s.ClaimJob(ctx, only.ID, 30*time.Second)
 	if err != nil {
 		t.Fatalf("retake claim: %v", err)
@@ -86,11 +93,17 @@ func TestClaimRetryAntiAffinityPingPong(t *testing.T) {
 	if _, err := s.RequeueJob(ctx, a.ID, jobs[0].ID, "t"); err != nil {
 		t.Fatalf("requeue a: %v", err)
 	}
+	if _, err := s.pool.Exec(ctx, `UPDATE jobs SET not_before = NULL WHERE id = $1`, jobs[0].ID); err != nil {
+		t.Fatalf("clear not_before a: %v", err)
+	}
 	if c, err := s.ClaimJob(ctx, b.ID, 30*time.Second); err != nil || c == nil {
 		t.Fatalf("claim b: claim=%v err=%v", c, err)
 	}
 	if _, err := s.RequeueJob(ctx, b.ID, jobs[0].ID, "t"); err != nil {
 		t.Fatalf("requeue b: %v", err)
+	}
+	if _, err := s.pool.Exec(ctx, `UPDATE jobs SET not_before = NULL WHERE id = $1`, jobs[0].ID); err != nil {
+		t.Fatalf("clear not_before b: %v", err)
 	}
 
 	// Last attempt ran on b, so a is not penalized and must claim.

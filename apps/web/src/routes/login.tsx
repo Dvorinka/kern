@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
@@ -8,6 +8,9 @@ import { FanMark } from "../components/layout";
 export function LoginPage() {
 	const { login } = useAuth();
 	const nav = useNavigate();
+	const [params] = useSearchParams();
+	const rawNext = params.get("next") ?? "";
+	const nextPath = rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/";
 	const [email, setEmail] = useState("");
 	const [password, setPassword] = useState("");
 	const [err, setErr] = useState("");
@@ -25,7 +28,7 @@ export function LoginPage() {
 		setErr("");
 		try {
 			await login(email, password);
-			nav("/", { replace: true });
+			nav(nextPath, { replace: true });
 		} catch {
 			setErr("Invalid email or password.");
 		} finally {

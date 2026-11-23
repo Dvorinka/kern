@@ -97,6 +97,11 @@ type CreateRunParams struct {
 	// a fresh registration pins just the new runner).
 	EachRunner  bool
 	RunnerNames []string
+	// SplitN / SplitAuto let a manual dispatch override job sharding without
+	// editing the workflow YAML: SplitN fans each unsplit job into N shards,
+	// SplitAuto sizes from live fleet slots.
+	SplitN    int
+	SplitAuto bool
 	// DispatchTokenID records the API token that started the run so the
 	// claim query can enforce the token's max_concurrent_jobs. Zero when
 	// the run came from a session, webhook or cron.

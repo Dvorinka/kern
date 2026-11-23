@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { useEffect, useState } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import { Download, Wrench } from "lucide-react";
+import { AlertTriangle, Download, RotateCcw, Wrench, X } from "lucide-react";
 import { api } from "../lib/api";
 import type { Annotation, Artifact, Deployment, Job, RunDetail, Runner, Step } from "../lib/types";
 import { Button, Spinner, cn } from "../components/ui";
@@ -40,14 +40,15 @@ export function RunDetailPage() {
 		onSuccess: () => qc.invalidateQueries({ queryKey: ["run", id] }),
 	});
 	const rerun = useMutation({
-		mutationFn: (body?: { failed?: boolean }) =>
+		mutationFn: (body?: { failed?: boolean; jobs?: string[] }) =>
 			api.post<{ run: { id: string } }>(`/runs/${id}/rerun`, body),
 		onSuccess: (res, body) => {
 			qc.invalidateQueries({ queryKey: ["run", id] });
 			qc.invalidateQueries({ queryKey: ["runs"] });
-			// A fresh run navigates to it; an in-place failed-jobs rerun
+			// A fresh run navigates to it; an in-place failed/targeted rerun
 			// stays on this run.
-			if (!body?.failed && res.run?.id && res.run.id !== id) nav(`/runs/${res.run.id}`);
+			const inPlace = Boolean(body?.failed || (body?.jobs && body.jobs.length > 0));
+			if (!inPlace && res.run?.id && res.run.id !== id) nav(`/runs/${res.run.id}`);
 		},
 	});
 	const approve = useMutation({
@@ -222,9 +223,13 @@ export function RunDetailPage() {
 				<div>
 					<dt>Runner</dt>
 					<dd>
-						{[...new Set(jobs.map((j) => j.runner_id && runnerNames.get(j.runner_id)).filter(Boolean))].join(
-							", ",
-						) || "—"}
+						{[
+							...new Set(
+								jobs
+									.map((j) => (j.runner_id && runnerNames.get(j.runner_id)) || j.runner_name)
+									.filter(Boolean),
+							),
+						].join(", ") || "—"}
 					</dd>
 				</div>
 				<div>
@@ -259,6 +264,8 @@ export function RunDetailPage() {
 					onPickJob={pickJob}
 					stepN={stepN}
 					onPickStep={pickStep}
+					onRerunJob={(key) => rerun.mutate({ jobs: [key] })}
+					rerunning={rerun.isPending}
 					live={live}
 				/>
 			)}
@@ -274,6 +281,8 @@ function StepsPanel({
 	onPickJob,
 	stepN,
 	onPickStep,
+	onRerunJob,
+	rerunning,
 	live,
 }: {
 	jobs: Job[];
@@ -282,6 +291,8 @@ function StepsPanel({
 	onPickJob: (id: string) => void;
 	stepN: number | null;
 	onPickStep: (n: number | null) => void;
+	onRerunJob: (key: string) => void;
+	rerunning: boolean;
 	live: boolean;
 }) {
 	const steps = job.steps ?? [];
@@ -290,6 +301,8 @@ function StepsPanel({
 		steps.find((s) => s.status === "running") ??
 		steps.find((s) => s.conclusion === "failure") ??
 		steps[steps.length - 1];
+	const runnerLabel = (job.runner_id && runners.get(job.runner_id)) || job.runner_name;
+	const canRerunJob = !live && (job.status === "completed" || job.status === "cancelled");
 	return (
 		<div className="tsec gap">
 			<div className="sec2">
@@ -298,7 +311,7 @@ function StepsPanel({
 					<span style={{ color: jobTint(job.job_key || job.name) }}>{job.name}</span>
 					{jobs.length > 1 &&
 						` · job ${jobs.findIndex((j) => j.id === job.id) + 1} of ${jobs.length}`}
-					{job.runner_id && runners.get(job.runner_id) && ` · on ${runners.get(job.runner_id)}`}
+					{runnerLabel && ` · on ${runnerLabel}${job.runner_version ? ` (${job.runner_version})` : ""}`}
 					{job.environment && (
 						<>
 							{" · "}
@@ -335,13 +348,36 @@ function StepsPanel({
 						))}
 					</span>
 				)}
-				<span className="r">
-					{sel ? `step ${sel.number} of ${steps.length}` : `${steps.length} steps`}
-					{job.started_at && ` · ${duration(job.started_at, job.completed_at)}`}
-					{job.started_at && job.queued_at &&
-						` · queued ${duration(job.queued_at, job.started_at)}`}
+				<span className="r flex items-center gap-2.5">
+					<span>
+						{sel ? `step ${sel.number} of ${steps.length}` : `${steps.length} steps`}
+						{job.started_at && ` · ${duration(job.started_at, job.completed_at)}`}
+						{job.started_at && job.queued_at &&
+							` · queued ${duration(job.queued_at, job.started_at)}`}
+					</span>
+					{canRerunJob && (
+						<button
+							className="pill"
+							style={{ height: 26, padding: "0 10px", fontSize: 11 }}
+							disabled={rerunning}
+							title={`Re-run only ${job.name} (and downstream dependents)`}
+							onClick={() => onRerunJob(job.key)}
+						>
+							<RotateCcw size={11} /> Re-run job
+						</button>
+					)}
 				</span>
 			</div>
+			{(job.config_warnings?.length ?? 0) > 0 && (
+				<div className="mb-3 flex flex-wrap items-start gap-2 rounded-xl border border-[var(--warn)]/40 bg-[var(--warn)]/10 px-3.5 py-2 text-[11.5px] text-[var(--warn)]">
+					<AlertTriangle size={13} className="mt-0.5 shrink-0" />
+					<div className="min-w-0 flex-1 space-y-0.5">
+						{job.config_warnings!.map((w, i) => (
+							<div key={i}>{w}</div>
+						))}
+					</div>
+				</div>
+			)}
 			<div className="lg">
 				<div className="steps">
 					{steps.length === 0 && (
@@ -431,34 +467,88 @@ function StepLog({ job, step, live }: { job: Job; step: Step; live: boolean }) {
 	const qc = useQueryClient();
 	const approve = useMutation({
 		mutationFn: () => api.post(`/jobs/${job.id}/remediate`, { step: step.number }),
-		onSuccess: () => qc.invalidateQueries({ queryKey: ["run"] }),
+		onSuccess: () => {
+			qc.invalidateQueries({ queryKey: ["run"] });
+			qc.invalidateQueries({ queryKey: ["notifications"] });
+		},
 	});
+	const dismiss = useMutation({
+		mutationFn: () => api.post(`/jobs/${job.id}/remediate-dismiss`, { step: step.number }),
+		onSuccess: () => {
+			qc.invalidateQueries({ queryKey: ["run"] });
+			qc.invalidateQueries({ queryKey: ["notifications"] });
+		},
+	});
+	const rem = step.diagnosis?.remediation;
 	const fixPending =
 		!!step.diagnosis?.fixable &&
-		!!step.diagnosis?.remediation &&
-		!step.diagnosis.remediation.approved &&
-		!step.diagnosis.remediation.applied &&
-		!step.diagnosis.remediation.dismissed;
+		!!rem &&
+		!rem.approved &&
+		!rem.applied &&
+		!rem.dismissed;
+	const remStatus = rem
+		? rem.applied
+			? "applied"
+			: rem.approved
+				? "approved"
+				: rem.dismissed
+					? "dismissed"
+					: rem.result || "proposed"
+		: null;
 	return (
 		<div className="flex min-w-0 flex-col">
 			{step.diagnosis && (
-				<div className="flex items-center gap-2 border-b border-[var(--line)] px-3.5 py-2 text-[11px] text-[var(--err)]">
-					<span className="min-w-0 flex-1">
-						{step.diagnosis.kind}: {step.diagnosis.summary} — {step.diagnosis.suggestion}
-						{step.diagnosis.remediation && ` (${step.diagnosis.remediation.result || "proposed"})`}
-						{fixPending && (step.diagnosis.remediation?.fix?.length ?? 0) > 0 && (
-							<span className="mt-1 block rounded border border-[var(--line)] bg-[var(--bg)] px-2 py-1 font-mono text-[10px] text-[var(--dim)]">
-								runs once as root in the retried job's container:{" "}
-								{step.diagnosis.remediation!.fix!.join(" && ")}
+				<div className="heal-card">
+					<div className="flex flex-wrap items-center gap-2">
+						<span className="rpill err">{step.diagnosis.kind}</span>
+						{step.diagnosis.fixable && (
+							<span className="rpill ok">autohealable</span>
+						)}
+						{remStatus && (
+							<span className={cn("rpill", rem?.applied ? "ok" : rem?.dismissed ? "" : "warn")}>
+								{remStatus}
 							</span>
 						)}
-					</span>
-					{fixPending && (
-						<Button size="sm" disabled={approve.isPending} onClick={() => approve.mutate()}>
-							<Wrench size={12} /> Approve fix
-						</Button>
+						<span className="min-w-0 flex-1 text-xs font-medium text-[var(--ink)]">
+							{step.diagnosis.summary}
+						</span>
+						{fixPending && (
+							<div className="flex items-center gap-1.5">
+								<Button
+									size="sm"
+									variant="primary"
+									disabled={approve.isPending || dismiss.isPending}
+									onClick={() => approve.mutate()}
+								>
+									<Wrench size={12} /> Approve &amp; retry
+								</Button>
+								<Button
+									size="sm"
+									variant="ghost"
+									disabled={approve.isPending || dismiss.isPending}
+									onClick={() => dismiss.mutate()}
+								>
+									<X size={12} /> Dismiss
+								</Button>
+							</div>
+						)}
+					</div>
+					{step.diagnosis.suggestion && (
+						<p className="mt-1.5 text-[11.5px] text-[var(--dim)]">{step.diagnosis.suggestion}</p>
 					)}
-					{approve.error && <span className="text-[var(--err)]">{approve.error.message}</span>}
+					{fixPending && (rem?.fix?.length ?? 0) > 0 && (
+						<div className="mt-2 rounded-lg border border-[var(--line)] bg-[var(--bg)] px-3 py-2 font-mono text-[11px] text-[var(--dim)]">
+							<span className="mr-1.5 text-[10px] uppercase tracking-wider text-[var(--faint)]">
+								fix command:
+							</span>
+							{rem!.fix!.join(" && ")}
+						</div>
+					)}
+					{(approve.error || dismiss.error) && (
+						<div className="mt-1.5 text-xs text-[var(--err)]">
+							{(approve.error ?? dismiss.error)?.message}
+						</div>
+					)}
 				</div>
 			)}
 			{step.has_summary && <StepSummary stepId={step.id} />}

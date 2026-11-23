@@ -1,14 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRef, useState, type FormEvent } from "react";
-import { Cpu, Image as ImageIcon, LocateFixed, Pause, Pencil, Plus, RefreshCw, Trash2, Zap } from "lucide-react";
+import { useMemo, useRef, useState, type FormEvent } from "react";
+import { AlertTriangle, Cpu, Image as ImageIcon, LocateFixed, Pause, Pencil, Plus, RefreshCw, Terminal, Trash2, Zap } from "lucide-react";
 import { api } from "../lib/api";
 import type { Runner } from "../lib/types";
-import { Button, Card, EmptyState, Input, RunnerIcon, Spinner } from "../components/ui";
+import { Button, Card, EmptyState, Input, RunnerIcon, Spinner, cn } from "../components/ui";
 import { StatusSq } from "../components/status";
 import { CopyButton } from "./settings";
-import { Row } from "../components/layout";
 import { GeoPicker } from "../components/fleetmap";
 import { bytes, relTime } from "../lib/format";
+
+type FleetFilter = "all" | "online" | "busy" | "issues";
 
 export function RunnersPage() {
 	const qc = useQueryClient();
@@ -16,6 +17,8 @@ export function RunnersPage() {
 	const [geoEdit, setGeoEdit] = useState<string | null>(null);
 	const [iconEdit, setIconEdit] = useState<string | null>(null);
 	const [envEdit, setEnvEdit] = useState<string | null>(null);
+	const [filter, setFilter] = useState<FleetFilter>("all");
+	const [search, setSearch] = useState("");
 	const { data, isLoading } = useQuery({
 		queryKey: ["runners"],
 		queryFn: () => api.get<{ runners: Runner[] }>("/runners"),
@@ -75,28 +78,77 @@ export function RunnersPage() {
 		},
 	});
 
+	const allRunners = useMemo(() => data?.runners ?? [], [data]);
+	const fleet = useMemo(() => {
+		let online = 0;
+		let draining = 0;
+		let activeJobs = 0;
+		let totalSlots = 0;
+		let paused = 0;
+		let drift = 0;
+		const versions = new Set<string>();
+		for (const r of allRunners) {
+			if (r.status === "online" || r.status === "draining") {
+				online++;
+				totalSlots += Math.max(1, r.concurrency || 1);
+				if (r.version) versions.add(r.version);
+			}
+			if (r.draining || r.status === "draining") draining++;
+			activeJobs += r.active_jobs ?? 0;
+			if (r.claims_paused || r.disk_alerted) paused++;
+			if ((r.missing_tools?.length ?? 0) > 0) drift++;
+		}
+		const versionSkew = versions.size > 1;
+		return { online, draining, activeJobs, totalSlots, paused, drift, versionSkew };
+	}, [allRunners]);
+
+	const hasIssue = (r: Runner) =>
+		r.status === "offline" ||
+		r.draining ||
+		r.status === "draining" ||
+		Boolean(r.claims_paused) ||
+		Boolean(r.disk_alerted) ||
+		(r.missing_tools?.length ?? 0) > 0;
+
+	const visible = useMemo(() => {
+		const needle = search.trim().toLowerCase();
+		return allRunners.filter((r) => {
+			if (filter === "online" && r.status !== "online") return false;
+			if (filter === "busy" && (r.active_jobs ?? 0) === 0) return false;
+			if (filter === "issues" && !hasIssue(r)) return false;
+			if (needle) {
+				const hay = [r.name, r.hostname, r.geo_city, r.arch, r.executor, ...(r.labels ?? [])]
+					.filter(Boolean)
+					.join(" ")
+					.toLowerCase();
+				if (!hay.includes(needle)) return false;
+			}
+			return true;
+		});
+	}, [allRunners, filter, search]);
+
 	// Offline runners whose last heartbeat is older than a week are almost
 	// certainly decommissioned leftovers (replaced VMs, retired agents).
-	// Surface them for removal instead of letting rows accumulate forever.
-	const stale = (data?.runners ?? []).filter(
+	const stale = allRunners.filter(
 		(r) =>
 			r.status === "offline" &&
 			r.last_heartbeat_at != null &&
 			Date.now() - new Date(r.last_heartbeat_at).getTime() > 7 * 24 * 3600 * 1000,
 	);
 
+	const utilPct = fleet.totalSlots > 0 ? Math.round((fleet.activeJobs / fleet.totalSlots) * 100) : 0;
+
 	return (
 		<div className="page">
-			<div className="mb-6 flex flex-wrap items-end gap-4">
+			<div className="mb-5 flex flex-wrap items-end gap-4">
 				<div>
 					<h1 className="big x">
-						{data?.runners.length
-							? `${data.runners.filter((r) => r.status === "online").length} of ${data.runners.length} runners are online.`
+						{allRunners.length
+							? `${fleet.online} of ${allRunners.length} runners are online.`
 							: "No runners yet."}
 					</h1>
 					<p className="lead">
-						Each square is a job slot — filled with the pattern of the job running in
-						it. Empty squares are free.
+						Each square is a concurrent job slot — filled while executing, open when ready to claim.
 					</p>
 				</div>
 				<div className="ml-auto">
@@ -106,6 +158,55 @@ export function RunnersPage() {
 				</div>
 			</div>
 			{enrolling && <EnrollCard onDone={() => setEnrolling(false)} />}
+
+			{allRunners.length > 0 && (
+				<div className="panel kpis mb-4">
+					<div className="kpi">
+						<div className="k">online</div>
+						<div className="v">
+							{fleet.online}
+							<small>/{allRunners.length}</small>
+						</div>
+						<div className="c">
+							{fleet.draining > 0 ? `${fleet.draining} draining` : "fleet ready"}
+						</div>
+					</div>
+					<div className="kpi">
+						<div className="k">active slots</div>
+						<div className="v">
+							{fleet.activeJobs}
+							<small>/{fleet.totalSlots}</small>
+						</div>
+						<div className="c">{utilPct}% slot utilization</div>
+					</div>
+					<div className="kpi">
+						<div className="k">health gates</div>
+						<div className="v" style={fleet.paused > 0 ? { color: "var(--err)" } : undefined}>
+							{fleet.paused}
+						</div>
+						<div className="c">
+							{fleet.paused > 0 ? "claims paused or low disk" : "no gates tripped"}
+						</div>
+					</div>
+					<div className="kpi">
+						<div className="k">tool &amp; version drift</div>
+						<div
+							className="v"
+							style={fleet.drift > 0 || fleet.versionSkew ? { color: "var(--warn)" } : undefined}
+						>
+							{fleet.drift > 0 ? `${fleet.drift} host${fleet.drift === 1 ? "" : "s"}` : fleet.versionSkew ? "skew" : "aligned"}
+						</div>
+						<div className="c">
+							{fleet.drift > 0
+								? "missing declared tools"
+								: fleet.versionSkew
+									? "mixed runner versions"
+									: "all online hosts match"}
+						</div>
+					</div>
+				</div>
+			)}
+
 			{stale.length > 0 && !staleDismissed && (
 				<Card className="mb-4 flex flex-wrap items-center gap-2 p-3">
 					<span className="text-xs text-[var(--dim)]">
@@ -132,27 +233,51 @@ export function RunnersPage() {
 					</Button>
 				</Card>
 			)}
-			<Row className="flex-wrap">
-				<span className="whitespace-nowrap text-xs text-[var(--dim)]">Self-heal (org):</span>
-				<select
-					className="fsel"
-					value={settings?.self_heal ?? "off"}
-					disabled={setHeal.isPending}
-					onChange={(e) => setHeal.mutate(e.target.value)}
-				>
-					<option value="off">off</option>
-					<option value="auto">auto</option>
-					<option value="approve">approve</option>
-				</select>
-				<span className="text-[10px] text-[var(--faint)]">
-					allow-listed fixes for fixable step failures; audit-logged
-				</span>
-			</Row>
+
+			<div className="mb-3 flex flex-wrap items-center gap-2">
+				{(
+					[
+						["all", `All · ${allRunners.length}`],
+						["online", `Online · ${allRunners.filter((r) => r.status === "online").length}`],
+						["busy", `Busy · ${allRunners.filter((r) => (r.active_jobs ?? 0) > 0).length}`],
+						["issues", `Issues · ${allRunners.filter(hasIssue).length}`],
+					] as [FleetFilter, string][]
+				).map(([key, label]) => (
+					<button
+						key={key}
+						className={cn("jpill", filter === key && "on")}
+						onClick={() => setFilter(key)}
+					>
+						{label}
+					</button>
+				))}
+				<input
+					className="fsel w-52"
+					placeholder="Filter name, label, host…"
+					value={search}
+					onChange={(e) => setSearch(e.target.value)}
+				/>
+				<div className="ml-auto flex items-center gap-2">
+					<span className="whitespace-nowrap text-xs text-[var(--dim)]">Self-heal:</span>
+					<select
+						className="fsel"
+						aria-label="Org self-heal mode"
+						value={settings?.self_heal ?? "off"}
+						disabled={setHeal.isPending}
+						onChange={(e) => setHeal.mutate(e.target.value)}
+					>
+						<option value="off">off</option>
+						<option value="auto">auto</option>
+						<option value="approve">approve</option>
+					</select>
+				</div>
+			</div>
+
 			{isLoading ? (
 				<Spinner />
 			) : (
 				<div className="fl">
-					{!data || data.runners.length === 0 ? (
+					{allRunners.length === 0 ? (
 						<EmptyState icon={<Cpu size={19} />}
 							title="No runners"
 							hint="Start `just runner` (or the kern-runner binary) on any host with Docker to register one."
@@ -165,9 +290,9 @@ export function RunnersPage() {
 					) : (
 						<>
 						{sel.size > 0 && (
-							<div className="frow" style={{ padding: "6px 12px" }}>
-								<span className="fn">{sel.size} selected</span>
-								<span className="ml-auto flex gap-1">
+							<div className="panel flex flex-wrap items-center gap-2 px-4 py-2.5">
+								<span className="text-xs font-semibold text-[var(--ink)]">{sel.size} selected</span>
+								<span className="ml-auto flex gap-1.5">
 									<Button size="sm" variant="ghost" disabled={bulk.isPending}
 										onClick={() => bulk.mutate({ ids: [...sel], op: "drain" })}>
 										Drain
@@ -176,7 +301,7 @@ export function RunnersPage() {
 										onClick={() => bulk.mutate({ ids: [...sel], op: "undrain" })}>
 										Undrain
 									</Button>
-									<Button size="sm" variant="ghost" disabled={bulk.isPending}
+									<Button size="sm" variant="danger" disabled={bulk.isPending}
 										onClick={() => bulk.mutate({ ids: [...sel], op: "delete" })}>
 										Delete
 									</Button>
@@ -186,8 +311,14 @@ export function RunnersPage() {
 								</span>
 							</div>
 						)}
-						{data.runners.map((r) => {
+						{visible.length === 0 && (
+							<div className="panel">
+								<div className="emptynote">No runners match this filter.</div>
+							</div>
+						)}
+						{visible.map((r) => {
 							const busy = (r.active_jobs ?? 0) > 0;
+							const slots = Math.max(1, r.concurrency || 1, r.active_jobs ?? 0);
 							const cpu = r.cpu_percent != null ? Math.round(r.cpu_percent) : null;
 							const mem =
 								r.mem_used_bytes != null && r.memory_bytes > 0
@@ -197,135 +328,120 @@ export function RunnersPage() {
 								r.disk_free_bytes != null && r.disk_bytes > 0
 									? Math.max(0, Math.round(100 - (r.disk_free_bytes / r.disk_bytes) * 100))
 									: null;
+							const isDraining = r.draining || r.status === "draining";
+							const statusClass =
+								r.status === "offline"
+									? "err"
+									: isDraining || r.claims_paused || r.disk_alerted
+										? "warn"
+										: busy
+											? "live"
+											: "ok";
+							const statusText = isDraining
+								? "draining"
+								: r.claims_paused
+									? `paused · ${r.claims_paused}`
+									: busy
+										? `${r.active_jobs} active`
+										: r.status;
+							const envCount = Object.keys(r.env ?? {}).length;
+							const labels = r.labels ?? [];
+							const missing = r.missing_tools ?? [];
 							return (
 								<div key={r.id} className="frow">
-									<input
-										type="checkbox"
-										aria-label={`Select ${r.name}`}
-										checked={sel.has(r.id)}
-										onChange={() => toggleSel(r.id)}
-										style={{ marginRight: 10 }}
-									/>
-									<div className="fn">
-										<b>
-											{r.icon && (
-												<span className="mr-2 inline-flex align-middle">
-													<RunnerIcon icon={r.icon} className="rricon rrname" />
-												</span>
-											)}
-											{r.name}
-										</b>
-										<small>
-											{r.cpus} cores · {r.arch}
-											{r.hostname ? ` · ${r.hostname}` : ""}
-											{r.geo_city ? ` · ${r.geo_city}` : ""}
-											{` · ${r.version || "dev"}`}
-											{(r.egress_24h_bytes ?? 0) > 0 &&
-												` · 24h egress ${bytes(r.egress_24h_bytes)}`}
-										</small>
-									</div>
-									<div className={`slots ${r.status === "offline" ? "off" : ""}`}>
-										{Array.from(
-											{ length: Math.min(8, Math.max(4, r.cpus ?? 4, r.active_jobs ?? 0)) },
-											(_, i) => (
-												<i key={i} className={i < (r.active_jobs ?? 0) ? "j jr" : ""} />
-											),
-										)}
-									</div>
-									<div className="ld">
-										<div className="meter">
-											<i style={{ width: `${Math.max(cpu ?? 0, busy ? 4 : 0)}%` }} />
+									<div className="rc-top">
+										<input
+											type="checkbox"
+											aria-label={`Select ${r.name}`}
+											checked={sel.has(r.id)}
+											onChange={() => toggleSel(r.id)}
+										/>
+										<div className="rc-id">
+											{r.icon && <RunnerIcon icon={r.icon} className="rricon rrname" />}
+											<div className="min-w-0">
+												<div className="flex flex-wrap items-center gap-2">
+													<b className="truncate">{r.name}</b>
+													{r.executor && (
+														<span className="rpill">{r.executor}</span>
+													)}
+													<span className={`rpill ${statusClass}`}>
+														<StatusSq status={busy ? "in_progress" : r.status} />
+														{statusText}
+													</span>
+												</div>
+												<small>
+													{r.cpus} cores · {r.arch}
+													{r.hostname ? ` · ${r.hostname}` : ""}
+													{r.geo_city ? ` · ${r.geo_city}` : ""}
+													{` · ${r.version || "dev"}`}
+													{(r.egress_24h_bytes ?? 0) > 0 &&
+														` · 24h egress ${bytes(r.egress_24h_bytes)}`}
+													{` · seen ${relTime(r.last_heartbeat_at)}`}
+												</small>
+											</div>
 										</div>
-										<b>{cpu != null ? `${cpu}%` : "—"}</b>
-									</div>
-									<span className="stt">
-										<StatusSq status={busy ? "in_progress" : r.status} />
-										{r.draining
-											? "draining"
-											: r.claims_paused
-												? `paused (${r.claims_paused})`
-												: busy
-													? `${r.active_jobs} job${r.active_jobs === 1 ? "" : "s"}`
-													: r.status}
-										<span className="font-mono text-[11px] text-[var(--faint)]">
-											{relTime(r.last_heartbeat_at)}
-										</span>
-									</span>
-									<div className="fx">
-										<Meter
-											label="mem"
-											pct={mem}
-											sub={r.memory_bytes > 0 ? bytes(r.memory_bytes) : ""}
-										/>
-										<Meter
-											label="disk"
-											pct={disk}
-											sub={r.disk_free_bytes != null ? `${bytes(r.disk_free_bytes)} free` : ""}
-										/>
-										<span className="acts2">
+										<div className="rc-acts">
 											<button
-												className="pill"
-												title="Runner icon — an emoji or an image URL/path"
+												className={cn("rc-btn", iconEdit === r.id && "on")}
+												title="Runner icon"
 												onClick={() => setIconEdit((g) => (g === r.id ? null : r.id))}
 											>
-												<ImageIcon size={12} />
+												<ImageIcon size={13} />
 											</button>
 											<button
-												className="pill"
+												className={cn("rc-btn", geoEdit === r.id && "on")}
 												title={
 													r.geo_source === "manual"
-														? `manual location — ${r.geo_lat?.toFixed(2)}, ${r.geo_lng?.toFixed(2)}`
+														? `Manual location (${r.geo_lat?.toFixed(2)}, ${r.geo_lng?.toFixed(2)})`
 														: r.geo_source === "auto"
-															? `auto location via ${r.geo_ip}`
-															: "no location — edit or wait for a heartbeat"
+															? `Auto location via ${r.geo_ip}`
+															: "Set location"
 												}
 												onClick={() => setGeoEdit((g) => (g === r.id ? null : r.id))}
 											>
-												<Pencil size={12} />
+												<Pencil size={13} />
 											</button>
 											<button
-												className={r.auto_update ? "pill solid" : "pill"}
+												className={cn("rc-btn", r.auto_update && "on")}
 												title={r.auto_update
 													? "Self-update on — accepts signed runner image offers"
-													: "Self-update off — stays on the current image"}
+													: "Self-update off — stays on current image"}
 												disabled={setUpdate.isPending}
 												onClick={() => setUpdate.mutate({ id: r.id, on: !r.auto_update })}
 											>
-												<RefreshCw size={12} />
+												<RefreshCw size={13} />
 											</button>
 											<button
-												className="pill"
+												className={cn("rc-btn", (envEdit === r.id || envCount > 0) && "on")}
 												title={
-													Object.keys(r.env ?? {}).length > 0
-														? `env overrides: ${Object.keys(r.env).join(", ")}`
-														: "Env overrides — app-managed env for every job"
+													envCount > 0
+														? `Env overrides (${envCount}): ${Object.keys(r.env).join(", ")}`
+														: "Env overrides for every job on this runner"
 												}
 												onClick={() => setEnvEdit((g) => (g === r.id ? null : r.id))}
 											>
-												<span className={Object.keys(r.env ?? {}).length > 0 ? "text-[var(--acc)]" : ""}>
-													≡
-												</span>
+												<Terminal size={13} />
 											</button>
 											<button
-												className={r.wake_on_demand ? "pill solid" : "pill"}
+												className={cn("rc-btn", r.wake_on_demand && "on")}
 												title={r.wake_on_demand
-													? "Wake on demand — a scaler may power this host for queued work"
-													: "Wake on demand off — the host stays down"}
+													? "Wake on demand on — scaler may power this host for queued work"
+													: "Wake on demand off"}
 												disabled={setWake.isPending}
 												onClick={() => setWake.mutate({ id: r.id, on: !r.wake_on_demand })}
 											>
-												<Zap size={12} />
+												<Zap size={13} />
 											</button>
 											<button
-												className="pill"
+												className={cn("rc-btn", r.draining && "on")}
 												title={r.draining ? "Undrain (resume taking new jobs)" : "Drain (finish current work, take no new jobs)"}
 												disabled={drain.isPending}
 												onClick={() => drain.mutate({ id: r.id, draining: !r.draining })}
 											>
-												<Pause size={12} />
+												<Pause size={13} />
 											</button>
 											<button
-												className="pill"
+												className={cn("rc-btn danger", confirmDel === r.id && "confirm")}
 												title="Delete runner"
 												disabled={remove.isPending}
 												onClick={() => {
@@ -335,10 +451,62 @@ export function RunnersPage() {
 													} else setConfirmDel(r.id);
 												}}
 											>
-												{confirmDel === r.id ? "confirm?" : <Trash2 size={12} />}
+												{confirmDel === r.id ? "confirm?" : <Trash2 size={13} />}
 											</button>
-										</span>
+										</div>
 									</div>
+
+									<div className="rc-mid">
+										<div className="flex items-center gap-2.5">
+											<div className={`slots ${r.status === "offline" ? "off" : ""}`}>
+												{Array.from({ length: Math.min(12, slots) }, (_, i) => (
+													<i key={i} className={i < (r.active_jobs ?? 0) ? "j jr" : ""} />
+												))}
+											</div>
+											<span className="font-mono text-[11px] text-[var(--dim)]">
+												{r.active_jobs ?? 0}/{r.concurrency || 1} slots
+											</span>
+										</div>
+										<div className="rc-gauges">
+											<Meter label="cpu" pct={cpu} sub={cpu != null ? "" : "idle"} />
+											<Meter
+												label="mem"
+												pct={mem}
+												sub={r.memory_bytes > 0 ? bytes(r.memory_bytes) : ""}
+											/>
+											<Meter
+												label="disk"
+												pct={disk}
+												sub={r.disk_free_bytes != null ? `${bytes(r.disk_free_bytes)} free` : ""}
+											/>
+										</div>
+									</div>
+
+									{(labels.length > 0 || envCount > 0 || missing.length > 0 || r.disk_alerted) && (
+										<div className="rc-foot">
+											{labels.map((l) => (
+												<span key={l} className="rpill">
+													{l}
+												</span>
+											))}
+											{envCount > 0 && (
+												<span className="rpill ok">
+													{envCount} env override{envCount === 1 ? "" : "s"}
+												</span>
+											)}
+											{r.disk_alerted && (
+												<span className="rpill err">
+													<AlertTriangle size={11} /> low disk alert
+												</span>
+											)}
+											{missing.length > 0 && (
+												<span className="rpill warn">
+													<AlertTriangle size={11} /> missing: {missing.join(", ")}
+												</span>
+											)}
+										</div>
+									)}
+
 									{geoEdit === r.id && <GeoEditor runner={r} onDone={() => setGeoEdit(null)} />}
 									{envEdit === r.id && <EnvEditor runner={r} onDone={() => setEnvEdit(null)} />}
 									{iconEdit === r.id && (
@@ -776,22 +944,25 @@ function IconEditor({ runner, onDone }: { runner: Runner; onDone: () => void }) 
 // null pct means the runner has not reported metrics yet. Grey until hot —
 // colour is data, not decoration.
 function Meter({ label, pct, sub }: { label: string; pct: number | null; sub: string }) {
+	const barColor =
+		pct == null ? "transparent" : pct > 85 ? "var(--err)" : pct > 70 ? "var(--warn)" : "var(--ink)";
 	return (
-		<span className="flex items-center gap-2 text-[10px] leading-4 text-[var(--faint)]">
-			<span className="w-7">{label}</span>
-			<span className="h-1.5 w-24 rounded-[3px] bg-[var(--raise2)]">
+		<span className="flex items-center gap-2 text-[11px] leading-4 text-[var(--dim)]">
+			<span className="w-7 text-[10px] uppercase tracking-wider text-[var(--faint)]">{label}</span>
+			<span className="h-1.5 w-20 overflow-hidden rounded-full bg-[var(--line)]">
 				{pct != null && (
 					<span
-						className="block h-1.5 rounded-[3px]"
+						className="block h-1.5 rounded-full transition-[width] duration-200"
 						style={{
-							width: `${Math.min(100, Math.max(2, pct))}%`,
-							background: pct > 85 ? "var(--err)" : "#3a3a3a",
+							width: `${Math.min(100, Math.max(3, pct))}%`,
+							background: barColor,
 						}}
 					/>
 				)}
 			</span>
-			<span className="w-20 truncate font-mono">
-				{pct != null ? `${Math.round(pct)}%` : "-"} {sub}
+			<span className="min-w-[68px] truncate font-mono text-[10.5px]">
+				{pct != null ? `${Math.round(pct)}%` : "—"}
+				{sub ? <span className="text-[var(--faint)]"> {sub}</span> : ""}
 			</span>
 		</span>
 	);

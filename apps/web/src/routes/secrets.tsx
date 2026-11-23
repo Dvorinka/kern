@@ -450,7 +450,7 @@ function VarsCard({ slug }: { slug: string }) {
 							<div className="vrow" key={v.id}>
 								<i className="vkey" />
 								<span className="font-mono min-w-0 truncate text-[13px]">{v.name}</span>
-								<span className="vdots font-mono">{v.value}</span>
+								<span className="vval font-mono" title={v.value}>{v.value}</span>
 								<span className="vacts">
 									<button
 										className="ract"

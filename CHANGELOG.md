@@ -3,6 +3,66 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
+## [0.20.0] - 2026-11-23
+
+### Added
+- Browser-backed CLI authentication (`kern auth login` / `kern login`) via
+  short-lived device verification codes (`/auth/cli`, `/api/v1/auth/cli/*`):
+  interactive server URL picker with connectivity probe, automatic browser
+  launch + one-click web approval page, plus `--no-browser`, `--with-token`, and
+  `--email`/`--password` automation modes.
+- Multi-server CLI contexts (`kern context list|use|current|set-url|rm`,
+  `kern auth status|switch`, global `-u`/`--url`, `-c`/`--context`, `-p`/`--project`,
+  `-j`/`--json`, `KERN_URL`/`KERN_CONTEXT`), `kern open` web dashboard launcher,
+  TTY-aware status colors, command typo suggestions, and expanded `runs trigger`
+  (`--split`, `--split-auto`, `--runners`, `-f key=value`, `--watch`/`-w`, `--open`),
+  `runs list` (`--branch`/`-b`, `--cause`, duration column), `runs remediate --dismiss`,
+  and `settings` (`auto_concurrency`, `prime_workflow`, `prime_auto`) flags.
+- Runtime workflow dispatch controls on project detail pages and the trigger API:
+  support `each_runner` fan-out, explicit `runners` targeting, and dynamic runtime
+  sharding (`split` / `split_auto`) for jobs without workflow-declared splits.
+  Sharded jobs now also receive 0-based `KERN_SHARD_INDEX` and `KERN_SHARD_TOTAL`
+  alongside `KERN_SHARD` and `KERN_SHARDS`.
+- Exposed `auto_concurrency`, `max_transient_retries`, `disk_alert_pct`, `toolset`,
+  `prime_workflow`, and `prime_auto` across the settings API and web UI.
+- Expanded step diagnosis and autoheal coverage: `cache_permissions` (`EACCES`
+  under `/kern/cache`) is now fixable via autoheal, plus new autohealable
+  diagnoses for `stale_lock` (`.git/index.lock`), `pkg_lock` (`dpkg` interrupted),
+  and `npm_cache` (`EINTEGRITY`). Run detail now displays a structured Autoheal
+  Remediation card with one-click Approve & retry and Dismiss actions, plus
+  single-job re-run (`Re-run job`) and `config_warnings` surfacing.
+- Runs page search input and server-side failure `classification` filter, linked
+  directly from Usage failure-cause rows.
+- Fleet Health KPI strip, filter pills (`All`/`Online`/`Busy`/`Issues`), search,
+  accurate concurrency slot display, executor/label/drift badges, and structured
+  runner cards on the Runners page.
+
+### Changed
+- Full web UI visual overhaul across light (`paper`) and dark (`ink`) themes:
+  rebalanced dark-mode KPI and login surfaces, eliminated topbar navigation
+  clipping at 1440px, fixed `.runrow` action alignment and mobile webhook banner
+  wrapping, added FleetMap label collision avoidance, collapsed shard suffixes in
+  Overview legend, improved plaintext variable and top-event KPI readability, and
+  route-level `React.lazy()` code splitting (reducing main bundle from 842 kB to
+  246 kB).
+- Improved `ClaimJob` auto-assign scheduling tiebreak: when two eligible runners
+  have equal slot utilization and CPU within margin, jobs yield to the peer with
+  >15% more free memory headroom.
+- Resolved Dependency Dashboard (#409) safe updates: removed deprecated
+  `@types/dompurify`, updated `oxfmt` to `0.79.0`, `doublestar/v4` to `v4.10.7`,
+  and `klauspost/compress` to `v1.20.5`.
+
+### Fixed
+- GHA chunked cache commits (`POST .../artifactcache/caches/:id`): atomically
+  read uploaded chunk metadata in a transaction before deleting the reservation
+  row, preventing PostgreSQL `ON DELETE CASCADE` from wiping chunk rows prior to
+  commit (`ClaimGHUpload`).
+- Multi-runner fan-out (`each_runner`) and explicit `runners` targeting:
+  `ClaimJob` and `UnmatchedQueuedJobs` now implicitly include each runner's own
+  name in its effective label set, and `expandEachRunner` always assigns unique
+  `job @ runner` keys even when a runner's stored labels omit its own name
+  (preventing `jobs_run_id_key_key` unique constraint violations).
+
 ## [0.19.3] - 2026-11-22
 
 ### Fixed

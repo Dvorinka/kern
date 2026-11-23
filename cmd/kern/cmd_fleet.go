@@ -153,7 +153,7 @@ func (c *cli) cmdRunners(ctx context.Context, args []string) error {
 				if version == "" {
 					version = "-"
 				}
-				rows = append(rows, []string{shortID(r.ID), r.Name, state, version,
+				rows = append(rows, []string{shortID(r.ID), r.Name, styleStatus(state), version,
 					fmt.Sprintf("%d", r.ActiveJobs), cpu, mem, disk, rel(r.LastHeartbeatAt)})
 			}
 			table([]string{"ID", "NAME", "STATE", "VERSION", "JOBS", "CPU", "MEM", "DISK", "BEAT"}, rows)
@@ -653,11 +653,15 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 			SelfHeal            string `json:"self_heal"`
 			PublicCI            string `json:"public_ci"`
 			AutoUpdate          string `json:"auto_update"`
+			AutoConcurrency     string `json:"auto_concurrency"`
 			RunnerAutostart     string `json:"runner_autostart"`
+			DiskAlertPct        string `json:"disk_alert_pct"`
 			ForkGate            string `json:"fork_gate"`
 			PrTrust             string `json:"pr_trust"`
 			MaxConcurrentJobs   string `json:"max_concurrent_jobs"`
 			MaxTransientRetries string `json:"max_transient_retries"`
+			PrimeWorkflow       string `json:"prime_workflow"`
+			PrimeAuto           string `json:"prime_auto"`
 			Toolset             string `json:"toolset"`
 		}
 		if err := c.api().get(ctx, path, nil, &out); err != nil {
@@ -667,6 +671,15 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 			printJSON(out)
 		} else {
 			fmt.Println("self_heal:", out.SelfHeal)
+			ac := out.AutoConcurrency
+			if ac == "" {
+				if path == "/settings" {
+					ac = "on"
+				} else {
+					ac = "inherit"
+				}
+			}
+			fmt.Println("auto_concurrency:", ac)
 			if path == "/settings" {
 				v := out.PublicCI
 				if v == "" {
@@ -683,6 +696,11 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 					v = "on"
 				}
 				fmt.Println("runner_autostart:", v)
+				v = out.DiskAlertPct
+				if v == "" {
+					v = "10"
+				}
+				fmt.Println("disk_alert_pct:", v)
 			} else {
 				v := out.ForkGate
 				if v == "" {
@@ -699,6 +717,12 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 					v = "0"
 				}
 				fmt.Println("max_concurrent_jobs:", v)
+				fmt.Println("prime_workflow:", out.PrimeWorkflow)
+				v = out.PrimeAuto
+				if v == "" {
+					v = "off"
+				}
+				fmt.Println("prime_auto:", v)
 			}
 			v := out.MaxTransientRetries
 			if v == "" {
@@ -717,6 +741,28 @@ func (c *cli) cmdSettings(ctx context.Context, args []string) error {
 		switch pos[0] {
 		case "self_heal":
 			body["self_heal"] = pos[1]
+		case "auto_concurrency":
+			if path == "/settings" {
+				if pos[1] != "on" && pos[1] != "off" {
+					return fmt.Errorf("usage: kern settings set auto_concurrency on|off")
+				}
+			} else if pos[1] != "inherit" && pos[1] != "on" && pos[1] != "off" {
+				return fmt.Errorf("usage: kern settings set auto_concurrency inherit|on|off --project S")
+			}
+			body["auto_concurrency"] = pos[1]
+		case "prime_workflow":
+			if path == "/settings" {
+				return fmt.Errorf("prime_workflow is a project setting — pass --project S")
+			}
+			body["prime_workflow"] = pos[1]
+		case "prime_auto":
+			if path == "/settings" {
+				return fmt.Errorf("prime_auto is a project setting — pass --project S")
+			}
+			if pos[1] != "on" && pos[1] != "off" {
+				return fmt.Errorf("usage: kern settings set prime_auto on|off --project S")
+			}
+			body["prime_auto"] = pos[1]
 		case "public_ci":
 			if path != "/settings" {
 				return fmt.Errorf("public_ci is an org setting")

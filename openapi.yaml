@@ -110,6 +110,71 @@ paths:
                   record: { $ref: "#/components/schemas/APIToken" }
         "401": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Error" }
+  /auth/cli/start:
+    post:
+      tags: [auth]
+      security: []
+      summary: Start a browser-backed CLI authorization session
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                hostname: { type: string }
+                days: { type: integer }
+      responses:
+        "201": { description: Pending CLI auth code issued }
+        "429": { $ref: "#/components/responses/Error" }
+  /auth/cli/poll:
+    post:
+      tags: [auth]
+      security: []
+      summary: Poll a pending browser CLI authorization session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [device_code]
+              properties:
+                device_code: { type: string }
+      responses:
+        "200": { description: Approved with one-time API token }
+        "202": { description: Still pending }
+        "403": { $ref: "#/components/responses/Error" }
+        "410": { $ref: "#/components/responses/Error" }
+  /auth/cli/lookup:
+    get:
+      tags: [auth]
+      summary: Look up a pending CLI verification code for browser confirmation
+      parameters:
+        - { name: code, in: query, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Pending request metadata }
+        "404": { $ref: "#/components/responses/Error" }
+  /auth/cli/approve:
+    post:
+      tags: [auth]
+      summary: Approve or deny a pending CLI login from an active web session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_code]
+              properties:
+                user_code: { type: string }
+                approve: { type: boolean }
+                name: { type: string }
+                days: { type: integer }
+      responses:
+        "200": { description: Request resolved }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /auth/logout:
     post:
       tags: [auth]
@@ -412,6 +477,10 @@ paths:
               properties:
                 ref: { type: string }
                 inputs: { type: object, additionalProperties: true }
+                each_runner: { type: boolean, description: "Fan out every job onto each eligible online runner" }
+                runners: { type: array, items: { type: string }, description: "Fan out onto specific named runners" }
+                split: { type: integer, minimum: 2, maximum: 64, description: "Runtime shard override for jobs without declared split" }
+                split_auto: { type: boolean, description: "Dynamically size shards to available fleet slots" }
       responses:
         "201": { description: Run created }
   /projects/{project}/runs:
@@ -931,6 +1000,10 @@ paths:
                 self_heal: { type: string, enum: [off, auto, approve] }
                 public_ci: { type: string, enum: [on, off] }
                 auto_update: { type: string, enum: [on, off] }
+                auto_concurrency: { type: string, enum: [on, off] }
+                runner_autostart: { type: string, enum: [on, off] }
+                disk_alert_pct: { type: string, description: "Free disk percent threshold (0-100); 0 disables" }
+                max_transient_retries: { type: string, description: "Auto-retry cap for transient failures (0-10)" }
                 notify_url: { type: string }
                 notify_secret: { type: string }
                 notify_events: { type: string, description: "CSV of success,failure,cancelled,skipped; empty = all" }
@@ -1487,10 +1560,14 @@ components:
         self_heal: { type: string, enum: [off, auto, approve, inherit] }
         fork_gate: { type: string, enum: [off, all, first-time] }
         pr_trust: { type: string, enum: [off, trusted] }
+        auto_concurrency: { type: string, enum: [inherit, on, off] }
         icon_path: { type: string, nullable: true }
         notify_url: { type: string, description: "http(s) URL, 'off' to disable, '' to inherit org" }
         artifact_quota_mb: { type: integer, minimum: 0, description: "0 disables the quota" }
         max_concurrent_jobs: { type: integer, minimum: 0, description: "Per-project in-progress job cap fleet-wide; 0 disables" }
+        max_transient_retries: { type: string, description: "0-10 or 'inherit'" }
+        prime_workflow: { type: string, description: "Synced workflow path to prime runners; '' disables" }
+        prime_auto: { type: string, enum: [on, off] }
     Workflow:
       type: object
       properties:

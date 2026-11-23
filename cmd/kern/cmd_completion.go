@@ -11,7 +11,7 @@ import (
 
 // topLevelCommands are the dispatch names in main.go, minus help aliases.
 var topLevelCommands = []string{
-	"install", "status", "login", "logout", "whoami",
+	"auth", "context", "open", "install", "status", "login", "logout", "whoami",
 	"token", "config", "projects", "migrate",
 	"runs", "logs", "diagnose", "doctor", "exec", "ssh", "testbox",
 	"settings", "runners", "artifacts", "cache",
@@ -22,11 +22,14 @@ var topLevelCommands = []string{
 // subCommands maps a top-level command to its subcommand tree (one level —
 // deeper nesting does not exist in this CLI).
 var subCommands = map[string][]string{
-	"runs":         {"list", "show", "wait", "trigger", "cancel", "approve", "rerun", "logs", "remediate"},
+	"auth":         {"login", "status", "switch", "logout", "whoami", "token"},
+	"context":      {"list", "use", "current", "set-url", "rm"},
+	"open":         {"runs", "projects", "runners", "usage", "secrets", "cache", "artifacts", "environments", "webhooks", "settings"},
+	"runs":         {"list", "show", "wait", "watch", "trigger", "cancel", "approve", "rerun", "logs", "remediate"},
 	"logs":         {}, // alias for `runs logs` — completes run ids only
 	"projects":     {"list", "show", "create", "sync", "workflows"},
 	"token":        {"list", "create", "delete"},
-	"config":       {"list", "get", "set", "unset"},
+	"config":       {"list", "get", "set", "unset", "path"},
 	"secrets":      {"list", "set", "delete"},
 	"vars":         {"list", "set", "delete"},
 	"artifacts":    {"list", "download", "delete"},
@@ -34,7 +37,7 @@ var subCommands = map[string][]string{
 	"environments": {"list", "set", "delete"},
 	"deployments":  {"list", "approve", "reject"},
 	"settings":     {"get", "set"},
-	"runners":      {"list", "drain", "undrain", "self-update", "wake", "delete", "install", "enroll"},
+	"runners":      {"list", "drain", "undrain", "self-update", "wake", "rollout", "delete", "install", "enroll", "env", "jit"},
 	"hooks":        {"install"},
 	"completion":   {"bash", "zsh", "fish"},
 	"migrate":      {},
@@ -54,7 +57,7 @@ var subCommands = map[string][]string{
 	"version":      {},
 }
 
-var globalFlags = []string{"--json", "--server", "--token", "--project"}
+var globalFlags = []string{"--json", "--url", "--server", "--context", "--token", "--project"}
 
 func (c *cli) cmdCompletion(args []string) error {
 	if len(args) != 1 {

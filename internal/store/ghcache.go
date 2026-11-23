@@ -51,8 +51,55 @@ func (s *Store) GHUpload(ctx context.Context, id int64) (GHUpload, error) {
 	return u, nil
 }
 
-// DeleteGHUpload claims the reservation for commit: exactly one caller gets
-// the row back, so concurrent commits on any replica are safe.
+// ClaimGHUpload atomically claims a reservation for commit and returns its
+// uploaded chunks before the DELETE cascades them. Scoped to jobID so a
+// mismatched job token cannot delete another job's upload.
+func (s *Store) ClaimGHUpload(ctx context.Context, id int64, jobID uuid.UUID) (GHUpload, []GHChunk, bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return GHUpload{}, nil, false, err
+	}
+	defer tx.Rollback(ctx)
+	var u GHUpload
+	err = tx.QueryRow(ctx,
+		`SELECT id, job_id, key, version, scope, blob_ref, created_at
+		 FROM gh_cache_uploads WHERE id=$1 AND job_id=$2 FOR UPDATE`, id, jobID).
+		Scan(&u.ID, &u.JobID, &u.Key, &u.Version, &u.Scope, &u.BlobRef, &u.Created)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return GHUpload{}, nil, false, nil
+	}
+	if err != nil {
+		return GHUpload{}, nil, false, err
+	}
+	rows, err := tx.Query(ctx,
+		`SELECT start, stop, blob_ref FROM gh_cache_upload_chunks
+		 WHERE upload_id=$1 ORDER BY start`, u.ID)
+	if err != nil {
+		return GHUpload{}, nil, false, err
+	}
+	var chunks []GHChunk
+	for rows.Next() {
+		var ch GHChunk
+		if err := rows.Scan(&ch.Start, &ch.Stop, &ch.BlobRef); err != nil {
+			rows.Close()
+			return GHUpload{}, nil, false, err
+		}
+		chunks = append(chunks, ch)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return GHUpload{}, nil, false, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM gh_cache_uploads WHERE id=$1`, u.ID); err != nil {
+		return GHUpload{}, nil, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return GHUpload{}, nil, false, err
+	}
+	return u, chunks, true, nil
+}
+
+// DeleteGHUpload claims the reservation for commit or sweep cleanup.
 func (s *Store) DeleteGHUpload(ctx context.Context, id int64) (GHUpload, bool, error) {
 	var u GHUpload
 	err := s.pool.QueryRow(ctx,

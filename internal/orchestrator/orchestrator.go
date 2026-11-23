@@ -233,11 +233,11 @@ func (o *Orchestrator) StartRun(ctx context.Context, p store.CreateRunParams) (s
 		}
 		seeds = append(seeds, seed)
 	}
-	seeds, err = o.expandRunSplits(ctx, p.ProjectID, seeds)
+	seeds, err = o.expandRunSplits(ctx, p.ProjectID, seeds, p.SplitN, p.SplitAuto)
 	if err != nil {
 		return store.Run{}, err
 	}
-	if p.EachRunner {
+	if p.EachRunner || len(p.RunnerNames) > 0 {
 		seeds, err = o.expandEachRunner(ctx, p.ProjectID, seeds, p.RunnerNames)
 		if err != nil {
 			return store.Run{}, err
