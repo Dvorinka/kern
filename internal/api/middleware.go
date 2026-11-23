@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
@@ -33,7 +34,7 @@ func (s *Server) requireAuth() gin.HandlerFunc {
 		if token := bearer(c); token != "" {
 			user, grant, err := s.Store.UserByAPIToken(c.Request.Context(), auth.HashToken(token))
 			if err != nil {
-				fail(c, http.StatusUnauthorized, "invalid_token", "API token is invalid or expired")
+				s.authLookup(c, err, "API token is invalid or expired")
 				return
 			}
 			c.Set(ctxUser, user)
@@ -49,7 +50,7 @@ func (s *Server) requireAuth() gin.HandlerFunc {
 		if cookie, err := c.Cookie(auth.SessionCookie); err == nil && cookie != "" {
 			user, err := s.Store.UserBySession(c.Request.Context(), auth.HashToken(cookie))
 			if err != nil {
-				fail(c, http.StatusUnauthorized, "invalid_session", "session is invalid or expired")
+				s.authLookup(c, err, "session is invalid or expired")
 				return
 			}
 			// Origin check for state-changing requests.
@@ -196,6 +197,17 @@ func currentUser(c *gin.Context) (store.User, bool) {
 	return u, ok
 }
 
+// authLookup maps a failed credential lookup: a missing row is a 401, but a
+// store failure is a server error — flattening both to 401 reports an outage
+// as revoked credentials (fleet-wide "invalid_token" on a full postgres disk).
+func (s *Server) authLookup(c *gin.Context, err error, notFoundMsg string) {
+	if errors.Is(err, store.ErrNotFound) {
+		fail(c, http.StatusUnauthorized, "invalid_token", notFoundMsg)
+		return
+	}
+	s.internalError(c, err)
+}
+
 // requireRunner authenticates runner agents with their per-runner token.
 func (s *Server) requireRunner() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -210,7 +222,7 @@ func (s *Server) requireRunner() gin.HandlerFunc {
 		}
 		runner, err := s.Store.RunnerByToken(c.Request.Context(), auth.HashToken(token))
 		if err != nil {
-			fail(c, http.StatusUnauthorized, "invalid_token", "runner token is invalid or revoked")
+			s.authLookup(c, err, "runner token is invalid or revoked")
 			return
 		}
 		c.Set(ctxRunner, runner)
@@ -242,7 +254,7 @@ func (s *Server) requireCacheClient() gin.HandlerFunc {
 		if strings.HasPrefix(token, auth.RunnerPrefix) {
 			runner, err := s.Store.RunnerByToken(c.Request.Context(), auth.HashToken(token))
 			if err != nil {
-				fail(c, http.StatusUnauthorized, "invalid_token", "runner token is invalid or revoked")
+				s.authLookup(c, err, "runner token is invalid or revoked")
 				return
 			}
 			c.Set(ctxRunner, runner)

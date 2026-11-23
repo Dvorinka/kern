@@ -233,7 +233,10 @@ func (s *Server) cliAuthStart(c *gin.Context) {
 		fail(c, http.StatusTooManyRequests, "rate_limited", err.Error())
 		return
 	}
-	base := requestBaseURL(c, s.Cfg.PublicBaseURL)
+	// The verification URL is browser-facing, so it must use the canonical
+	// public origin — requestBaseURL sees the plain-HTTP hop behind a
+	// TLS-terminating proxy and advertises http:// for an https:// service.
+	base := s.Cfg.PublicBaseURL
 	c.JSON(http.StatusCreated, gin.H{
 		"device_code":      entry.DeviceCode,
 		"user_code":        entry.UserCode,

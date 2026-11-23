@@ -234,6 +234,28 @@ func (s *S3) Delete(key string) error {
 	return s.client.RemoveObject(context.Background(), s.bucket, k, minio.RemoveObjectOptions{})
 }
 
+func (s *S3) List(prefix string) ([]string, error) {
+	p, err := s.key(prefix)
+	if err != nil {
+		return nil, err
+	}
+	var keys []string
+	for obj := range s.client.ListObjects(context.Background(), s.bucket, minio.ListObjectsOptions{
+		Prefix:    p,
+		Recursive: true,
+	}) {
+		if obj.Err != nil {
+			return nil, obj.Err
+		}
+		k := obj.Key
+		if s.prefix != "" {
+			k = strings.TrimPrefix(k, s.prefix+"/")
+		}
+		keys = append(keys, k)
+	}
+	return keys, nil
+}
+
 // Presigner is the optional half of Store: backends that can hand out
 // pre-signed object URLs let runners upload/download blobs directly,
 // taking the cache archive off the API's bandwidth budget entirely

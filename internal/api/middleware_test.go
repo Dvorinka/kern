@@ -1,11 +1,14 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	"github.com/dvorinka/kern/internal/config"
 	"github.com/dvorinka/kern/internal/store"
@@ -68,6 +71,31 @@ func TestRequireScope(t *testing.T) {
 		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/x", nil))
 		if w.Code != tc.want {
 			t.Fatalf("%s: got %d want %d", tc.name, w.Code, tc.want)
+		}
+	}
+}
+
+// A dead store must not report as invalid credentials: ErrNotFound is a
+// 401, any other lookup failure is a 500 (CT908's full-disk outage flattened
+// every lookup error to invalid_token, taking the whole fleet offline).
+func TestAuthLookupErrorMapping(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	s := &Server{Cfg: &config.Config{}, Log: zap.NewNop()}
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+		body string
+	}{
+		{"missing credential is 401", store.ErrNotFound, http.StatusUnauthorized, "invalid_token"},
+		{"store failure is 500", errors.New("disk full"), http.StatusInternalServerError, "internal"},
+	} {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet, "/x", nil)
+		s.authLookup(c, tc.err, "token is invalid")
+		if w.Code != tc.want || !strings.Contains(w.Body.String(), tc.body) {
+			t.Fatalf("%s: got %d %q", tc.name, w.Code, w.Body.String())
 		}
 	}
 }
