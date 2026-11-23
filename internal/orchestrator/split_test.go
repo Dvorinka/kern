@@ -53,8 +53,13 @@ func TestExpandSplits(t *testing.T) {
 	if len(out) != 2+1+8 {
 		t.Fatalf("jobs = %d, want 11", len(out))
 	}
-	if out[0].Key != "build (shard 1/2)" || out[0].JobKey != "build" || out[0].Env["KERN_SHARD"] != "1" || out[0].Env["KERN_SHARDS"] != "2" {
+	if out[0].Key != "build (shard 1/2)" || out[0].JobKey != "build" ||
+		out[0].Env["KERN_SHARD"] != "1" || out[0].Env["KERN_SHARD_INDEX"] != "0" ||
+		out[0].Env["KERN_SHARDS"] != "2" || out[0].Env["KERN_SHARD_TOTAL"] != "2" {
 		t.Fatalf("first shard: %+v", out[0])
+	}
+	if out[1].Env["KERN_SHARD"] != "2" || out[1].Env["KERN_SHARD_INDEX"] != "1" {
+		t.Fatalf("second shard index: %+v", out[1].Env)
 	}
 	if out[0].Matrix["shard"] != 1 || out[1].Name != "Build (shard 2/2)" {
 		t.Fatalf("shard identity: %+v %+v", out[0].Matrix, out[1])
@@ -78,5 +83,33 @@ func TestExpandSplits(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("width error was swallowed")
+	}
+}
+
+func TestExpandSeedsForRunnersPinsEvenWithoutNameLabel(t *testing.T) {
+	seeds := []store.JobSeed{{
+		Key: "test", JobKey: "test", Name: "test",
+		RunsOn: []string{"linux"},
+		Steps:  []store.StepSeed{{Key: "s1", Name: "echo"}},
+	}}
+	runners := []store.Runner{
+		{Name: "ci-runner-901", Labels: []string{"linux", "x64"}},
+		{Name: "de-oracle-a1", Labels: []string{"linux", "arm64"}},
+	}
+	got, err := expandSeedsForRunners(seeds, runners)
+	if err != nil {
+		t.Fatalf("expandSeedsForRunners: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+	if got[0].Key != "test @ ci-runner-901" || got[1].Key != "test @ de-oracle-a1" {
+		t.Fatalf("keys = %q, %q", got[0].Key, got[1].Key)
+	}
+	if !runsOnCovered(got[0].RunsOn, append(runners[0].Labels, runners[0].Name)) {
+		t.Fatalf("runner 0 cannot claim pinned runs_on %v", got[0].RunsOn)
+	}
+	if runsOnCovered(got[0].RunsOn, append(runners[1].Labels, runners[1].Name)) {
+		t.Fatalf("runner 1 should not claim job pinned to runner 0: %v", got[0].RunsOn)
 	}
 }

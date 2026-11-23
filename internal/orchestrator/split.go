@@ -79,7 +79,9 @@ func expandSplits(seeds []store.JobSeed, width func(store.JobSeed, int) (int, er
 			shard.Matrix["shard"] = i
 			shard.Env = copyEnv(s.Env)
 			shard.Env["KERN_SHARD"] = strconv.Itoa(i)
+			shard.Env["KERN_SHARD_INDEX"] = strconv.Itoa(i - 1)
 			shard.Env["KERN_SHARDS"] = strconv.Itoa(n)
+			shard.Env["KERN_SHARD_TOTAL"] = strconv.Itoa(n)
 			shard.Steps = append([]store.StepSeed(nil), s.Steps...)
 			out = append(out, shard)
 		}
@@ -96,8 +98,23 @@ func copyAny(in map[string]any) map[string]any {
 }
 
 // expandRunSplits fans opted-in jobs across the fleet. auto reads live runner
-// CPUs, which compile time does not know.
-func (o *Orchestrator) expandRunSplits(ctx context.Context, projectID uuid.UUID, seeds []store.JobSeed) ([]store.JobSeed, error) {
+// CPUs, which compile time does not know. Run-level overrideN/overrideAuto apply
+// to jobs that did not declare an explicit workflow split.
+func (o *Orchestrator) expandRunSplits(ctx context.Context, projectID uuid.UUID, seeds []store.JobSeed, overrideN int, overrideAuto bool) ([]store.JobSeed, error) {
+	if overrideN > 1 || overrideAuto {
+		patched := make([]store.JobSeed, len(seeds))
+		copy(patched, seeds)
+		for i := range patched {
+			if patched[i].SplitN == 0 && !patched[i].SplitAuto {
+				if overrideAuto {
+					patched[i].SplitAuto = true
+				} else if overrideN > 1 {
+					patched[i].SplitN = overrideN
+				}
+			}
+		}
+		seeds = patched
+	}
 	auto := false
 	for _, s := range seeds {
 		if s.SplitAuto {
@@ -165,21 +182,25 @@ func (o *Orchestrator) expandEachRunner(ctx context.Context, projectID uuid.UUID
 		}
 		online = append(online, r)
 	}
+	return expandSeedsForRunners(seeds, online)
+}
+
+func expandSeedsForRunners(seeds []store.JobSeed, online []store.Runner) ([]store.JobSeed, error) {
 	out := make([]store.JobSeed, 0, len(seeds))
 	for _, s := range seeds {
 		matched := false
 		for _, r := range online {
-			if !runsOnCovered(s.RunsOn, r.Labels) {
+			effLabels := append(append([]string{}, r.Labels...), r.Name)
+			if !runsOnCovered(s.RunsOn, effLabels) {
 				continue
 			}
 			matched = true
 			c := s
-			pinned := append(append([]string{}, s.RunsOn...), r.Name)
-			if runsOnCovered(pinned, r.Labels) {
-				c.RunsOn = pinned
-				c.Key = s.Key + " @ " + r.Name
-				c.Name = s.Name + " @ " + r.Name
-			}
+			c.RunsOn = appendUniqueLabel(s.RunsOn, r.Name)
+			c.Key = s.Key + " @ " + r.Name
+			c.Name = s.Name + " @ " + r.Name
+			c.Env = copyEnv(s.Env)
+			c.Steps = append([]store.StepSeed(nil), s.Steps...)
 			out = append(out, c)
 		}
 		if !matched {
@@ -190,6 +211,21 @@ func (o *Orchestrator) expandEachRunner(ctx context.Context, projectID uuid.UUID
 		return nil, fmt.Errorf("each-runner expansion would create %d jobs (max %d)", len(out), maxSplitJobs)
 	}
 	return out, nil
+}
+
+func appendUniqueLabel(in []string, label string) []string {
+	out := make([]string, 0, len(in)+1)
+	seen := false
+	for _, v := range in {
+		out = append(out, v)
+		if v == label {
+			seen = true
+		}
+	}
+	if !seen && label != "" {
+		out = append(out, label)
+	}
+	return out
 }
 
 // runsOnCovered reports whether a runner's advertised labels satisfy a job's

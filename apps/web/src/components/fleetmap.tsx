@@ -175,11 +175,52 @@ export function FleetMap({ data }: { data: FleetMapResponse }) {
 
 	const hovered = hover ? sites.find((s) => s.key === hover) : null;
 
-	// label side: right of the marker unless that runs off the edge
-	const labelFor = (s: Site) => {
-		const left = s.x > MW * 0.7;
-		return { x: s.x + (left ? -16 * mk : 16 * mk), y: s.y + 6 * mk, an: left ? "end" : "start" };
-	};
+	// Position the control-plane label away from nearby site rings so short
+	// codes never sit on top of a marker.
+	const controlLabel = useMemo(() => {
+		const leftBlocked = sites.some(
+			(s) => Math.abs(s.x - (hx - 24 * mk)) < 36 * mk && Math.abs(s.y - hy) < 22 * mk,
+		);
+		if (leftBlocked) {
+			return { x: hx, y: hy + 24 * mk, an: "middle" as const };
+		}
+		return { x: hx - 16 * mk, y: hy + 6 * mk, an: "end" as const };
+	}, [sites, hx, hy, mk]);
+
+	// label side with collision avoidance: sites clustered tightly (e.g.
+	// Prague + Frankfurt) alternate left/right/vertical offsets so short codes
+	// never collide into illegible text.
+	const labelPositions = useMemo(() => {
+		const map = new Map<string, { x: number; y: number; an: "start" | "end" }>();
+		const sorted = [...sites].sort((a, b) => a.x - b.x || a.y - b.y);
+		const placed: { x: number; y: number }[] = [];
+		if (control) placed.push({ x: controlLabel.x, y: controlLabel.y });
+		for (const s of sorted) {
+			const preferLeft = s.x > MW * 0.7;
+			const cands: { x: number; y: number; an: "start" | "end" }[] = preferLeft
+				? [
+						{ x: s.x - 16 * mk, y: s.y + 5 * mk, an: "end" },
+						{ x: s.x + 16 * mk, y: s.y + 5 * mk, an: "start" },
+						{ x: s.x - 14 * mk, y: s.y - 14 * mk, an: "end" },
+						{ x: s.x + 14 * mk, y: s.y + 20 * mk, an: "start" },
+					]
+				: [
+						{ x: s.x + 16 * mk, y: s.y + 5 * mk, an: "start" },
+						{ x: s.x - 16 * mk, y: s.y + 5 * mk, an: "end" },
+						{ x: s.x + 14 * mk, y: s.y - 14 * mk, an: "start" },
+						{ x: s.x - 14 * mk, y: s.y + 20 * mk, an: "end" },
+					];
+			const clear = (c: { x: number; y: number }) =>
+				placed.every((p) => Math.abs(p.x - c.x) > 46 * mk || Math.abs(p.y - c.y) > 18 * mk);
+			const chosen = cands.find(clear) ?? cands[0]!;
+			placed.push({ x: chosen.x, y: chosen.y });
+			map.set(s.key, chosen);
+		}
+		return map;
+	}, [sites, control, controlLabel, mk]);
+
+	const labelFor = (s: Site) =>
+		labelPositions.get(s.key) ?? { x: s.x + 16 * mk, y: s.y + 5 * mk, an: "start" as const };
 
 	return (
 		<div className="fleetmap" ref={wrapRef}>
@@ -274,9 +315,9 @@ export function FleetMap({ data }: { data: FleetMapResponse }) {
 						/>
 						{showLabels && (
 							<text
-								x={hx - 16 * mk}
-								y={hy + 6 * mk}
-								textAnchor="end"
+								x={controlLabel.x}
+								y={controlLabel.y}
+								textAnchor={controlLabel.an}
 								className="fm-label"
 								style={{ fontSize: 16 * mk }}
 							>

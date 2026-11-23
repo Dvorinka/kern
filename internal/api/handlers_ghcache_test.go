@@ -160,6 +160,10 @@ func TestGHCacheReserveUploadCommitCycle(t *testing.T) {
 		t.Fatalf("jobs: %v len=%d", err, len(jobs))
 	}
 	job := jobs[0]
+	// Cache endpoints only accept in-progress jobs (#369).
+	if _, err := st.Pool().Exec(ctx, `UPDATE jobs SET status = 'in_progress' WHERE id = $1`, job.ID); err != nil {
+		t.Fatalf("mark job in_progress: %v", err)
+	}
 
 	bs, err := blobs.NewFilesystem(t.TempDir())
 	if err != nil {

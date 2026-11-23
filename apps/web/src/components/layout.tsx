@@ -1,5 +1,5 @@
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { LogOut, Menu, Search, X } from "lucide-react";
+import { LogOut, Menu, Moon, Search, Sun, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
@@ -198,13 +198,18 @@ export function Layout() {
 							setPalette(true);
 						}}
 					>
-						<Search size={15} />
-						<span className="find-l">Search runs and projects</span>
+						<Search size={14} />
+						<span className="find-l">Search…</span>
 						<kbd>⌘K</kbd>
 					</button>
 					<NotificationsBell />
-					<button className="inv" onClick={toggleTheme} title="Switch paper / ink">
-						Invert
+					<button
+						className="avb"
+						onClick={toggleTheme}
+						aria-label={theme === "paper" ? "Switch to dark theme" : "Switch to light theme"}
+						title={theme === "paper" ? "Dark theme (ink)" : "Light theme (paper)"}
+					>
+						{theme === "paper" ? <Moon size={14} /> : <Sun size={14} />}
 					</button>
 					<Link to="/settings" className="avb" title={user.email}>
 						{initial}

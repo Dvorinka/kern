@@ -330,6 +330,7 @@ func (s *Server) getOrgSettings(c *gin.Context) {
 		"self_heal":             settingsValue(raw, "self_heal", "off"),
 		"public_ci":             settingsValue(raw, "public_ci", "off"),
 		"auto_update":           settingsValue(raw, "auto_update", "off"),
+		"auto_concurrency":      settingsValue(raw, "auto_concurrency", "on"),
 		"runner_autostart":      settingsValue(raw, "runner_autostart", "on"),
 		"notify_url":            settingsValue(raw, "notify_url", ""),
 		"notify_secret_set":     settingsValue(raw, "notify_secret", "") != "",
@@ -345,6 +346,7 @@ type settingsRequest struct {
 	SelfHeal            string  `json:"self_heal"`
 	ForkGate            string  `json:"fork_gate"`
 	PrTrust             string  `json:"pr_trust"`
+	AutoConcurrency     string  `json:"auto_concurrency"`
 	IconPath            *string `json:"icon_path"`
 	NotifyURL           *string `json:"notify_url"`
 	ArtifactQuotaMB     *int64  `json:"artifact_quota_mb"`
@@ -360,6 +362,7 @@ type orgSettingsRequest struct {
 	SelfHeal            *string `json:"self_heal"`
 	PublicCI            *string `json:"public_ci"`
 	AutoUpdate          *string `json:"auto_update"`
+	AutoConcurrency     *string `json:"auto_concurrency"`
 	RunnerAutostart     *string `json:"runner_autostart"`
 	NotifyURL           *string `json:"notify_url"`
 	NotifySecret        *string `json:"notify_secret"`
@@ -390,9 +393,9 @@ func validMaxTransientRetries(v string) bool {
 	return err == nil && n >= 0 && n <= 10
 }
 
-func orgSettingWrites(selfHeal, publicCI, autoUpdate, runnerAutostart, notifyURL, notifySecret, notifyEvents, notifyFormat, diskAlertPct, maxTransientRetries, toolset *string) (map[string]string, string) {
-	if selfHeal == nil && publicCI == nil && autoUpdate == nil && runnerAutostart == nil && notifyURL == nil && notifySecret == nil && notifyEvents == nil && notifyFormat == nil && diskAlertPct == nil && maxTransientRetries == nil && toolset == nil {
-		return nil, "self_heal, public_ci, auto_update, runner_autostart, notify_url, notify_secret, notify_events, notify_format, disk_alert_pct, max_transient_retries or toolset is required"
+func orgSettingWrites(selfHeal, publicCI, autoUpdate, autoConcurrency, runnerAutostart, notifyURL, notifySecret, notifyEvents, notifyFormat, diskAlertPct, maxTransientRetries, toolset *string) (map[string]string, string) {
+	if selfHeal == nil && publicCI == nil && autoUpdate == nil && autoConcurrency == nil && runnerAutostart == nil && notifyURL == nil && notifySecret == nil && notifyEvents == nil && notifyFormat == nil && diskAlertPct == nil && maxTransientRetries == nil && toolset == nil {
+		return nil, "self_heal, public_ci, auto_update, auto_concurrency, runner_autostart, notify_url, notify_secret, notify_events, notify_format, disk_alert_pct, max_transient_retries or toolset is required"
 	}
 	out := map[string]string{}
 	if selfHeal != nil {
@@ -412,6 +415,12 @@ func orgSettingWrites(selfHeal, publicCI, autoUpdate, runnerAutostart, notifyURL
 			return nil, "auto_update must be on or off"
 		}
 		out["auto_update"] = *autoUpdate
+	}
+	if autoConcurrency != nil {
+		if *autoConcurrency != "on" && *autoConcurrency != "off" {
+			return nil, "auto_concurrency must be on or off"
+		}
+		out["auto_concurrency"] = *autoConcurrency
 	}
 	if runnerAutostart != nil {
 		if *runnerAutostart != "on" && *runnerAutostart != "off" {
@@ -502,7 +511,7 @@ func (s *Server) putOrgSettings(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_body", "self_heal, public_ci or auto_update is required")
 		return
 	}
-	writes, msg := orgSettingWrites(req.SelfHeal, req.PublicCI, req.AutoUpdate, req.RunnerAutostart, req.NotifyURL, req.NotifySecret, req.NotifyEvents, req.NotifyFormat, req.DiskAlertPct, req.MaxTransientRetries, req.Toolset)
+	writes, msg := orgSettingWrites(req.SelfHeal, req.PublicCI, req.AutoUpdate, req.AutoConcurrency, req.RunnerAutostart, req.NotifyURL, req.NotifySecret, req.NotifyEvents, req.NotifyFormat, req.DiskAlertPct, req.MaxTransientRetries, req.Toolset)
 	if msg != "" {
 		fail(c, http.StatusBadRequest, "invalid_body", msg)
 		return
@@ -546,6 +555,7 @@ func (s *Server) getProjectSettings(c *gin.Context) {
 		"self_heal":             settingsValue(raw, "self_heal", "inherit"),
 		"fork_gate":             settingsValue(raw, "fork_gate", "off"),
 		"pr_trust":              settingsValue(raw, "pr_trust", "off"),
+		"auto_concurrency":      settingsValue(raw, "auto_concurrency", "inherit"),
 		"icon_path":             settingsValue(raw, "icon_path", ""),
 		"notify_url":            settingsValue(raw, "notify_url", ""),
 		"artifact_quota_mb":     settingsValue(raw, "artifact_quota_mb", "0"),
@@ -620,8 +630,8 @@ func (s *Server) putProjectSettings(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_body", "invalid JSON body")
 		return
 	}
-	if req.SelfHeal == "" && req.ForkGate == "" && req.PrTrust == "" && req.IconPath == nil && req.NotifyURL == nil && req.ArtifactQuotaMB == nil && req.MaxConcurrentJobs == nil && req.MaxTransientRetries == nil && req.PrimeWorkflow == nil && req.PrimeAuto == "" {
-		fail(c, http.StatusBadRequest, "invalid_body", "self_heal, fork_gate, pr_trust, icon_path, notify_url, artifact_quota_mb, max_concurrent_jobs, max_transient_retries, prime_workflow or prime_auto is required")
+	if req.SelfHeal == "" && req.ForkGate == "" && req.PrTrust == "" && req.AutoConcurrency == "" && req.IconPath == nil && req.NotifyURL == nil && req.ArtifactQuotaMB == nil && req.MaxConcurrentJobs == nil && req.MaxTransientRetries == nil && req.PrimeWorkflow == nil && req.PrimeAuto == "" {
+		fail(c, http.StatusBadRequest, "invalid_body", "self_heal, fork_gate, pr_trust, auto_concurrency, icon_path, notify_url, artifact_quota_mb, max_concurrent_jobs, max_transient_retries, prime_workflow or prime_auto is required")
 		return
 	}
 	writes := map[string]string{}
@@ -653,6 +663,17 @@ func (s *Server) putProjectSettings(c *gin.Context) {
 			return
 		}
 		writes["pr_trust"] = req.PrTrust // "off" restores the sandboxed default
+	}
+	if req.AutoConcurrency != "" {
+		if req.AutoConcurrency != "inherit" && req.AutoConcurrency != "on" && req.AutoConcurrency != "off" {
+			fail(c, http.StatusBadRequest, "invalid_body", "auto_concurrency must be inherit, on or off")
+			return
+		}
+		v := req.AutoConcurrency
+		if v == "inherit" {
+			v = ""
+		}
+		writes["auto_concurrency"] = v
 	}
 	if req.IconPath != nil {
 		v := *req.IconPath
@@ -741,6 +762,9 @@ func (s *Server) putProjectSettings(c *gin.Context) {
 	}
 	if _, ok := writes["pr_trust"]; ok {
 		resp["pr_trust"] = req.PrTrust
+	}
+	if _, ok := writes["auto_concurrency"]; ok {
+		resp["auto_concurrency"] = req.AutoConcurrency
 	}
 	if _, ok := writes["max_concurrent_jobs"]; ok {
 		resp["max_concurrent_jobs"] = strconv.FormatInt(*req.MaxConcurrentJobs, 10)

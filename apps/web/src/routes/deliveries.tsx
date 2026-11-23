@@ -56,11 +56,14 @@ export function DeliveriesPage() {
 							</div>
 							<div className="kpi">
 								<div className="k">top event</div>
-								<div
-									className="v"
-									style={{ fontSize: 22, color: events[0] ? catColor(events[0][0]) : undefined }}
-								>
-									{events[0]?.[0] ?? "—"}
+								<div className="v flex items-center gap-2" style={{ fontSize: 22 }}>
+									{events[0] && (
+										<span
+											className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+											style={{ background: catColor(events[0][0]) }}
+										/>
+									)}
+									<span className="truncate">{events[0]?.[0] ?? "—"}</span>
 								</div>
 								<div className="c">{events[0] ? `${events[0][1]} of ${total}` : ""}</div>
 							</div>

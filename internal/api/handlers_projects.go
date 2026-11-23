@@ -249,8 +249,14 @@ type triggerRequest struct {
 	BundleRef     string         `json:"bundle_ref"`
 	Inputs        map[string]any `json:"inputs"`
 	// EachRunner fans every job into one pinned copy per matching online
-	// runner — prime/cache-warming triggers.
-	EachRunner bool `json:"each_runner"`
+	// runner — prime/cache-warming triggers. Runners, when set alongside
+	// EachRunner, limits the fan-out to those named runners.
+	EachRunner bool     `json:"each_runner"`
+	Runners    []string `json:"runners"`
+	// Split / SplitAuto fan unsplit jobs into N shards or auto-sized shards
+	// from live fleet slots on manual dispatch.
+	Split     int  `json:"split"`
+	SplitAuto bool `json:"split_auto"`
 	// WorkflowPath + WorkflowYAML drive the by-path trigger route: a workflow
 	// file that is not (yet) a synced workflow row — an unmerged branch file
 	// or a local file shipped inline by `kern exec --workflow-file`.
@@ -378,7 +384,10 @@ func (s *Server) triggerRun(c *gin.Context) {
 		TrustLevel:        req.TrustLevel,
 		Source:            source,
 		Inputs:            req.Inputs,
-		EachRunner:        req.EachRunner,
+		EachRunner:        req.EachRunner || len(req.Runners) > 0,
+		RunnerNames:       req.Runners,
+		SplitN:            req.Split,
+		SplitAuto:         req.SplitAuto,
 		DispatchTokenID:   dispatchTokenID(c),
 	})
 	if err != nil {
@@ -567,7 +576,10 @@ func (s *Server) triggerRunByPath(c *gin.Context) {
 		TrustLevel:        req.TrustLevel,
 		Source:            source,
 		Inputs:            req.Inputs,
-		EachRunner:        req.EachRunner,
+		EachRunner:        req.EachRunner || len(req.Runners) > 0,
+		RunnerNames:       req.Runners,
+		SplitN:            req.Split,
+		SplitAuto:         req.SplitAuto,
 		DispatchTokenID:   dispatchTokenID(c),
 	})
 	if err != nil {

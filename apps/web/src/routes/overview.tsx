@@ -123,13 +123,19 @@ export function OverviewPage() {
 	const details = useRunDetails(detailRuns);
 	const detailOf = (id: string) => details[detailRuns.findIndex((r) => r.id === id)]?.data;
 
-	// The legend mirrors the actual job names on screen — not a fixed
-	// lint/build/web guess.
+	// The legend mirrors the actual job names on screen — collapsing shard
+	// suffixes ("test (shard 1/3)" -> "test") so sharded runs don't duplicate.
 	const legendJobs = useMemo(() => {
 		const seen = new Set<string>();
 		for (const d of details) {
 			for (const j of d.data?.jobs ?? []) {
-				if (j.name) seen.add(j.name);
+				if (j.name) {
+					const base = j.name
+						.replace(/\s*@\s+\S+$/i, "")
+						.replace(/\s*\(shard\s+\d+\/\d+\)$/i, "")
+						.trim();
+					if (base) seen.add(base);
+				}
 			}
 		}
 		return [...seen].slice(0, 4);
@@ -233,11 +239,11 @@ export function OverviewPage() {
 		<>
 			{(data.webhooks?.failed_24h ?? 0) > 0 && (
 				<div
-					className="panel rowlink mb-4 flex cursor-pointer items-center gap-3.5 px-6 py-3.5"
+					className="panel rowlink mb-4 flex flex-wrap cursor-pointer items-center gap-3 px-5 py-3.5"
 					onClick={() => nav("/deliveries")}
 				>
-					<span className="sq bad" />
-					<span className="text-[13px] text-[var(--dim)]">
+					<span className="sq bad shrink-0" />
+					<span className="min-w-0 flex-1 text-[13px] text-[var(--dim)]">
 						<span className="font-medium text-[var(--err)]">
 							{data.webhooks!.failed_24h} webhook{data.webhooks!.failed_24h === 1 ? "" : "s"}
 						</span>{" "}
@@ -248,7 +254,7 @@ export function OverviewPage() {
 							</span>
 						)}
 					</span>
-					<button className="lnk ml-auto flex-none" onClick={() => nav("/deliveries")}>
+					<button className="lnk ml-auto shrink-0" onClick={() => nav("/deliveries")}>
 						Deliveries
 					</button>
 				</div>

@@ -24,6 +24,18 @@ const TABS: { key: Tab; label: string; status?: string; conclusion?: string }[] 
 	{ key: "cancelled", label: "Cancelled", status: "cancelled" },
 ];
 
+const CLASSIFICATIONS = [
+	"missing_binary",
+	"oom",
+	"disk_full",
+	"network",
+	"cache_permissions",
+	"stale_lock",
+	"pkg_lock",
+	"npm_cache",
+	"script_failure",
+];
+
 type RunsResponse = { runs: Run[]; total: number; counts?: Record<string, number> };
 
 export function RunsPage() {
@@ -32,16 +44,19 @@ export function RunsPage() {
 	const tab = (params.get("tab") ?? "") as Tab;
 	const project = params.get("project") ?? "";
 	const day = params.get("day") ?? "";
+	const classification = params.get("classification") ?? "";
 	const [branch, setBranch] = useState("");
+	const [search, setSearch] = useState("");
 	const active = TABS.find((t) => t.key === tab) ?? TABS[0]!;
 	const filterQuery = new URLSearchParams({ limit: String(PAGE_SIZE), offset: "0" });
 	if (active.status) filterQuery.set("status", active.status);
 	if (active.conclusion) filterQuery.set("conclusion", active.conclusion);
 	if (project) filterQuery.set("project", project);
 	if (day) filterQuery.set("day", day);
+	if (classification) filterQuery.set("classification", classification);
 	const { data, isLoading, fetchNextPage, hasNextPage, isFetchingNextPage } =
 		useInfiniteQuery({
-			queryKey: ["runs", "all", tab, project, day],
+			queryKey: ["runs", "all", tab, project, day, classification],
 			queryFn: ({ pageParam }) => {
 				const q = new URLSearchParams(filterQuery);
 				q.set("offset", String(pageParam));
@@ -95,8 +110,16 @@ export function RunsPage() {
 		() => (projectList?.projects ?? []).map((p) => p.slug).sort(),
 		[projectList],
 	);
-	// Status/project/day filters ran server-side; branch refines locally.
-	const visible = runs.filter((r) => !branch || refName(r.ref) === branch);
+	// Status/project/day/classification filters run server-side; branch & search refine locally.
+	const needle = search.trim().toLowerCase();
+	const visible = runs.filter((r) => {
+		if (branch && refName(r.ref) !== branch) return false;
+		if (needle) {
+			const hay = `${r.commit_message} ${r.workflow_name} ${r.actor} ${r.sha} ${r.project_slug} ${refName(r.ref)}`.toLowerCase();
+			if (!hay.includes(needle)) return false;
+		}
+		return true;
+	});
 	const detailRuns = useMemo(() => visible.slice(0, DETAIL_CAP), [visible]);
 	const details = useRunDetails(detailRuns);
 	const jobsByRun = useMemo(() => {
@@ -171,7 +194,13 @@ export function RunsPage() {
 							</button>
 						)}
 					</div>
-					<div className="mb-0.5 mt-3.5 flex flex-wrap items-center gap-2 text-[11px] text-[var(--faint)]">
+					<div className="mb-1 mt-3.5 flex flex-wrap items-center gap-2 text-[11px] text-[var(--faint)]">
+						<input
+							className="fsel w-48"
+							placeholder="Search commit, SHA, actor…"
+							value={search}
+							onChange={(e) => setSearch(e.target.value)}
+						/>
 						<select className="fsel" value={branch} onChange={(e) => setBranch(e.target.value)}>
 							<option value="">All branches</option>
 							{branches.map((b) => (
@@ -199,6 +228,26 @@ export function RunsPage() {
 								</option>
 							))}
 						</select>
+						<select
+							className="fsel"
+							aria-label="Failure cause"
+							value={classification}
+							onChange={(e) =>
+								setParams((p) => {
+									const n = new URLSearchParams(p);
+									if (e.target.value) n.set("classification", e.target.value);
+									else n.delete("classification");
+									return n;
+								})
+							}
+						>
+							<option value="">All causes</option>
+							{CLASSIFICATIONS.map((c) => (
+								<option key={c} value={c}>
+									{c}
+								</option>
+							))}
+						</select>
 						{day && (
 							<button
 								className="fsel"
@@ -216,6 +265,24 @@ export function RunsPage() {
 									day: "numeric",
 								})}{" "}
 								×
+							</button>
+						)}
+						{(search || branch || project || classification || day) && (
+							<button
+								className="lnk"
+								onClick={() => {
+									setSearch("");
+									setBranch("");
+									setParams((p) => {
+										const n = new URLSearchParams(p);
+										n.delete("project");
+										n.delete("classification");
+										n.delete("day");
+										return n;
+									});
+								}}
+							>
+								Reset
 							</button>
 						)}
 						<span className="ml-auto">

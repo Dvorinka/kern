@@ -191,6 +191,10 @@ func TestClaimStillYieldsOnJobCount(t *testing.T) {
 	s, ctx := testStore(t)
 	loaded := labeledRunner(t, ctx, s, "loaded", []string{"linux"}, "docker")
 	idle := labeledRunner(t, ctx, s, "idle-peer", []string{"linux"}, "docker")
+	// Slot-aware yield (#372) requires free slots on the idle peer.
+	if _, err := s.pool.Exec(ctx, `UPDATE runners SET concurrency = 4 WHERE id IN ($1, $2)`, loaded.ID, idle.ID); err != nil {
+		t.Fatalf("set concurrency: %v", err)
+	}
 
 	pid, wid, vid := fixture(t, ctx, s)
 	queueJob(t, ctx, s, pid, wid, vid, "trusted", false)

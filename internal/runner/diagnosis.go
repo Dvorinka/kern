@@ -131,9 +131,38 @@ func diagnose(step StepSpec, exitCode int, logTail, stepErr, jobMemory string, d
 		// npm/pnpm EACCES under the shared cache: a root-run docker action
 		// poisoned entries the uid-1000 job user cannot write (#411). Not a
 		// missing binary — the command exists, the cache does not.
-		return fail("cache_permissions",
+		d = fail("cache_permissions",
 			"The shared runner cache contains root-owned files the job user cannot write",
-			"the runner restores cache ownership after root-run actions; clear /kern/cache on the runner once to repair entries written before the fix")
+			"restore ownership on /kern/cache so uid-1000 jobs can write to it")
+		d.Fixable = true
+		d.Remediation = &remediation{Fix: []string{"chmod -R a+rwX /kern/cache 2>/dev/null || true"}}
+		return d
+	case strings.Contains(lower, "index.lock") &&
+		(strings.Contains(lower, "file exists") || strings.Contains(lower, "another git process")):
+		// Crashed/killed git operations leave .git/index.lock behind and block
+		// every subsequent checkout/status command in the workspace.
+		d = fail("stale_lock",
+			"A stale .git/index.lock file is blocking git operations",
+			"remove .git/index.lock and retry the step")
+		d.Fixable = true
+		d.Remediation = &remediation{Fix: []string{"rm -f .git/index.lock"}}
+		return d
+	case strings.Contains(lower, "could not get lock /var/lib/dpkg/lock") ||
+		strings.Contains(lower, "dpkg was interrupted"):
+		d = fail("pkg_lock",
+			"The Debian package manager state was interrupted or locked",
+			"repair interrupted dpkg state with `dpkg --configure -a`")
+		d.Fixable = true
+		d.Remediation = &remediation{Fix: []string{"dpkg --configure -a"}}
+		return d
+	case (strings.Contains(lower, "eintegrity") || strings.Contains(lower, "integrity checksum failed")) &&
+		strings.Contains(lower, "npm"):
+		d = fail("npm_cache",
+			"The npm cache failed an integrity check (corrupted tarball or index)",
+			"clean the npm cache (`npm cache clean --force`) and retry")
+		d.Fixable = true
+		d.Remediation = &remediation{Fix: []string{"npm cache clean --force"}}
+		return d
 	case strings.Contains(lower, "permission denied"):
 		return fail("permission_denied", "A file or operation returned permission denied",
 			"check file ownership in the workspace or run the command with the right user")

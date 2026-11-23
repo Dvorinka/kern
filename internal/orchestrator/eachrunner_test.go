@@ -53,7 +53,9 @@ func TestExpandEachRunner(t *testing.T) {
 	base := []string{"self-hosted", "kern", "linux", "linux-x64", "ubuntu-latest", "docker"}
 	mk("runner-a", append(slices.Clone(base), "runner-a"))
 	mk("runner-b", append(slices.Clone(base), "runner-b"))
-	// Pre-name-label rollout: labels lack the runner's own name.
+	// Runners whose stored labels omit their own name are still pinned by name
+	// because ClaimJob implicitly includes r.name in effective labels — avoiding
+	// duplicate job keys when multiple such runners exist.
 	mk("old-runner", slices.Clone(base))
 	// A macOS runner must not pick up linux jobs.
 	mk("mac-mini", []string{"self-hosted", "kern", "macos", "x64", "mac-mini"})
@@ -67,27 +69,21 @@ func TestExpandEachRunner(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(out) != 3 {
-		t.Fatalf("jobs = %d, want 3 (a, b pinned + old unpinned)", len(out))
+		t.Fatalf("jobs = %d, want 3 (runner-a, runner-b, old-runner)", len(out))
 	}
 	pinned := map[string]bool{}
-	unpinned := 0
 	for _, j := range out {
-		if slices.Contains(j.RunsOn, "runner-a") {
-			pinned["runner-a"] = true
-			if j.Key != "build @ runner-a" {
-				t.Errorf("pinned key = %q", j.Key)
-			}
-		} else if slices.Contains(j.RunsOn, "runner-b") {
-			pinned["runner-b"] = true
-		} else {
-			unpinned++
-			if j.Key != "build" || !slices.Equal(j.RunsOn, seed.RunsOn) {
-				t.Errorf("unpinned copy mutated: key %q runs_on %v", j.Key, j.RunsOn)
+		for _, name := range []string{"runner-a", "runner-b", "old-runner"} {
+			if slices.Contains(j.RunsOn, name) {
+				pinned[name] = true
+				if j.Key != "build @ "+name {
+					t.Errorf("pinned key = %q, want %q", j.Key, "build @ "+name)
+				}
 			}
 		}
 	}
-	if !pinned["runner-a"] || !pinned["runner-b"] || unpinned != 1 {
-		t.Fatalf("fan-out wrong: pinned=%v unpinned=%d", pinned, unpinned)
+	if !pinned["runner-a"] || !pinned["runner-b"] || !pinned["old-runner"] {
+		t.Fatalf("fan-out wrong: pinned=%v", pinned)
 	}
 
 	// RunnerNames limits the fan-out — auto-prime pins just the new runner.

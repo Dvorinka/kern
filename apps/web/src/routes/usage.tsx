@@ -108,7 +108,7 @@ export function UsagePage() {
 				<Spinner />
 			) : (
 				<>
-					<div className="panel kpis">
+					<div className="panel kpis kpis-dense">
 						{kpis.map((k) => (
 							<div className="kpi" key={k.k}>
 								<div className="k">{k.k}</div>
@@ -153,7 +153,14 @@ export function UsagePage() {
 								<tbody>
 									{u.failures.map((f) => (
 										<tr key={f.kind}>
-											<td className="lead font-mono text-xs">{f.kind}</td>
+											<td className="lead font-mono text-xs">
+												<Link
+													to={`/runs?classification=${encodeURIComponent(f.kind)}`}
+													className="lnk"
+												>
+													{f.kind}
+												</Link>
+											</td>
 											<td className="num">{f.count}</td>
 											<td className="num">{f.fixable > 0 ? f.fixable : "—"}</td>
 										</tr>

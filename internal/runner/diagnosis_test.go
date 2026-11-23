@@ -42,7 +42,10 @@ func TestDiagnose(t *testing.T) {
 		{"ployz build kill", 1, "build resource cleanup could not be confirmed\n", "", "build_killed", false},
 		{"ployz stale lock", 1, "quarantined: stale lock /var/tmp/ployz-build-1701 held by dead pid\n", "", "stale_lock", true},
 		{"pnpm store corrupt", 1, "ENOENT: no such file or directory, open '/root/.local/share/pnpm/store/v3/files/ab/cdef'\n", "", "pnpm_store", true},
-		{"npm cache eacces", 1, "npm error code EACCES\nnpm error syscall open\nnpm error path /kern/cache/npm/_cacache/tmp/xxx\nnpm error errno -13\nnpm error Your cache folder contains root-owned files\n", "", "cache_permissions", false},
+		{"npm cache eacces", 1, "npm error code EACCES\nnpm error syscall open\nnpm error path /kern/cache/npm/_cacache/tmp/xxx\nnpm error errno -13\nnpm error Your cache folder contains root-owned files\n", "", "cache_permissions", true},
+		{"git index lock", 128, "fatal: Unable to create '/github/workspace/.git/index.lock': File exists.\nAnother git process seems to be running in this repository\n", "", "stale_lock", true},
+		{"dpkg interrupted", 100, "E: dpkg was interrupted, you must manually run 'sudo dpkg --configure -a' to correct the problem.\n", "", "pkg_lock", true},
+		{"npm integrity corrupt", 1, "npm ERR! code EINTEGRITY\nnpm ERR! sha512-abc integrity checksum failed\n", "", "npm_cache", true},
 	}
 	for _, tc := range cases {
 		d := diagnose(StepSpec{}, tc.code, tc.tail, tc.stepErr, "6g", func() bool { return true })

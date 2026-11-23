@@ -44,8 +44,13 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 			-- claims_paused/cpu_percent feed the yield rule: paused peers
 			-- cannot take work, and among equally busy peers the cooler host
 			-- wins (#310).
-			SELECT r.id, r.labels, r.executor, r.claims_paused, r.cpu_percent,
+			SELECT r.id, r.labels,
+				(r.labels || ARRAY['self-hosted', 'kern', r.name]) AS eff_labels,
+				r.executor, r.claims_paused, r.cpu_percent,
 				r.concurrency,
+				CASE WHEN r.memory_bytes > 0 AND r.mem_used_bytes IS NOT NULL
+				     THEN GREATEST(0, LEAST(100, (r.mem_used_bytes::float8 / r.memory_bytes::float8) * 100.0))
+				     ELSE NULL END AS mem_pct,
 				(SELECT count(*) FROM jobs a
 				 WHERE a.runner_id = r.id AND a.status = 'in_progress') AS load
 			FROM runners r, me
@@ -110,7 +115,7 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 			  -- slots, so one repo's burst cannot starve the fleet.
 			  AND (cap.max_jobs IS NULL OR cap.running < cap.max_jobs)
 			  AND r.status = 'in_progress'
-			  AND j.runs_on <@ (me_f.labels || ARRAY['self-hosted', 'kern'])
+			  AND j.runs_on <@ me_f.eff_labels
 			  -- Host-exec runners have no isolation: fork/pull_request trust
 			  -- tiers (untrusted code) may never land on them. Same boundary
 			  -- as secrets eligibility.
@@ -128,7 +133,7 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 					SELECT 1 FROM fleet h
 					WHERE h.claims_paused = ''
 					  AND 'kern-docker' = ANY(h.labels)
-					  AND j.runs_on <@ (h.labels || ARRAY['self-hosted', 'kern'])
+					  AND j.runs_on <@ h.eff_labels
 				)
 			  )
 			  -- Retry anti-affinity (#332): a job whose last attempt ran on
@@ -146,7 +151,7 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 					SELECT 1 FROM fleet o
 					WHERE o.id <> me_f.id
 					  AND o.claims_paused = ''
-					  AND j.runs_on <@ (o.labels || ARRAY['self-hosted', 'kern'])
+					  AND j.runs_on <@ o.eff_labels
 					  AND (o.executor <> 'host' OR r.trust_level NOT IN ('fork', 'pull_request'))
 					  AND (
 						NOT j.needs_docker
@@ -156,7 +161,7 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 							SELECT 1 FROM fleet h
 							WHERE h.claims_paused = ''
 							  AND 'kern-docker' = ANY(h.labels)
-							  AND j.runs_on <@ (h.labels || ARRAY['self-hosted', 'kern'])
+							  AND j.runs_on <@ h.eff_labels
 						)
 					  )
 				)
@@ -171,7 +176,7 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 				SELECT 1 FROM fleet o
 				WHERE o.id <> me_f.id
 				  AND o.claims_paused = ''
-				  AND j.runs_on <@ (o.labels || ARRAY['self-hosted', 'kern'])
+				  AND j.runs_on <@ o.eff_labels
 				  AND (o.executor <> 'host' OR r.trust_level NOT IN ('fork', 'pull_request'))
 				  AND (
 					NOT j.needs_docker
@@ -181,19 +186,25 @@ func (s *Store) ClaimJob(ctx context.Context, runnerID uuid.UUID, lease time.Dur
 						SELECT 1 FROM fleet h
 						WHERE h.claims_paused = ''
 						  AND 'kern-docker' = ANY(h.labels)
-						  AND j.runs_on <@ (h.labels || ARRAY['self-hosted', 'kern'])
+						  AND j.runs_on <@ h.eff_labels
 					)
 				  )
 				  -- Slot-aware yield (#372): only a peer with a free worker
 				  -- slot can take this job, and only when its utilization
 				  -- ratio (load/concurrency) is lower — a full 1-slot
 				  -- runner must not suppress a 2/4 peer. Equal ratios fall
-				  -- back to the CPU-margin tiebreak.
+				  -- back to CPU margin, then memory headroom so tightly
+				  -- packed hosts avoid OOM while cool peers sit idle.
 				  AND o.load < o.concurrency
 				  AND (
 					o.load * me_f.concurrency < me_f.load * o.concurrency
 					OR (o.load * me_f.concurrency = me_f.load * o.concurrency
-						AND COALESCE(o.cpu_percent, 100) < COALESCE(me_f.cpu_percent, 100) - $3)
+						AND (
+							COALESCE(o.cpu_percent, 100) < COALESCE(me_f.cpu_percent, 100) - $3
+							OR (ABS(COALESCE(o.cpu_percent, 100) - COALESCE(me_f.cpu_percent, 100)) <= $3
+								AND o.mem_pct IS NOT NULL AND me_f.mem_pct IS NOT NULL
+								AND o.mem_pct < me_f.mem_pct - $3)
+						))
 				  )
 			  )
 			-- Longest-pole first within equal priority (#372): jobs whose
@@ -841,7 +852,7 @@ func (s *Store) UnmatchedQueuedJobs(ctx context.Context, orgID uuid.UUID) ([]Unm
 			 WHERE rn.org_id = p.org_id
 			   AND rn.status = 'online'
 			   AND NOT rn.draining
-			   AND j.runs_on <@ (rn.labels || ARRAY['self-hosted', 'kern'])
+			   AND j.runs_on <@ (rn.labels || ARRAY['self-hosted', 'kern', rn.name])
 			   AND (rn.executor <> 'host' OR r.trust_level NOT IN ('fork', 'pull_request'))
 			   AND rn.claims_paused <> '') AS paused_matches
 		FROM jobs j
@@ -855,7 +866,7 @@ func (s *Store) UnmatchedQueuedJobs(ctx context.Context, orgID uuid.UUID) ([]Unm
 			WHERE rn.org_id = p.org_id
 			  AND rn.status = 'online'
 			  AND NOT rn.draining
-			  AND j.runs_on <@ (rn.labels || ARRAY['self-hosted', 'kern'])
+			  AND j.runs_on <@ (rn.labels || ARRAY['self-hosted', 'kern', rn.name])
 			  AND (rn.executor <> 'host' OR r.trust_level NOT IN ('fork', 'pull_request'))
 			  AND rn.claims_paused = ''
 		  )
