@@ -3,9 +3,21 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
-## [Unreleased]
+## [0.20.0] - 2026-11-23
 
 ### Added
+- Browser-backed CLI authentication (`kern auth login` / `kern login`) via
+  short-lived device verification codes (`/auth/cli`, `/api/v1/auth/cli/*`):
+  interactive server URL picker with connectivity probe, automatic browser
+  launch + one-click web approval page, plus `--no-browser`, `--with-token`, and
+  `--email`/`--password` automation modes.
+- Multi-server CLI contexts (`kern context list|use|current|set-url|rm`,
+  `kern auth status|switch`, global `-u`/`--url`, `-c`/`--context`, `-p`/`--project`,
+  `-j`/`--json`, `KERN_URL`/`KERN_CONTEXT`), `kern open` web dashboard launcher,
+  TTY-aware status colors, command typo suggestions, and expanded `runs trigger`
+  (`--split`, `--split-auto`, `--runners`, `-f key=value`, `--watch`/`-w`, `--open`),
+  `runs list` (`--branch`/`-b`, `--cause`, duration column), `runs remediate --dismiss`,
+  and `settings` (`auto_concurrency`, `prime_workflow`, `prime_auto`) flags.
 - Runtime workflow dispatch controls on project detail pages and the trigger API:
   support `each_runner` fan-out, explicit `runners` targeting, and dynamic runtime
   sharding (`split` / `split_auto`) for jobs without workflow-declared splits.

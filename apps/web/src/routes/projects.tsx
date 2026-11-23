@@ -1,6 +1,6 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams, Link } from "react-router-dom";
-import { useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { FolderGit2, Play, RefreshCw, SlidersHorizontal } from "lucide-react";
 import { api } from "../lib/api";
 import { connectGitHubApp } from "../lib/github";
@@ -852,7 +852,10 @@ function DispatchPanel({
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [splitMode, setSplitMode] = useState<"default" | "auto" | "fixed">("default");
   const [splitCount, setSplitCount] = useState(3);
-  const onlineRunners = runners.filter((r) => r.status === "online");
+  const onlineRunners = useMemo(
+    () => runners.filter((r) => r.status === "online"),
+    [runners],
+  );
 
   const toggleRunner = (name: string) =>
     setPicked((prev) => {

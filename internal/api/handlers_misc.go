@@ -508,7 +508,7 @@ func (s *Server) putOrgSettings(c *gin.Context) {
 	user, _ := currentUser(c)
 	var req orgSettingsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		fail(c, http.StatusBadRequest, "invalid_body", "self_heal, public_ci or auto_update is required")
+		fail(c, http.StatusBadRequest, "invalid_body", "at least one org setting field is required")
 		return
 	}
 	writes, msg := orgSettingWrites(req.SelfHeal, req.PublicCI, req.AutoUpdate, req.AutoConcurrency, req.RunnerAutostart, req.NotifyURL, req.NotifySecret, req.NotifyEvents, req.NotifyFormat, req.DiskAlertPct, req.MaxTransientRetries, req.Toolset)

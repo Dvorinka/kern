@@ -246,8 +246,10 @@ export function Layout() {
 // runs via the endpoints the app already queries. Navigates on select.
 const ACTIONS: { label: string; sub: string; to: string }[] = [
 	{ label: "Enroll a runner", sub: "action", to: "/runners" },
-	{ label: "Create an API token", sub: "action", to: "/settings" },
-	{ label: "Browse artifacts", sub: "action", to: "/runs" },
+	{ label: "Create an API token", sub: "action", to: "/settings#s-tokens" },
+	{ label: "Scheduling & fleet resilience", sub: "action", to: "/settings#s-fleet" },
+	{ label: "Authorize CLI", sub: "action", to: "/auth/cli" },
+	{ label: "Browse artifacts", sub: "action", to: "/artifacts" },
 ];
 
 const PAGES: { label: string; sub: string; to: string }[] = [

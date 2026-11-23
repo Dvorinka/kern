@@ -64,6 +64,9 @@ type Server struct {
 	// session id -> *mcpSession. In-process by design — a restart ends
 	// sessions, which clients handle by re-initializing (#377).
 	mcpSessions sync.Map
+
+	// cliAuth holds short-lived browser-backed CLI authorization requests.
+	cliAuth *cliAuthStore
 }
 
 type webhookTask struct {
@@ -99,6 +102,7 @@ func New(cfg *config.Config, st *store.Store, orch *orchestrator.Orchestrator, b
 		metrics: newKernMetrics(), 
 		webhookQueue: make(chan webhookTask, 128),
 		stepLogBus:   newLogBus(),
+		cliAuth:      newCLIAuthStore(),
 	}
 	s.wireCommitStatus()
 	s.Engine = s.buildRouter()
@@ -222,6 +226,8 @@ func (s *Server) buildRouter() *gin.Engine {
 	r.GET("/api/v1/meta", s.meta)
 	r.POST("/api/v1/auth/login", s.login)
 	r.POST("/api/v1/auth/token", s.cliToken)
+	r.POST("/api/v1/auth/cli/start", s.cliAuthStart)
+	r.POST("/api/v1/auth/cli/poll", s.cliAuthPoll)
 	r.POST("/api/v1/webhooks/github", s.githubWebhook)
 	r.GET("/api/v1/public/runs/:id", s.getPublicRun)
 
@@ -236,6 +242,8 @@ func (s *Server) buildRouter() *gin.Engine {
 	{
 		auth.POST("/auth/logout", s.logout)
 		auth.GET("/auth/me", s.me)
+		auth.GET("/auth/cli/lookup", s.cliAuthLookup)
+		auth.POST("/auth/cli/approve", s.cliAuthApprove)
 		write.PUT("/auth/me/prefs", s.putPrefs)
 		auth.GET("/auth/tokens", s.listTokens)
 		write.POST("/auth/tokens", s.createToken)

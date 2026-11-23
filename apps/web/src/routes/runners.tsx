@@ -105,6 +105,7 @@ export function RunnersPage() {
 	const hasIssue = (r: Runner) =>
 		r.status === "offline" ||
 		r.draining ||
+		r.status === "draining" ||
 		Boolean(r.claims_paused) ||
 		Boolean(r.disk_alerted) ||
 		(r.missing_tools?.length ?? 0) > 0;
@@ -327,15 +328,16 @@ export function RunnersPage() {
 								r.disk_free_bytes != null && r.disk_bytes > 0
 									? Math.max(0, Math.round(100 - (r.disk_free_bytes / r.disk_bytes) * 100))
 									: null;
+							const isDraining = r.draining || r.status === "draining";
 							const statusClass =
 								r.status === "offline"
 									? "err"
-									: r.draining || r.claims_paused || r.disk_alerted
+									: isDraining || r.claims_paused || r.disk_alerted
 										? "warn"
 										: busy
 											? "live"
 											: "ok";
-							const statusText = r.draining
+							const statusText = isDraining
 								? "draining"
 								: r.claims_paused
 									? `paused · ${r.claims_paused}`

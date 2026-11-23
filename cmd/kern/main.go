@@ -16,36 +16,39 @@ import (
 
 const usage = `kern — KERN control plane CLI
 
-Usage: kern <command> [args] [--server URL] [--token T] [--project P] [--json]
+Usage: kern <command> [args] [-u|--url URL] [-c|--context NAME] [-p|--project P] [-j|--json]
 
-Setup:
-  install               first-run wizard — server URL + login, writes the config
+Setup & Navigation:
+  auth login [--url URL] [--web|--no-browser|--with-token|--email E]
+                        sign in via browser (default), token, or password; picks/saves server URL
+  auth status           show active context, server health, account, and token info
+  auth switch [NAME]    switch between saved server contexts
+  auth logout [--all]   revoke saved token and clear credentials
+  context list|use|current|set-url|rm   manage multiple KERN servers/profiles (alias: ctx)
+  open [runs|runners|projects|settings] open active KERN web UI in your browser (alias: web)
   status [--watch]      control-plane dashboard: meta, queue, runner counts
+  doctor                control-plane + fleet health check
 
-Auth:
-  login                 exchange email+password for an API token and save it
-  logout                revoke the saved token and clear local credentials
-  whoami                show the authenticated user
+Auth shortcuts (aliases):
+  login | logout | whoami | install
   token list|create|delete       manage API tokens (--projects, --labels)
-
-Config:
-  config list|get|set|unset      local CLI config (~/.config/kern/config.json)
+  config list|get|set|unset|path local CLI config (~/.config/kern/config.json)
 
 Projects:
   projects list|show|create|sync|workflows
   migrate <owner/name|github-url>        import workflows into a new/existing project
 
 Runs:
-  runs list [--status S] [--limit N] [--ref R|BRANCH] [--pr N] [--workflow W] [--classification C]
+  runs list [--status S] [--branch B] [--cause C] [--pr N] [--workflow W] [--limit N]
   runs show <run-id>
-  runs trigger [<project>] <workflow-id|path|name> [--event E] [--ref R] [--sha S] [--inputs JSON] [--each-runner]
-  runs cancel|approve|rerun <run-id>
-  runs logs <run-id> [--job KEY] [--step N] [--follow] [--out DIR]
+  runs trigger [<project>] <workflow> [--ref R] [-f k=v] [--each-runner] [--runners a,b]
+               [--split N | --split-auto] [--watch|-w] [--open]
+  runs cancel|approve|rerun <run-id> [--failed | --job K]
+  runs logs <run-id> [--job KEY] [--step N] [--follow|-f] [--out DIR]
   runs wait <run-id> [--interval 5s] [--timeout 30m]   block until the run concludes
-  runs remediate <job-id> --step N        approve a remediation proposal
-  logs <run-id> [-f]                      alias for runs logs; -f follows
+  runs remediate <job-id> --step N [--dismiss]         approve or dismiss autoheal fix
+  logs <run-id> [-f]                      alias for runs logs
   diagnose <run-id> [--tail N] [--job K] [-i]  pasteable failure bundle
-  doctor                                  control-plane + fleet health check
 
 Remote offload:
   exec <workflow> [--dir DIR] [--pull DIR] [--ref R] [--sha S]
@@ -56,15 +59,16 @@ Remote offload:
                         run a workflow job locally — no push, no server
 
 Settings:
-  settings get
-  settings set self_heal off|auto|approve [--project S]
-  settings set public_ci on|off
-  settings set auto_update on|off
-  settings set fork_gate off|all|first-time --project S
+  settings get [--project S]
+  settings set <key> <value> [--project S]
+                        keys: self_heal, auto_concurrency, max_transient_retries,
+                              public_ci, auto_update, runner_autostart, disk_alert_pct,
+                              toolset, fork_gate, pr_trust, max_concurrent_jobs,
+                              prime_workflow, prime_auto
 
 Runners:
   runners list
-  runners drain|undrain|self-update|wake|delete <id|name>
+  runners drain|undrain|self-update|wake|delete <id|name|--all|--label L|--outdated|--offline>
   runners install [--name N] [--labels a,b] [--ttl MIN]
                         enroll this host and install the systemd user unit
   runners enroll [--name N] [--ttl MIN]   mint a one-time join token
@@ -76,13 +80,8 @@ Artifacts / cache / secrets:
   vars list|set|delete [--project S] <name> [value]   project config vars (vars context)
 
 Environments:
-  environments list [--project S]
-  environments set <name> [--protected true|false] [--approvals N]
-                       [--reviewers a@b,c@d] [--wait MIN]
-                       [--branches all|PATTERN,PATTERN] [--project S]
-  environments delete <name> [--project S]
-  deployments list [--project S]
-  deployments approve|reject <job-id>
+  environments list|set|delete [--project S]
+  deployments list|approve|reject [--project S]
 
 Advisory:
   split --pattern GLOB --shards N [--root DIR]   suggest strategy.split and file buckets
@@ -91,32 +90,86 @@ Advisory:
   hooks install [--dry-run] [--force]             pre-push hook that runs kern lint
   completion <bash|zsh|fish>  print a shell completion script
 
-Globals: --server, --token, --project override config and KERN_SERVER,
-KERN_TOKEN, KERN_PROJECT env vars. --json prints raw JSON.
+Globals: -u/--url (--server), -c/--context, -p/--project, --token, -j/--json.
+Env vars: KERN_URL (or KERN_SERVER), KERN_CONTEXT, KERN_TOKEN, KERN_PROJECT.
 `
 
 // commandUsage returns focused help for `kern <cmd> --help`; unknown or
 // bare commands fall back to the full usage.
 func commandUsage(name string) string {
 	switch name {
+	case "auth", "login", "logout", "install":
+		return `kern auth — authenticate with one or more KERN servers
+
+  auth login [URL] [--url URL] [--context NAME] [--days N] [--name LABEL]
+             [--web | --no-browser | --with-token | --email E --password P]
+             Interactive default: choose or enter server URL, open browser to authorize.
+  auth status              show active context, server reachability, account, and token
+  auth switch [NAME]       switch active server context
+  auth logout [--all]      revoke saved token and clear local credentials
+  auth token list|create|delete
+
+Shortcuts: kern login, kern logout, kern whoami, kern token.
+`
+	case "context", "ctx":
+		return `kern context — manage multiple KERN server profiles (alias: ctx)
+
+  context list                       list saved server contexts (* = active)
+  context use [NAME]                 switch active context (interactive if omitted)
+  context current                    show active context and server URL
+  context set-url [NAME] <URL>       change the server URL for a context
+  context rm <NAME>                  delete a saved context
+
+Use -c/--context <name> on any command to target a context without switching.
+`
+	case "open", "web":
+		return `kern open — open the active KERN web dashboard in your browser (alias: web)
+
+  open                     open overview dashboard
+  open runs [ID]           open runs list or a specific run
+  open projects [SLUG]     open projects list or project detail
+  open runners             open fleet runners page
+  open usage|secrets|cache|artifacts|environments|webhooks|settings
+  open --print             print the URL without opening a browser
+`
 	case "runs", "logs":
 		return `kern runs — workflow runs
 
-  runs list [--status S[,S..]] [--limit N] [--offset N]
-            [--project S] [--ref REF|BRANCH] [--pr N] [--workflow NAME|PATH]
+  runs list [--status S[,S..]] [--limit N] [--offset N] [--project S]
+            [--branch|--ref REF] [--cause|--classification C] [--pr N] [--workflow W]
   runs show <run-id>                  run + job/step detail (short ids work)
   runs wait <run-id> [--interval 5s] [--timeout 30m]
   runs trigger [<project>] <workflow> [--event E] [--ref R] [--sha S]
-            [--inputs '{"k":"v"}'] [--each-runner]
-  runs cancel|approve|rerun <run-id>
-  runs logs <run-id> [--job KEY] [--step N] [--follow] [--out DIR]
-  runs remediate <job-id> --step N     approve a remediation proposal
+            [-f key=value] [--inputs '{"k":"v"}'] [--each-runner] [--runners a,b]
+            [--split N | --split-auto] [--watch|-w] [--open]
+  runs cancel|approve|rerun <run-id> [--failed | --job KEY]
+  runs logs <run-id> [--job KEY] [--step N] [--follow|-f] [--out DIR]
+  runs remediate <job-id> --step N [--dismiss]   approve or dismiss autoheal fix
   logs <run-id> [-f]                   alias for runs logs
   diagnose <run-id> [--tail N] [--job K] [-i]
+`
+	case "config":
+		return `kern config — local CLI config (~/.config/kern/config.json)
 
-Run ids accept the full uuid or the unambiguous short prefix printed by
-runs list. --ref matches refs/heads/<branch> or a full ref; --pr matches
-pull_request runs by number; --workflow matches name or path.
+  config list
+  config get <server|url|token|project|context>
+  config set <server|url|token|project|context> <value>
+  config unset <server|url|token|project>
+  config path
+`
+	case "settings":
+		return `kern settings — org and project automation policy
+
+  settings get [--project S]
+  settings set <key> <value> [--project S]
+
+Org keys:     self_heal (off|auto|approve), auto_concurrency (on|off),
+              max_transient_retries (0-10), public_ci (on|off), auto_update (on|off),
+              runner_autostart (on|off), disk_alert_pct (0-100), toolset (csv)
+Project keys: self_heal (inherit|off|auto|approve), auto_concurrency (inherit|on|off),
+              max_transient_retries (inherit|0-10), fork_gate (off|all|first-time),
+              pr_trust (off|trusted), max_concurrent_jobs (N),
+              prime_workflow (path), prime_auto (on|off)
 `
 	case "projects":
 		return `kern projects — repositories and workflows
@@ -156,11 +209,6 @@ pull_request runs by number; --workflow matches name or path.
   token list
   token create --name NAME [--scopes read,write] [--projects SLUG] [--labels LABEL] [--days N] [--concurrency N]
   token delete <id>
-`
-	case "config":
-		return `kern config — local CLI config (~/.config/kern/config.json)
-
-  config list|get|set|unset <key> [value]
 `
 	case "environments":
 		return `kern environments — deployment protection rules
@@ -217,6 +265,7 @@ pull_request runs by number; --workflow matches name or path.
 // cli carries global options resolved from flags, env and the config file.
 type cli struct {
 	cfg     configFile
+	context string
 	server  string
 	token   string
 	project string
@@ -230,8 +279,15 @@ func extractGlobals(args []string, c *cli) []string {
 	var rest []string
 	takesValue := map[string]func(string){
 		"server":  func(v string) { c.server = v },
+		"url":     func(v string) { c.server = v },
+		"context": func(v string) { c.context = v },
 		"token":   func(v string) { c.token = v },
 		"project": func(v string) { c.project = v },
+	}
+	shortValue := map[string]string{
+		"-u": "url",
+		"-c": "context",
+		"-p": "project",
 	}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -241,8 +297,21 @@ func extractGlobals(args []string, c *cli) []string {
 			rest = append(rest, args[i:]...)
 			break
 		}
-		if a == "--json" {
+		if a == "--json" || a == "-j" {
 			c.json = true
+			continue
+		}
+		if longKey, ok := shortValue[a]; ok {
+			// Keep -c untouched for `kern ssh -c CMD`!
+			if a == "-c" && len(rest) > 0 && rest[0] == "ssh" {
+				rest = append(rest, a)
+				continue
+			}
+			if i+1 >= len(args) {
+				fatalf("kern: %s requires a value", a)
+			}
+			i++
+			takesValue[longKey](args[i])
 			continue
 		}
 		key, val, hasVal := strings.Cut(strings.TrimPrefix(a, "--"), "=")
@@ -304,7 +373,17 @@ func dispatch(c *cli, args []string) int {
 			fmt.Println("kern " + version.Version)
 		})
 	case "install":
-		err = c.cmdInstall(ctx, rest)
+		ictx, istop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer istop()
+		err = c.cmdInstall(ictx, rest)
+	case "auth":
+		actx, astop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer astop()
+		err = c.cmdAuth(actx, rest)
+	case "context", "ctx":
+		err = c.cmdContext(rest)
+	case "open", "web":
+		err = c.cmdOpen(rest)
 	case "status":
 		// --watch refreshes until Ctrl-C; give status its own signal context
 		// instead of the default request budget.
@@ -312,9 +391,11 @@ func dispatch(c *cli, args []string) int {
 		defer stop()
 		err = c.cmdStatus(sctx, rest)
 	case "login":
-		err = c.cmdLogin(ctx, rest)
+		lctx, lstop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer lstop()
+		err = c.cmdLogin(lctx, rest)
 	case "logout":
-		err = c.cmdLogout(ctx)
+		err = c.cmdLogout(ctx, rest)
 	case "whoami":
 		err = c.cmdWhoami(ctx)
 	case "token":
@@ -393,7 +474,11 @@ func dispatch(c *cli, args []string) int {
 		defer ustop()
 		err = c.cmdUpgrade(uctx, rest)
 	default:
-		err = fmt.Errorf("unknown command %q — see kern help", name)
+		if hint := suggestCommand(name, topLevelCommands); hint != "" {
+			err = fmt.Errorf("unknown command %q — did you mean %q? (see `kern help`)", name, hint)
+		} else {
+			err = fmt.Errorf("unknown command %q — see `kern help`", name)
+		}
 	}
 	if err != nil {
 		var ec exitCodeError

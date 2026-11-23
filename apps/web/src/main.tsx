@@ -9,6 +9,7 @@ import { Spinner } from "./components/ui";
 
 // Route-level code splitting keeps the initial JS bundle lean and fast.
 const LoginPage = lazy(() => import("./routes/login").then((m) => ({ default: m.LoginPage })));
+const CliAuthPage = lazy(() => import("./routes/cli-auth").then((m) => ({ default: m.CliAuthPage })));
 const OverviewPage = lazy(() =>
 	import("./routes/overview").then((m) => ({ default: m.OverviewPage })),
 );
@@ -50,6 +51,7 @@ const load = (el: React.ReactNode) => <Suspense fallback={<Spinner />}>{el}</Sus
 
 const router = createBrowserRouter([
 	{ path: "/login", element: load(<LoginPage />) },
+	{ path: "/auth/cli", element: load(<CliAuthPage />) },
 	{ path: "/ci/:id", element: load(<PublicRunPage />) },
 	{
 		path: "/",

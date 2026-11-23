@@ -110,6 +110,71 @@ paths:
                   record: { $ref: "#/components/schemas/APIToken" }
         "401": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Error" }
+  /auth/cli/start:
+    post:
+      tags: [auth]
+      security: []
+      summary: Start a browser-backed CLI authorization session
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                hostname: { type: string }
+                days: { type: integer }
+      responses:
+        "201": { description: Pending CLI auth code issued }
+        "429": { $ref: "#/components/responses/Error" }
+  /auth/cli/poll:
+    post:
+      tags: [auth]
+      security: []
+      summary: Poll a pending browser CLI authorization session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [device_code]
+              properties:
+                device_code: { type: string }
+      responses:
+        "200": { description: Approved with one-time API token }
+        "202": { description: Still pending }
+        "403": { $ref: "#/components/responses/Error" }
+        "410": { $ref: "#/components/responses/Error" }
+  /auth/cli/lookup:
+    get:
+      tags: [auth]
+      summary: Look up a pending CLI verification code for browser confirmation
+      parameters:
+        - { name: code, in: query, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Pending request metadata }
+        "404": { $ref: "#/components/responses/Error" }
+  /auth/cli/approve:
+    post:
+      tags: [auth]
+      summary: Approve or deny a pending CLI login from an active web session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_code]
+              properties:
+                user_code: { type: string }
+                approve: { type: boolean }
+                name: { type: string }
+                days: { type: integer }
+      responses:
+        "200": { description: Request resolved }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /auth/logout:
     post:
       tags: [auth]

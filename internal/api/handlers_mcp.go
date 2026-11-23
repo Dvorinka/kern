@@ -275,16 +275,20 @@ func mcpTools() []mcpTool {
 				p["required"] = []string{"project"}
 				return p
 			}()},
-		{Name: "kern_trigger_run", Description: "Start a workflow run (workflow_dispatch by default).",
+		{Name: "kern_trigger_run", Description: "Start a workflow run (workflow_dispatch by default). Supports multi-runner fan-out (each_runner, runners) and runtime sharding (split, split_auto).",
 			Annotations: mcpAnn(false, false, false),
 			InputSchema: func() map[string]any {
 				p := props(map[string]map[string]any{
-					"project":  str("project slug"),
-					"workflow": str("workflow UUID, path or name"),
-					"event":    str("event name, default workflow_dispatch"),
-					"ref":      str("git ref, default the project's default branch"),
-					"sha":      str("commit SHA, default the workflow version's SHA"),
-					"inputs":   map[string]any{"type": "object", "description": "workflow_dispatch inputs as a JSON object"},
+					"project":     str("project slug"),
+					"workflow":    str("workflow UUID, path or name"),
+					"event":       str("event name, default workflow_dispatch"),
+					"ref":         str("git ref, default the project's default branch"),
+					"sha":         str("commit SHA, default the workflow version's SHA"),
+					"inputs":      map[string]any{"type": "object", "description": "workflow_dispatch inputs as a JSON object"},
+					"each_runner": map[string]any{"type": "boolean", "description": "fan out every job onto each eligible online runner"},
+					"runners":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "pin fan-out to specific named runners"},
+					"split":       num("runtime shard count override (2-64) for jobs without declared split"),
+					"split_auto":  map[string]any{"type": "boolean", "description": "dynamically size shards to available fleet slots"},
 				})
 				p["required"] = []string{"project", "workflow"}
 				return p
@@ -753,6 +757,14 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) *rpcResponse {
 				break
 			}
 		}
+		var targetRunners []string
+		if raw, ok := mcpArgRaw(call.Arguments, "runners"); ok {
+			_ = json.Unmarshal(raw, &targetRunners)
+		}
+		eachFlag, _ := mcpArgBool(call.Arguments, "each_runner")
+		eachRunner := eachFlag || len(targetRunners) > 0
+		splitN := mcpArgInt(call.Arguments, "split", 0)
+		splitAuto, _ := mcpArgBool(call.Arguments, "split_auto")
 		var run store.Run
 		run, err = s.Orch.StartRun(ctx, store.CreateRunParams{
 			ProjectID:         p.ID,
@@ -766,6 +778,10 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) *rpcResponse {
 			Source:            source,
 			Inputs:            inputs,
 			DispatchTokenID:   dispatchTokenID(c),
+			EachRunner:        eachRunner,
+			RunnerNames:       targetRunners,
+			SplitN:            splitN,
+			SplitAuto:         splitAuto,
 		})
 		if err == nil {
 			s.Store.Audit(ctx, user.OrgID, &user.ID, "run.trigger", run.ID.String())
