@@ -33,8 +33,7 @@ func (s *Server) login(c *gin.Context) {
 	}
 	user, err := s.Store.UserByEmail(c.Request.Context(), strings.ToLower(strings.TrimSpace(req.Email)))
 	if err != nil || !auth.VerifyPassword(user.PasswordHash, req.Password) {
-		s.limiter.record(key)
-		fail(c, http.StatusUnauthorized, "invalid_credentials", "email or password is incorrect")
+		s.invalidCredentials(c, err, key)
 		return
 	}
 	s.limiter.reset(key)
@@ -78,8 +77,7 @@ func (s *Server) cliToken(c *gin.Context) {
 	}
 	user, err := s.Store.UserByEmail(c.Request.Context(), strings.ToLower(strings.TrimSpace(req.Email)))
 	if err != nil || !auth.VerifyPassword(user.PasswordHash, req.Password) {
-		s.limiter.record(key)
-		fail(c, http.StatusUnauthorized, "invalid_credentials", "email or password is incorrect")
+		s.invalidCredentials(c, err, key)
 		return
 	}
 	s.limiter.reset(key)
@@ -105,6 +103,18 @@ func (s *Server) cliToken(c *gin.Context) {
 	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "token.create", req.Name)
 	c.JSON(http.StatusCreated, gin.H{"token": token, "record": rec,
 		"user": gin.H{"email": user.Email, "org_id": user.OrgID}})
+}
+
+// invalidCredentials answers a failed password login: a wrong email or
+// password is a rate-limited 401, but a store failure is a server error —
+// not a credential mismatch.
+func (s *Server) invalidCredentials(c *gin.Context, err error, key string) {
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		s.internalError(c, err)
+		return
+	}
+	s.limiter.record(key)
+	fail(c, http.StatusUnauthorized, "invalid_credentials", "email or password is incorrect")
 }
 
 func (s *Server) logout(c *gin.Context) {

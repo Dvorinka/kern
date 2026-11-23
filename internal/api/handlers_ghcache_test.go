@@ -254,3 +254,22 @@ func TestParseContentRange(t *testing.T) {
 		}
 	}
 }
+
+func TestGHIncomingID(t *testing.T) {
+	for _, tc := range []struct {
+		key  string
+		id   int64
+		want bool
+	}{
+		{"gh-incoming/42/0", 42, true},
+		{"gh-incoming/7/4096", 7, true},
+		{"gh-incoming/abc/0", 0, false},
+		{"gh-incoming/0/0", 0, false},
+		{"cache/x/y", 0, false},
+	} {
+		id, ok := ghIncomingID(tc.key)
+		if id != tc.id || ok != tc.want {
+			t.Fatalf("%s: got %d,%v", tc.key, id, ok)
+		}
+	}
+}

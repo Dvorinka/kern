@@ -371,6 +371,9 @@ func (s *Server) ghCacheUpload(c *gin.Context) {
 		return
 	}
 	if err := s.Store.InsertGHChunk(c.Request.Context(), up.ID, start, end, chunkRef); err != nil {
+		// A failed insert leaves no row pointing at the object — drop it or
+		// it becomes a permanent gh-incoming orphan (CT908 leaked ~20G this way).
+		_ = s.Blobs.Delete(chunkRef)
 		s.internalError(c, err)
 		return
 	}
@@ -554,4 +557,43 @@ func (s *Server) sweepGHCacheUploads() {
 	for _, up := range stale {
 		s.failUpload(ctx, up)
 	}
+	// Rowless gh-incoming objects: a crash between Put and InsertGHChunk —
+	// or between row delete and blob delete — leaves files no query can
+	// see. Drop every chunk whose upload row no longer exists; a live
+	// upload's row is created at reserve time, before any chunk can exist,
+	// so a miss is always safe to reclaim.
+	keys, err := s.Blobs.List("gh-incoming/")
+	if err != nil {
+		s.Log.Error("list ghcache orphans", zap.Error(err))
+		return
+	}
+	seen := map[int64]error{}
+	for _, k := range keys {
+		id, ok := ghIncomingID(k)
+		if !ok {
+			continue
+		}
+		uerr, checked := seen[id]
+		if !checked {
+			_, uerr = s.Store.GHUpload(ctx, id)
+			seen[id] = uerr
+		}
+		if uerr == nil || !errors.Is(uerr, store.ErrNotFound) {
+			continue // live upload, or an ambiguous lookup — keep it
+		}
+		if err := s.Blobs.Delete(k); err != nil {
+			s.Log.Error("delete orphaned ghcache chunk", zap.String("ref", k), zap.Error(err))
+		}
+	}
+}
+
+// ghIncomingID parses "gh-incoming/<uploadID>/<start>" to its upload ID.
+func ghIncomingID(key string) (int64, bool) {
+	rest, ok := strings.CutPrefix(key, "gh-incoming/")
+	if !ok {
+		return 0, false
+	}
+	idstr, _, _ := strings.Cut(rest, "/")
+	id, err := strconv.ParseInt(idstr, 10, 64)
+	return id, err == nil && id > 0
 }

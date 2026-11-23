@@ -3,6 +3,25 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
+## [0.20.1] - 2026-11-23
+
+### Fixed
+- Credential lookups no longer report a store/database failure as
+  `401 invalid_token`: a missing row is still a 401, but a real store error is
+  now `500 internal`. A postgres outage previously invalidated every API token,
+  session, and runner token fleet-wide (CT908 full-disk incident, which wedged
+  the v0.20.0 release build for ~25 minutes). Password-login paths (`POST
+  /auth/login`, `/auth/cli/token`) reported store errors as
+  `invalid_credentials` the same way — fixed too.
+- `gh-incoming` cache-upload chunks no longer leak: the chunk object is
+  deleted when its `InsertGHChunk` row write fails, and the 10-minute upload
+  sweeper now also reclaims rowless `gh-incoming/*` objects left behind by
+  crashes between blob write and row commit. The blob store gained `List`
+  for this (filesystem + S3 drivers).
+- CLI device-auth `verification_url` now uses the configured public origin
+  (`KERN_PUBLIC_URL`) instead of the request origin, so it advertises
+  `https://` when the API sits behind a TLS-terminating proxy.
+
 ## [0.20.0] - 2026-11-23
 
 ### Added

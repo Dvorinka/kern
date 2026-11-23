@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,6 +29,9 @@ type Store interface {
 	// Size returns the current size of a key.
 	Size(key string) (int64, error)
 	Delete(key string) error
+	// List returns every key under prefix, recursively. A missing prefix
+	// is an empty result, not an error.
+	List(prefix string) ([]string, error)
 }
 
 type Filesystem struct {
@@ -193,6 +197,35 @@ func (f *Filesystem) Delete(key string) error {
 		return err
 	}
 	return nil
+}
+
+func (f *Filesystem) List(prefix string) ([]string, error) {
+	p, err := f.path(prefix)
+	if err != nil {
+		return nil, err
+	}
+	var keys []string
+	err = filepath.WalkDir(p, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || strings.HasPrefix(d.Name(), ".put-") {
+			return nil
+		}
+		rel, rerr := filepath.Rel(f.root, path)
+		if rerr != nil {
+			return rerr
+		}
+		keys = append(keys, filepath.ToSlash(rel))
+		return nil
+	})
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return keys, nil
 }
 
 // LogKey is the canonical blob key for a step log.
