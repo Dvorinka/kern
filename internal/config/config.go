@@ -29,6 +29,7 @@ type Config struct {
 	JobLease        time.Duration
 	MaxJobAttempts  int
 	LogRetention    time.Duration
+	SourceRetention time.Duration
 	CacheMaxAge     time.Duration
 	// CacheMaxBytes caps a single actions/cache archive (KERN_CACHE_MAX_BYTES),
 	// enforced at save time; oversized uploads are refused. The default
@@ -103,6 +104,7 @@ func Load() (*Config, error) {
 		JobLease:         duration("KERN_JOB_LEASE", 90*time.Second),
 		MaxJobAttempts:   integer("KERN_MAX_JOB_ATTEMPTS", 3),
 		LogRetention:     duration("KERN_LOG_RETENTION", 30*24*time.Hour),
+		SourceRetention:  duration("KERN_SOURCE_RETENTION", 30*24*time.Hour),
 		CacheMaxAge:      duration("KERN_CACHE_MAX_AGE", 7*24*time.Hour),
 		CacheMaxBytes:    int64(integer("KERN_CACHE_MAX_BYTES", 10<<30)),
 		WebhookRetention: duration("KERN_WEBHOOK_RETENTION", 30*24*time.Hour),

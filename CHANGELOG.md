@@ -3,6 +3,15 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
+## [Unreleased]
+
+### Added
+- Source-bundle reclamation: the hourly retention sweep now drops uploaded
+  workspace bundles (`sources/`) no run created within
+  `KERN_SOURCE_RETENTION` (default 30 days) still references. Bundles are
+  re-uploadable content-addressed cache — worst case is one re-upload.
+  Previously they accumulated forever.
+
 ## [0.21.0] - 2026-11-25
 
 ### Added
