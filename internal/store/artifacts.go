@@ -190,3 +190,27 @@ func (s *Store) ArtifactStats(ctx context.Context, orgID uuid.UUID, runID *uuid.
 		Scan(&count, &bytes, &largest, &runs)
 	return count, bytes, largest, runs, err
 }
+
+// RecentSourceBundleRefs returns the distinct bundle_ref values runs created
+// within the window still point at — the keep-set for the source-bundle sweep.
+// Bundles are content-addressed and re-uploadable, so anything outside the
+// window is safe to reclaim; a rerun of an old run simply re-uploads.
+func (s *Store) RecentSourceBundleRefs(ctx context.Context, window time.Duration) (map[string]bool, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT source->>'bundle_ref' FROM workflow_runs
+		WHERE created_at > now() - make_interval(secs => $1) AND source ? 'bundle_ref'`,
+		window.Seconds())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var ref string
+		if err := rows.Scan(&ref); err != nil {
+			return nil, err
+		}
+		out[ref] = true
+	}
+	return out, rows.Err()
+}

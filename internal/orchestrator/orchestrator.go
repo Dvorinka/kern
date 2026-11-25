@@ -43,6 +43,10 @@ type Orchestrator struct {
 	// AuditRetention drops audit_events rows older than this
 	// (KERN_AUDIT_RETENTION). Zero disables pruning.
 	AuditRetention time.Duration
+	// SourceRetention drops source-bundle blobs no run created within the
+	// window still references. Bundles are re-uploadable cache, so reclamation
+	// is safe — the worst case is one re-upload.
+	SourceRetention time.Duration
 	// NotifyRetention drops notify_deliveries rows (sent or dead) older than
 	// this (KERN_NOTIFY_RETENTION). Zero disables pruning.
 	NotifyRetention    time.Duration
@@ -328,7 +332,7 @@ func (o *Orchestrator) Tick(ctx context.Context) {
 	// and the webhook prune, checked second, never ran while log retention
 	// was enabled (the default).
 	if time.Since(o.lastRetentionSweep) > time.Hour &&
-		(o.LogRetention > 0 || o.WebhookRetention > 0 || o.AuditRetention > 0 || o.NotifyRetention > 0) {
+		(o.LogRetention > 0 || o.WebhookRetention > 0 || o.AuditRetention > 0 || o.NotifyRetention > 0 || o.SourceRetention > 0) {
 		o.lastRetentionSweep = time.Now()
 		if o.Blobs != nil && o.LogRetention > 0 {
 			if refs, err := o.Store.PruneStepBlobs(ctx, o.LogRetention); err != nil {
@@ -355,6 +359,9 @@ func (o *Orchestrator) Tick(ctx context.Context) {
 			} else if n > 0 {
 				o.Log.Info("audit retention pruned events", zap.Int64("rows", n))
 			}
+		}
+		if o.Blobs != nil && o.SourceRetention > 0 {
+			o.sweepSourceBundles(ctx)
 		}
 		if o.NotifyRetention > 0 {
 			if n, err := o.Store.PruneNotifyDeliveries(ctx, o.NotifyRetention); err != nil {
@@ -955,4 +962,32 @@ func autoConcurrencyOff(raw json.RawMessage) bool {
 	}
 	v, _ := m["auto_concurrency"].(string)
 	return v == "off"
+}
+
+// sweepSourceBundles reclaims uploaded workspace bundles no recent run
+// references. The keep-set comes from run rows; everything else under
+// sources/ is cold cache — a fresh upload is one `kern exec` away.
+func (o *Orchestrator) sweepSourceBundles(ctx context.Context) {
+	keep, err := o.Store.RecentSourceBundleRefs(ctx, o.SourceRetention)
+	if err != nil {
+		o.Log.Error("sweep source bundles: keep-set", zap.Error(err))
+		return
+	}
+	keys, err := o.Blobs.List("sources/")
+	if err != nil {
+		o.Log.Error("sweep source bundles: list", zap.Error(err))
+		return
+	}
+	var dropped int
+	for _, key := range keys {
+		if keep[key] {
+			continue
+		}
+		if err := o.Blobs.Delete(key); err == nil {
+			dropped++
+		}
+	}
+	if dropped > 0 {
+		o.Log.Info("source retention reclaimed bundles", zap.Int("blobs", dropped))
+	}
 }

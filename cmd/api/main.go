@@ -112,6 +112,7 @@ func run() int {
 	orch := orchestrator.New(st, log, compiler)
 	orch.MaxAttempts = cfg.MaxJobAttempts
 	orch.CacheMaxAge = cfg.CacheMaxAge
+	orch.SourceRetention = cfg.SourceRetention
 	orch.LogRetention = cfg.LogRetention
 	orch.WebhookRetention = cfg.WebhookRetention
 	orch.AuditRetention = cfg.AuditRetention
