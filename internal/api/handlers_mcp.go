@@ -275,22 +275,25 @@ func mcpTools() []mcpTool {
 				p["required"] = []string{"project"}
 				return p
 			}()},
-		{Name: "kern_trigger_run", Description: "Start a workflow run (workflow_dispatch by default). Supports multi-runner fan-out (each_runner, runners) and runtime sharding (split, split_auto).",
+		{Name: "kern_trigger_run", Description: "Start a workflow run (workflow_dispatch by default). Supports multi-runner fan-out (each_runner, runners), runtime sharding (split, split_auto), and heavy-task offload: pass workflow_yaml + bundle_ref (from PUT /projects/:project/source) to execute an ad-hoc workflow on an uploaded workspace — see the offload_heavy_build prompt.",
 			Annotations: mcpAnn(false, false, false),
 			InputSchema: func() map[string]any {
 				p := props(map[string]map[string]any{
-					"project":     str("project slug"),
-					"workflow":    str("workflow UUID, path or name"),
-					"event":       str("event name, default workflow_dispatch"),
-					"ref":         str("git ref, default the project's default branch"),
-					"sha":         str("commit SHA, default the workflow version's SHA"),
-					"inputs":      map[string]any{"type": "object", "description": "workflow_dispatch inputs as a JSON object"},
-					"each_runner": map[string]any{"type": "boolean", "description": "fan out every job onto each eligible online runner"},
-					"runners":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "pin fan-out to specific named runners"},
-					"split":       num("runtime shard count override (2-64) for jobs without declared split"),
-					"split_auto":  map[string]any{"type": "boolean", "description": "dynamically size shards to available fleet slots"},
+					"project":       str("project slug"),
+					"workflow":      str("workflow UUID, path or name — omit when workflow_yaml is given"),
+					"event":         str("event name, default workflow_dispatch"),
+					"ref":           str("git ref, default the project's default branch"),
+					"sha":           str("commit SHA, default the workflow version's SHA"),
+					"inputs":        map[string]any{"type": "object", "description": "workflow_dispatch inputs as a JSON object"},
+					"each_runner":   map[string]any{"type": "boolean", "description": "fan out every job onto each eligible online runner"},
+					"runners":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "pin fan-out to specific named runners"},
+					"split":         num("runtime shard count override (2-64) for jobs without declared split"),
+					"split_auto":    map[string]any{"type": "boolean", "description": "dynamically size shards to available fleet slots"},
+					"bundle_ref":    str("offload: source bundle ref from PUT /projects/:project/source — the runner untars it instead of git clone"),
+					"workflow_yaml": str("offload: inline workflow YAML — no synced workflow needed; pair with workflow_path + bundle_ref"),
+					"workflow_path": str("offload: repo-relative path label for inline YAML, e.g. .github/workflows/offload.yml"),
 				})
-				p["required"] = []string{"project", "workflow"}
+				p["required"] = []string{"project"}
 				return p
 			}()},
 		{Name: "kern_rerun_run", Description: "Re-run a completed or failed run from its original inputs. failed=true or jobs=[name] re-run jobs in place instead of seeding a fresh run.",
@@ -676,13 +679,52 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) *rpcResponse {
 		}
 		slug := mcpArgStringOr(call.Arguments, "project")
 		want := mcpArgStringOr(call.Arguments, "workflow")
-		if slug == "" || want == "" {
-			err = fmt.Errorf("project and workflow are required")
+		yaml := mcpArgStringOr(call.Arguments, "workflow_yaml")
+		wfPath := mcpArgStringOr(call.Arguments, "workflow_path")
+		bundleRef := mcpArgStringOr(call.Arguments, "bundle_ref")
+		if slug == "" {
+			err = fmt.Errorf("project is required")
+			break
+		}
+		if want == "" && yaml == "" {
+			err = fmt.Errorf("workflow is required when workflow_yaml is not given")
 			break
 		}
 		var p store.Project
 		p, err = s.Store.Project(ctx, user.OrgID, slug)
 		if err != nil {
+			break
+		}
+		if yaml != "" || wfPath != "" {
+			// Offload path: inline YAML (+ optional bundle) — same core as
+			// POST /projects/:project/runs. workflow_yaml without a path
+			// gets a synthetic label.
+			if wfPath == "" {
+				wfPath = ".github/workflows/offload.yml"
+			}
+			var treq triggerRequest
+			treq.Event = mcpArgStringOr(call.Arguments, "event")
+			treq.Ref = mcpArgStringOr(call.Arguments, "ref")
+			treq.SHA = mcpArgStringOr(call.Arguments, "sha")
+			treq.BundleRef = bundleRef
+			treq.WorkflowPath = wfPath
+			treq.WorkflowYAML = yaml
+			if raw, ok := mcpArgRaw(call.Arguments, "inputs"); ok {
+				_ = json.Unmarshal(raw, &treq.Inputs)
+			}
+			if raw, ok := mcpArgRaw(call.Arguments, "runners"); ok {
+				_ = json.Unmarshal(raw, &treq.Runners)
+			}
+			each, _ := mcpArgBool(call.Arguments, "each_runner")
+			treq.EachRunner = each
+			treq.Split = mcpArgInt(call.Arguments, "split", 0)
+			treq.SplitAuto, _ = mcpArgBool(call.Arguments, "split_auto")
+			var run store.Run
+			run, err = s.startRunByPath(ctx, user, p, treq, tokenLabels(c), dispatchTokenID(c))
+			if err == nil {
+				s.Store.Audit(ctx, user.OrgID, &user.ID, "run.trigger", run.ID.String())
+				out = run
+			}
 			break
 		}
 		var wf store.Workflow
@@ -719,6 +761,15 @@ func (s *Server) mcpCall(c *gin.Context, req rpcRequest) *rpcResponse {
 			"repo_full_name": p.RepoFullName,
 			"local_path":     p.LocalPath,
 			"default_branch": p.DefaultBranch,
+		}
+		if bundleRef != "" {
+			prefix := "sources/" + p.Slug + "/"
+			size, sizeErr := s.Blobs.Size(bundleRef)
+			if !strings.HasPrefix(bundleRef, prefix) || sizeErr != nil || size == 0 {
+				err = fmt.Errorf("bundle_ref does not reference an uploaded source bundle for this project")
+				break
+			}
+			source["bundle_ref"] = bundleRef
 		}
 		// HTTP parity: resolve the ref's current head and compile the
 		// workflow as it exists there — the stored version goes stale
