@@ -213,6 +213,12 @@ func mcpPrompts() []mcpPrompt {
 			Arguments: []mcpPromptArg{
 				{Name: "runner", Description: "runner name or id", Required: false},
 			}},
+		{Name: "offload_heavy_build",
+			Description: "Ship a heavy build/test (Gradle, Android, Kotlin, Rust, docker images, big suites) to the fleet instead of the local machine; pull results back.",
+			Arguments: []mcpPromptArg{
+				{Name: "project", Description: "project slug", Required: true},
+				{Name: "task", Description: "what to build/test, e.g. 'gradle assembleDebug'", Required: false},
+			}},
 	}
 }
 
@@ -252,6 +258,26 @@ func (s *Server) mcpPromptGet(c *gin.Context, req rpcRequest) *rpcResponse {
 1. kern_list_runs (project={{project}}, limit=20); kern_get_run on the slowest recent runs.
 2. Identify the critical path: longest jobs, queue time before pickup, cache misses in setup steps, flaky retried steps.
 3. Recommend: test sharding factor, cache key fixes, runner label/pool changes, step reordering or removal.`)
+	case "offload_heavy_build":
+		text = sub(`Offload a heavy task to the kern fleet for project {{project}} (task: {{task}}):
+
+The fleet builds it; the local machine only streams logs. Pick the path by what is installed:
+
+PATH A — kern CLI present (preferred, one command):
+1. Write the workflow yaml for the task (a single job; runs-on labels route it: android lane = hp-win11/android labels, linux-arm64 for arm, default x64 linux).
+2. Run: kern exec --project {{project}} --workflow-file <file> --dir <repo> [--pull <outdir>]
+   It bundles the tree (git-aware), uploads content-addressed, triggers, streams logs, pulls artifacts, exits with the run conclusion.
+
+PATH B — MCP + any HTTP client:
+1. Bundle locally: git ls-files -z -c -o --exclude-standard | tar czf /tmp/bundle.tar.gz --null -T -  (or plain tar of the tree)
+2. sha256sum the bundle; PUT it with your bearer token:
+   curl -X PUT -H "Authorization: Bearer $TOKEN" --data-binary @/tmp/bundle.tar.gz "$KERN/api/v1/projects/{{project}}/source?sha256=<digest>"
+   (GET .../source/resolve?sha256=<digest> first — a hit skips the upload)
+3. kern_trigger_run with project={{project}}, workflow_yaml=<yaml>, workflow_path=.github/workflows/offload.yml, bundle_ref=<returned ref>
+4. kern_wait_run / kern_get_run to completion; kern_step_log for output.
+5. Artifacts: kern_list_artifacts, then curl -H "Authorization: Bearer $TOKEN" "$KERN/api/v1/artifacts/<id>/download" -o out.tar.gz
+
+Rules: the workflow runs in a container on the runner — never assume local paths. Secrets resolve server-side. Declare needs correctly for multi-job fan-out. Cache heavy dependency dirs with actions/cache so repeat offloads get faster.`)
 	case "quarantine_flaky_runner":
 		text = sub(`Quarantine flaky runner {{runner}}:
 1. kern_list_runners for fleet state; kern_list_runs + kern_get_run on recent failures to find runner-attributable faults (OOM, docker errors, missing tools).

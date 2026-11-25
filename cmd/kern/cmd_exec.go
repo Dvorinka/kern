@@ -32,6 +32,15 @@ func (c *cli) cmdExec(ctx context.Context, args []string) error {
 	}
 	slug := c.project
 	if slug == "" {
+		// Zero-config path: match the directory's git remote against the
+		// project's repo_url so `kern exec` works inside any clone.
+		inferred, ierr := c.inferProject(ctx, first(opts["dir"], "."))
+		if ierr != nil {
+			return ierr
+		}
+		slug = inferred
+	}
+	if slug == "" {
 		return fmt.Errorf("project required — --project or `kern config set project <slug>`")
 	}
 	var wfYAML, wfPath string
@@ -127,6 +136,16 @@ func (c *cli) cmdExec(ctx context.Context, args []string) error {
 	fmt.Fprintf(w, "run %s (#%d) started\n", trig.Run.ID, trig.Run.RunNumber)
 
 	final, err := c.streamRun(ctx, w, trig.Run.ID)
+	if errors.Is(err, context.Canceled) {
+		// Ctrl-C means "stop this operation" — leaking a 30-minute gradle
+		// build on the fleet is the expensive outcome, so cancel remotely.
+		// `kern runs trigger` + detach is the path for fire-and-forget.
+		fmt.Fprintf(w, "\ninterrupted — cancelling remote run %s\n", shortID(trig.Run.ID))
+		bctx, stop := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = c.api().post(bctx, "/runs/"+trig.Run.ID+"/cancel", map[string]any{}, nil)
+		stop()
+		return exitCodeError{code: 130}
+	}
 	if err != nil {
 		return err
 	}
@@ -365,4 +384,63 @@ func listBundleFiles(dir string) ([]string, error) {
 func insideWorkTree(dir string) bool {
 	out, err := exec.Command("git", "-C", dir, "rev-parse", "--is-inside-work-tree").Output()
 	return err == nil && strings.TrimSpace(string(out)) == "true"
+}
+
+// inferProject matches the git remote of dir against the org's projects so
+// `kern exec` needs no --project inside a clone. Returns "" when there is no
+// remote or no match; errors only on ambiguous matches.
+func (c *cli) inferProject(ctx context.Context, dir string) (string, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", nil
+	}
+	if !insideWorkTree(abs) {
+		return "", nil
+	}
+	remote, err := exec.Command("git", "-C", abs, "remote", "get-url", "origin").Output()
+	if err != nil || strings.TrimSpace(string(remote)) == "" {
+		return "", nil
+	}
+	want := normalizeRepoURL(strings.TrimSpace(string(remote)))
+	if want == "" {
+		return "", nil
+	}
+	var out struct {
+		Projects []project `json:"projects"`
+	}
+	if err := c.api().get(ctx, "/projects", url.Values{"limit": {"500"}}, &out); err != nil {
+		return "", nil // inference is best-effort — never block on it
+	}
+	var matches []string
+	for _, p := range out.Projects {
+		if normalizeRepoURL(p.RepoURL) == want && want != "" {
+			matches = append(matches, p.Slug)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return "", nil
+	case 1:
+		fmt.Fprintf(os.Stderr, "project %s inferred from git remote\n", matches[0])
+		return matches[0], nil
+	default:
+		return "", fmt.Errorf("git remote matches multiple projects (%s) — pass --project", strings.Join(matches, ", "))
+	}
+}
+
+// normalizeRepoURL reduces git remote syntaxes — ssh, https, .git suffix,
+// trailing slash — to host/path lowercase for comparison.
+func normalizeRepoURL(u string) string {
+	u = strings.TrimSpace(u)
+	u = strings.TrimSuffix(u, ".git")
+	u = strings.TrimSuffix(u, "/")
+	if i := strings.Index(u, "://"); i >= 0 {
+		u = u[i+3:]
+	}
+	// scp-style git@host:org/repo
+	if i := strings.Index(u, "@"); i >= 0 && !strings.Contains(u[:i], "/") {
+		u = u[i+1:]
+		u = strings.Replace(u, ":", "/", 1)
+	}
+	return strings.ToLower(strings.Trim(u, "/"))
 }

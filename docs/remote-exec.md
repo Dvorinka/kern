@@ -51,6 +51,25 @@ Uploads are content-addressed: the CLI hashes the bundle, resolves it through
 `GET /projects/:p/source/resolve`, and skips the upload entirely on a hit;
 `PUT ?sha256=` stores under the digest key so the server dedupes too.
 
-Not yet: in-flight cancel passthrough (Ctrl-C detaches but does not cancel the
-run), compose wrapper (`kern compose up` that loads pulled images then invokes
-docker compose).
+Since 0.21: Ctrl-C during `kern exec` cancels the remote run (fire-and-forget
+is `kern runs trigger`), and the project is inferred from the directory's git
+remote when `--project` and config are unset — inside a clone, `kern exec`
+needs no flags at all.
+
+## Agents
+
+Agents offload through the same machinery; pick by capability:
+
+- **Terminal agents** (kern CLI installed): `kern exec` exactly as above. The
+  `kern-offload` skill teaches when and how, with an Android/Kotlin workflow
+  template and fleet lane labels.
+- **MCP agents**: `kern_trigger_run` accepts `workflow_yaml` + `workflow_path`
+  + `bundle_ref` — the inline trigger core is shared with the HTTP by-path
+  route. Binary transfer rides the REST endpoints with the same bearer token
+  (`PUT /projects/:p/source` up, `GET /artifacts/:id/download` back): any
+  agent that can produce a tar.gz necessarily has a shell, so bytes never
+  travel inside MCP JSON. The `offload_heavy_build` prompt walks the exact
+  command sequence.
+
+Not yet: compose wrapper (`kern compose up` that loads pulled images then
+invokes docker compose).

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -460,10 +461,22 @@ func (s *Server) triggerRunByPath(c *gin.Context) {
 		fail(c, http.StatusBadRequest, "invalid_body", "invalid trigger body")
 		return
 	}
+	run, err := s.startRunByPath(c.Request.Context(), user, p, req, tokenLabels(c), dispatchTokenID(c))
+	if err != nil {
+		s.writeErr(c, err)
+		return
+	}
+	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "run.trigger", run.ID.String())
+	c.JSON(http.StatusCreated, gin.H{"run": run})
+}
+
+// startRunByPath is the transport-independent core of triggerRunByPath,
+// shared with the kern_trigger_run MCP tool. Client-facing failures are
+// statusError values; anything else is an internal error.
+func (s *Server) startRunByPath(ctx context.Context, user store.User, p store.Project, req triggerRequest, grantLabels []string, dispatchID uuid.UUID) (store.Run, error) {
 	path := normWorkflowPath(req.WorkflowPath)
 	if path == "" {
-		fail(c, http.StatusBadRequest, "invalid_path", "workflow_path is required and must be repo-relative")
-		return
+		return store.Run{}, &statusError{http.StatusBadRequest, "invalid_path", "workflow_path is required and must be repo-relative"}
 	}
 	if req.Event == "" {
 		req.Event = "workflow_dispatch"
@@ -480,72 +493,75 @@ func (s *Server) triggerRunByPath(c *gin.Context) {
 	switch req.TrustLevel {
 	case "trusted", "protected", "pull_request", "fork", "deployment":
 	default:
-		fail(c, http.StatusBadRequest, "invalid_trust", "unknown trust level")
-		return
+		return store.Run{}, &statusError{http.StatusBadRequest, "invalid_trust", "unknown trust level"}
 	}
 
-	sha := s.resolveTriggerSHA(c.Request.Context(), p, req.Ref, req.SHA)
+	sha := s.resolveTriggerSHA(ctx, p, req.Ref, req.SHA)
 	content := req.WorkflowYAML
 	if content == "" {
 		switch {
 		case p.RepoFullName != "" && sha != "":
-			gh, gerr := s.githubClient(c.Request.Context(), p.RepoFullName)
+			gh, gerr := s.githubClient(ctx, p.RepoFullName)
 			if gerr != nil {
-				s.internalError(c, gerr)
-				return
+				return store.Run{}, gerr
 			}
-			fc, ferr := gh.FileContent(c.Request.Context(), p.RepoFullName, path, sha)
+			fc, ferr := gh.FileContent(ctx, p.RepoFullName, path, sha)
 			if ferr != nil {
-				fail(c, http.StatusUnprocessableEntity, "workflow_fetch",
-					"no workflow file at "+path+" on "+req.Ref+": "+ferr.Error())
-				return
+				return store.Run{}, &statusError{http.StatusUnprocessableEntity, "workflow_fetch",
+					"no workflow file at " + path + " on " + req.Ref + ": " + ferr.Error()}
 			}
 			content = fc
 		case p.LocalPath != "":
 			b, rerr := os.ReadFile(filepath.Join(p.LocalPath, filepath.FromSlash(path)))
 			if rerr != nil {
-				fail(c, http.StatusUnprocessableEntity, "workflow_fetch",
-					"no workflow file at "+path+" in the project checkout")
-				return
+				return store.Run{}, &statusError{http.StatusUnprocessableEntity, "workflow_fetch",
+					"no workflow file at " + path + " in the project checkout"}
 			}
 			content = string(b)
 		default:
-			fail(c, http.StatusUnprocessableEntity, "workflow_fetch",
-				"could not resolve "+req.Ref+" to a commit; pass sha explicitly or ship workflow_yaml")
-			return
+			return store.Run{}, &statusError{http.StatusUnprocessableEntity, "workflow_fetch",
+				"could not resolve " + req.Ref + " to a commit; pass sha explicitly or ship workflow_yaml"}
 		}
 	}
 	var gh *github.Client
 	if p.RepoFullName != "" {
-		if g, gerr := s.githubClient(c.Request.Context(), p.RepoFullName); gerr == nil {
+		if g, gerr := s.githubClient(ctx, p.RepoFullName); gerr == nil {
 			gh = g
 		}
 	}
 	cc := s.Orch.Compiler
-	cc.Resolve = s.reusableResolver(c.Request.Context(), p.LocalPath, p.RepoFullName, sha, gh)
+	cc.Resolve = s.reusableResolver(ctx, p.LocalPath, p.RepoFullName, sha, gh)
 	res, err := workflows.Compile(content, cc)
 	if err != nil || !res.Valid || res.Plan == nil {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{
-			"error":       gin.H{"code": "invalid_workflow", "message": "workflow does not compile"},
-			"diagnostics": res.Diagnostics,
-		})
-		return
+		// Keep the compile diagnostics in the message — a bare "does not
+		// compile" sends the operator hunting for what the compiler already
+		// knew.
+		msg := "workflow does not compile"
+		if err != nil {
+			msg += ": " + err.Error()
+		} else {
+			for i, d := range res.Diagnostics {
+				if i >= 3 {
+					msg += fmt.Sprintf(" (+%d more)", len(res.Diagnostics)-3)
+					break
+				}
+				msg += "; " + d.Message
+			}
+		}
+		return store.Run{}, &statusError{http.StatusUnprocessableEntity, "invalid_workflow", msg}
 	}
-	if msg := runsOnDenial(tokenLabels(c), res.Plan.Jobs); msg != "" {
-		fail(c, http.StatusForbidden, "label_denied", msg)
-		return
+	if msg := runsOnDenial(grantLabels, res.Plan.Jobs); msg != "" {
+		return store.Run{}, &statusError{http.StatusForbidden, "label_denied", msg}
 	}
 	name := firstNonEmpty(req.WorkflowName, res.Name, filepath.Base(path))
-	wf, err := s.Store.UpsertWorkflow(c.Request.Context(), p.ID, path, name)
+	wf, err := s.Store.UpsertWorkflow(ctx, p.ID, path, name)
 	if err != nil {
-		s.internalError(c, err)
-		return
+		return store.Run{}, err
 	}
-	version, err := s.Store.PutWorkflowVersion(c.Request.Context(), wf.ID,
+	version, err := s.Store.PutWorkflowVersion(ctx, wf.ID,
 		firstNonEmpty(sha, "adhoc"), content, res.Plan, res.Valid, res.Diagnostics, res.Deps)
 	if err != nil {
-		s.internalError(c, err)
-		return
+		return store.Run{}, err
 	}
 
 	source := map[string]any{
@@ -558,13 +574,12 @@ func (s *Server) triggerRunByPath(c *gin.Context) {
 		prefix := "sources/" + p.Slug + "/"
 		size, sizeErr := s.Blobs.Size(req.BundleRef)
 		if !strings.HasPrefix(req.BundleRef, prefix) || sizeErr != nil || size == 0 {
-			fail(c, http.StatusBadRequest, "invalid_bundle_ref",
-				"bundle_ref does not reference an uploaded source bundle for this project")
-			return
+			return store.Run{}, &statusError{http.StatusBadRequest, "invalid_bundle_ref",
+				"bundle_ref does not reference an uploaded source bundle for this project"}
 		}
 		source["bundle_ref"] = req.BundleRef
 	}
-	run, err := s.Orch.StartRun(c.Request.Context(), store.CreateRunParams{
+	return s.Orch.StartRun(ctx, store.CreateRunParams{
 		ProjectID:         p.ID,
 		WorkflowID:        wf.ID,
 		WorkflowVersionID: version.ID,
@@ -580,14 +595,8 @@ func (s *Server) triggerRunByPath(c *gin.Context) {
 		RunnerNames:       req.Runners,
 		SplitN:            req.Split,
 		SplitAuto:         req.SplitAuto,
-		DispatchTokenID:   dispatchTokenID(c),
+		DispatchTokenID:   dispatchID,
 	})
-	if err != nil {
-		s.internalError(c, err)
-		return
-	}
-	s.Store.Audit(c.Request.Context(), user.OrgID, &user.ID, "run.trigger", run.ID.String())
-	c.JSON(http.StatusCreated, gin.H{"run": run})
 }
 
 func gitHead(dir string) string {

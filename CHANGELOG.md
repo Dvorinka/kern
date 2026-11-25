@@ -3,6 +3,29 @@
 All notable changes to KERN. Format follows [Keep a Changelog](https://keepachangelog.com/);
 versions follow [SemVer](https://semver.org/) — minor bumps for features, patch for fixes.
 
+## [0.21.0] - 2026-11-25
+
+### Added
+- Agent offload surface: `kern_trigger_run` (MCP) now accepts `workflow_yaml`,
+  `workflow_path`, and `bundle_ref` — the same inline/bundle trigger core as
+  `POST /projects/:p/runs` (extracted into a shared helper). MCP agents can
+  offload heavy builds (Android/Gradle, Rust, docker images, big suites) to the
+  fleet end-to-end: REST `PUT /projects/:p/source` for the binary upload,
+  `kern_trigger_run` to start, `kern_wait_run`/`kern_step_log` to watch,
+  `GET /artifacts/:id/download` for results. New `offload_heavy_build` MCP
+  prompt documents the exact sequence for CLI-less agents.
+- `kern exec` infers the project from the directory's git remote when
+  `--project` and config are unset — inside a clone it needs no flags.
+- `kern exec` Ctrl-C now cancels the remote run instead of leaking fleet time
+  (fire-and-forget remains `kern runs trigger`).
+
+### Fixed
+- Inline-trigger compile failures keep their diagnostics in the error message
+  instead of a bare "workflow does not compile".
+- Deployment: postgres service gains `restart: unless-stopped` in
+  `deployments/docker-compose.yml` — a missing restart policy turned a host
+  reboot into a multi-hour control-plane outage (2026-11-25 incident).
+
 ## [0.20.1] - 2026-11-23
 
 ### Fixed
