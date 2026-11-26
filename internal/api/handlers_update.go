@@ -366,6 +366,35 @@ func githubGetAccept(ctx context.Context, endpoint, accept, token string, limit 
 	return body, nil
 }
 
+// runnerUpdateStatusReport is the runner-side apply outcome. The audit row is
+// the durable fleet signal: offers are otherwise invisible once the heartbeat
+// response leaves the API, and a failed replace used to exist only in local
+// docker logs.
+func (s *Server) runnerUpdateStatusReport(c *gin.Context) {
+	runner, _ := currentRunner(c)
+	var body struct {
+		State   string `json:"state"`
+		Version string `json:"version"`
+		Error   string `json:"error"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		fail(c, http.StatusBadRequest, "invalid_body", "invalid update status body")
+		return
+	}
+	if body.State != "failed" && body.State != "applied" {
+		fail(c, http.StatusBadRequest, "invalid_body", "state must be failed or applied")
+		return
+	}
+	if len(body.Error) > 300 {
+		body.Error = body.Error[:300]
+	}
+	s.Store.AuditMeta(c.Request.Context(), runner.OrgID, nil, "runner.update_"+body.State, runner.Name, map[string]any{
+		"runner_id": runner.ID.String(), "version": body.Version, "error": body.Error,
+		"os": runner.OS, "arch": runner.Arch, "executor": runner.Executor,
+	})
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
 // autoUpdateEnabled resolves the org auto_update setting, with KERN_AUTO_UPDATE
 // env as an operator override ("1", "true", "on") for installs that manage the
 // control plane declaratively.
@@ -406,5 +435,9 @@ func (s *Server) offerRunnerUpdate(ctx context.Context, runner store.Runner, opt
 	if !runnerOffer.Allow(runner.ID.String(), runnerOfferHold) {
 		return "", "", nil, false
 	}
+	s.Store.AuditMeta(ctx, runner.OrgID, nil, "runner.update_offered", runner.Name, map[string]any{
+		"runner_id": runner.ID.String(), "version": info.Latest, "image": info.RunnerImage,
+		"os": runner.OS, "arch": runner.Arch, "executor": runner.Executor,
+	})
 	return info.RunnerImage, info.Latest, info.RunnerBins, true
 }

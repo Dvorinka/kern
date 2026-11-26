@@ -57,10 +57,11 @@ func (c *cli) selectRunners(ctx context.Context, args []string) ([]runnerRow, ma
 		var sel []runnerRow
 		for _, a := range pos {
 			var match *runnerRow
+			exact := false
 			for i, r := range out.Runners {
 				if r.ID == a || r.Name == a {
 					sel = append(sel, r)
-					match = nil
+					exact = true
 					break
 				}
 				if len(a) >= 4 && strings.HasPrefix(r.ID, a) {
@@ -69,6 +70,9 @@ func (c *cli) selectRunners(ctx context.Context, args []string) ([]runnerRow, ma
 					}
 					match = &out.Runners[i]
 				}
+			}
+			if exact {
+				continue
 			}
 			if match == nil {
 				return nil, nil, fmt.Errorf("no runner named or matching %q", a)

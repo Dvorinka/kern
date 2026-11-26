@@ -201,6 +201,33 @@ func (c *cli) doctorFleet(ctx context.Context, add func(string, string, string))
 				humanBytes(r.MemoryBytes), humanBytes(recommendedRunnerMemBytes)))
 		}
 	}
+	var audit struct {
+		Events []struct {
+			Action    string          `json:"action"`
+			Target    string          `json:"target"`
+			Metadata  json.RawMessage `json:"metadata"`
+			CreatedAt time.Time       `json:"created_at"`
+		} `json:"events"`
+	}
+	if err := c.api().get(ctx, "/audit?limit=100", nil, &audit); err == nil {
+		failed := []string{}
+		for _, e := range audit.Events {
+			if e.Action != "runner.update_failed" || time.Since(e.CreatedAt) > 24*time.Hour {
+				continue
+			}
+			var meta struct {
+				Version string `json:"version"`
+				Error   string `json:"error"`
+			}
+			_ = json.Unmarshal(e.Metadata, &meta)
+			failed = append(failed, fmt.Sprintf("%s→%s (%s)", e.Target, meta.Version, meta.Error))
+		}
+		if len(failed) > 0 {
+			add("self-update", "warn", fmt.Sprintf("%d runner update failure(s) in 24h: %s", len(failed), strings.Join(failed, "; ")))
+		} else {
+			add("self-update", "ok", "no runner update failures in 24h")
+		}
+	}
 	return runners.Runners
 }
 
