@@ -250,6 +250,14 @@ func (c *client) heartbeat(ctx context.Context, m heartbeatMetrics) (heartbeatRe
 	return out, err
 }
 
+// reportUpdateStatus ships the apply outcome to the control plane. Best
+// effort: older servers simply 404 and the local log remains the fallback.
+func (c *client) reportUpdateStatus(ctx context.Context, state, ver, errmsg string) error {
+	return c.do(ctx, http.MethodPost, "/api/v1/runners/update-status", map[string]string{
+		"state": state, "version": ver, "error": errmsg,
+	}, nil)
+}
+
 func (c *client) claim(ctx context.Context, wait int) (*Claim, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		c.base+"/api/v1/runners/claim?wait="+strconv.Itoa(wait), nil)

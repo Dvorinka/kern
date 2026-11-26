@@ -605,6 +605,9 @@ func (a *Agent) maybeSelfUpdate(ctx context.Context, offer *updateOffer) {
 	}
 	if err != nil {
 		a.log.Warn("self-update failed", zap.Error(err))
+		reportCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		_ = a.c.reportUpdateStatus(reportCtx, "failed", offer.Version, err.Error())
+		cancel()
 		a.nextUpdate.Store(time.Now().Add(selfUpdateHold).Unix())
 	}
 }

@@ -16,9 +16,15 @@ FROM debian:bookworm-slim
 ARG DOCKER_CLI=27.5.1
 ARG DOCKER_COMPOSE=v2.40.3
 ARG DOCKER_BUILDX=v0.20.0
+ARG TARGETARCH
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates git curl \
-    && curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI}.tgz" \
+    && case "$TARGETARCH" in \
+         amd64) dockerarch=x86_64; composearch=x86_64; buildxarch=amd64 ;; \
+         arm64) dockerarch=aarch64; composearch=aarch64; buildxarch=arm64 ;; \
+         *) echo "unsupported TARGETARCH=$TARGETARCH" >&2; exit 1 ;; \
+       esac \
+    && curl -fsSL "https://download.docker.com/linux/static/stable/${dockerarch}/docker-${DOCKER_CLI}.tgz" \
        | tar xz -C /usr/local/bin --strip-components=1 docker/docker \
     && mkdir -p /usr/libexec/docker/cli-plugins \
     && dl() { repo="$1"; tag="$2"; asset="$3"; dest="$4"; \
@@ -32,9 +38,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
               && curl -fsSL --retry 8 --retry-all-errors --retry-delay 4 -C - \
                  -H 'Accept: application/octet-stream' \
                  "https://api.github.com/repos/${repo}/releases/assets/${aid}" -o "$dest"; }; } \
-    && dl docker/compose "${DOCKER_COMPOSE}" docker-compose-linux-x86_64 \
+    && dl docker/compose "${DOCKER_COMPOSE}" "docker-compose-linux-${composearch}" \
          /usr/libexec/docker/cli-plugins/docker-compose \
-    && dl docker/buildx "${DOCKER_BUILDX}" "buildx-${DOCKER_BUILDX}.linux-amd64" \
+    && dl docker/buildx "${DOCKER_BUILDX}" "buildx-${DOCKER_BUILDX}.linux-${buildxarch}" \
          /usr/libexec/docker/cli-plugins/docker-buildx \
     && chmod +x /usr/libexec/docker/cli-plugins/* \
     && apt-get purge -y curl && rm -rf /var/lib/apt/lists/*

@@ -1118,6 +1118,14 @@ paths:
       summary: Runner heartbeat (runner token)
       responses:
         "200": { description: Ack }
+  /runners/update-status:
+    post:
+      tags: [runner-protocol]
+      summary: Runner self-update outcome (runner token)
+      responses:
+        "200": { description: Ack }
+        "400": { description: Invalid body }
+        "401": { description: Bad runner token }
   /runners/claim:
     post:
       tags: [runner-protocol]

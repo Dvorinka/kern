@@ -15,8 +15,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"go.uber.org/zap"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
+	"go.uber.org/zap"
 
 	"github.com/dvorinka/kern/internal/blobs"
 	"github.com/dvorinka/kern/internal/config"
@@ -99,7 +99,7 @@ func New(cfg *config.Config, st *store.Store, orch *orchestrator.Orchestrator, b
 		GH:     &github.Resolver{App: app, PAT: github.New(cfg.GitHub.APIBaseURL, cfg.GitHub.StatusToken)},
 		Geo:    geoip.New(cfg.GeoIPURL),
 		ghApps: make(map[uuid.UUID]*github.App), ghRepoApp: make(map[string]uuid.UUID),
-		metrics: newKernMetrics(), 
+		metrics:      newKernMetrics(),
 		webhookQueue: make(chan webhookTask, 128),
 		stepLogBus:   newLogBus(),
 		cliAuth:      newCLIAuthStore(),
@@ -355,6 +355,7 @@ func (s *Server) buildRouter() *gin.Engine {
 	runner := r.Group("/api/v1", s.requireRunner())
 	{
 		runner.POST("/runners/heartbeat", s.runnerHeartbeat)
+		runner.POST("/runners/update-status", s.runnerUpdateStatusReport)
 		runner.POST("/runners/claim", s.claimJob)
 		runner.POST("/runners/jobs/:jobID/heartbeat", s.renewJobLease)
 		runner.POST("/runners/jobs/:jobID/steps/:n/start", s.startStep)
@@ -370,10 +371,10 @@ func (s *Server) buildRouter() *gin.Engine {
 		runner.GET("/runners/jobs/:jobID/artifacts/:name", s.downloadArtifact)
 		runner.GET("/runners/jobs/:jobID/cache/restore", s.cacheRestore)
 		runner.PUT("/runners/jobs/:jobID/cache/:key", s.cacheSave)
-	// Direct-blob uploads (#369): presigned-PUT pair; runners fall back to
-	// the proxied PUT when prepare answers presign_unavailable.
-	runner.POST("/runners/jobs/:jobID/cache/:key/prepare", s.cachePrepareUpload)
-	runner.POST("/runners/jobs/:jobID/cache/:key/commit", s.cacheCommitUpload)
+		// Direct-blob uploads (#369): presigned-PUT pair; runners fall back to
+		// the proxied PUT when prepare answers presign_unavailable.
+		runner.POST("/runners/jobs/:jobID/cache/:key/prepare", s.cachePrepareUpload)
+		runner.POST("/runners/jobs/:jobID/cache/:key/commit", s.cacheCommitUpload)
 		runner.POST("/runners/exec/:execID/start", s.execStart)
 		runner.POST("/runners/exec/:execID/output", s.execOutput)
 		runner.GET("/runners/exec/:execID/stdin", s.execStdinFeed)

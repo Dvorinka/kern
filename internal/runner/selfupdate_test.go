@@ -58,3 +58,49 @@ func TestPlanReplace(t *testing.T) {
 		t.Fatal("foreign image must be refused")
 	}
 }
+
+func TestPlanReplacePreservesContainerShape(t *testing.T) {
+	image := update.RunnerImage + "@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	raw := []byte(`{
+		"Name": "/kern-runner",
+		"Config": {
+			"Env": ["MULTI=line1\nline2"],
+			"Cmd": ["--control", "https://kern.example"],
+			"Entrypoint": ["kern-runner", "--config", "/etc/kern/env"],
+			"Labels": {"fleet": "ci"}
+		},
+		"HostConfig": {
+			"Binds": ["/var/run/docker.sock:/var/run/docker.sock"],
+			"Mounts": [{"Type":"bind","Source":"/github","Target":"/github","ReadOnly":false,"BindOptions":{"Propagation":"rprivate"}}],
+			"Memory": 2147483648,
+			"NanoCPUs": 1500000000,
+			"Devices": [{"PathOnHost":"/dev/kvm","PathInContainer":"/dev/kvm","CgroupPermissions":"rwm"}],
+			"SecurityOpt": ["seccomp=unconfined"],
+			"ExtraHosts": ["kern.local:10.0.0.1"],
+			"RestartPolicy": {"Name": "always"},
+			"PortBindings": {"53/udp": [{"HostIp":"127.0.0.1","HostPort":"1053"}]}
+		}
+	}`)
+	args, _, _, err := planReplace(raw, image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(args, "\n")
+	for _, want := range []string{
+		"-v\n/var/run/docker.sock:/var/run/docker.sock",
+		"--mount\ntype=bind,source=/github,target=/github,propagation=rprivate",
+		"--memory\n2147483648",
+		"--cpus\n1.5",
+		"--device\n/dev/kvm:/dev/kvm:rwm",
+		"--security-opt\nseccomp=unconfined",
+		"--add-host\nkern.local:10.0.0.1",
+		"--label\nfleet=ci",
+		"-e\nMULTI=line1\nline2",
+		"-p\n127.0.0.1:1053:53/udp",
+		image + "\n--config\n/etc/kern/env\n--control\nhttps://kern.example",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in\n%s", want, got)
+		}
+	}
+}
